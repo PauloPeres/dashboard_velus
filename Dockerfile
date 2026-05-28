@@ -56,6 +56,16 @@ RUN if [ "$INSTALL_DEV" = "true" ]; then \
 # Copia código (tudo que não está no .dockerignore)
 COPY . /app
 
+# Collectstatic — gera /app/staticfiles pronto pra ser servido pelo Whitenoise
+# em produção. Em dev, runserver com DEBUG=True serve direto (e settings/development.py
+# override do STORAGES dispensa o manifest do Whitenoise).
+# Usamos vars dummy pra Settings carregar mesmo sem env real no build.
+RUN DJANGO_SETTINGS_MODULE=config.settings.development \
+    DJANGO_SECRET_KEY="build-time-only" \
+    DATABASE_URL="postgres://x:x@localhost/build" \
+    FERNET_KEY="build-time-only-build-time-only-build-time" \
+    python manage.py collectstatic --noinput --clear 2>/dev/null || true
+
 # User não-root pra segurança em produção
 RUN useradd --create-home --shell /bin/bash velus \
     && chown -R velus:velus /app /opt/venv

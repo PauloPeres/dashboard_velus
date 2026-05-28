@@ -1,0 +1,73 @@
+{% load account socialaccount %}<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Entrar · Velus Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen flex items-center justify-center px-4">
+    <div class="max-w-md w-full">
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-blue-600">Velus</h1>
+            <p class="text-sm text-gray-500 mt-1">Dashboard gerencial</p>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+            <h2 class="text-xl font-semibold mb-6">Entrar</h2>
+
+            {% if form.errors or form.non_field_errors %}
+                <div class="mb-4 bg-red-50 border border-red-200 rounded p-3 text-sm text-red-800">
+                    {% for error in form.non_field_errors %}{{ error }}{% endfor %}
+                    {% for field in form %}{% for error in field.errors %}{{ field.label }}: {{ error }}<br>{% endfor %}{% endfor %}
+                </div>
+            {% endif %}
+
+            <form method="post" action="{% url 'account_login' %}" class="space-y-4">
+                {% csrf_token %}
+                {% if redirect_field_value %}
+                    <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}">
+                {% endif %}
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1" for="id_login">Email</label>
+                    <input type="email" name="login" id="id_login" required autofocus
+                           class="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1" for="id_password">Senha</label>
+                    <input type="password" name="password" id="id_password" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+
+                <button type="submit"
+                        class="w-full px-4 py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700">
+                    Entrar
+                </button>
+            </form>
+
+            {% get_providers as socialaccount_providers %}
+            {% if socialaccount_providers %}
+                <div class="mt-6 pt-6 border-t border-gray-200">
+                    <p class="text-xs text-gray-500 text-center mb-3">ou entre com</p>
+                    <ul class="space-y-2">
+                        {% for provider in socialaccount_providers %}
+                            <li>
+                                <a href="{% provider_login_url provider.id process='login' %}"
+                                   class="block w-full px-4 py-2 text-center border border-gray-300 rounded hover:bg-gray-50 text-sm font-medium">
+                                    {{ provider.name }}
+                                </a>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
+        </div>
+
+        <p class="text-xs text-gray-500 text-center mt-6">
+            Acesso restrito a membros da organização.
+            <a href="/admin/" class="text-blue-600 hover:underline">Admin Django</a>
+        </p>
+    </div>
+</body>
+</html>

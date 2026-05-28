@@ -34,6 +34,16 @@ EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 ACCOUNT_EMAIL_VERIFICATION = "optional"
 
 # -----------------------------------------------------------------------------
+# Static files — sem manifest em dev (runserver serve direto)
+# Em produção, `python manage.py collectstatic` roda no build do Dockerfile
+# e o CompressedManifestStaticFilesStorage do base.py vale.
+# -----------------------------------------------------------------------------
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
+
+# -----------------------------------------------------------------------------
 # CSP em dev — permite CDNs (Plotly, Tailwind, HTMX) + inline scripts
 # Em produção, Tailwind compilado + Plotly self-host + nonces inline.
 # -----------------------------------------------------------------------------
