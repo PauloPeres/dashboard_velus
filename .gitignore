@@ -1,0 +1,130 @@
+# =============================================================================
+# Velus Dashboard — .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Secrets — NUNCA commitar
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+*.p12
+*.pfx
+fernet.key
+
+# Postman collection do IXC contém tokens de produção em texto plano (Basic auth).
+# Mantida apenas localmente. Quando precisar compartilhar, exportar versão
+# sanitizada substituindo os tokens por variáveis {{token}}.
+API - IXC Provedor.postman_collection.json
+*.postman_collection.json
+*.postman_environment.json
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+develop-eggs/
+.eggs/
+sdist/
+wheels/
+share/python-wheels/
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# -----------------------------------------------------------------------------
+# Django
+# -----------------------------------------------------------------------------
+*.sqlite3
+*.sqlite3-journal
+db.sqlite3
+local_settings.py
+staticfiles/
+media/
+/static/
+
+# Logs
+*.log
+logs/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# -----------------------------------------------------------------------------
+# Testing / Coverage / Quality
+# -----------------------------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.cache/
+nosetests.xml
+*.cover
+.hypothesis/
+
+# -----------------------------------------------------------------------------
+# IDE / Editor
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# -----------------------------------------------------------------------------
+# Sistema operacional
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# -----------------------------------------------------------------------------
+# Claude Code / agentes — config local não vai pro repo
+# -----------------------------------------------------------------------------
+.claude/
+
+# -----------------------------------------------------------------------------
+# Docker / K8s local
+# -----------------------------------------------------------------------------
+docker-compose.override.yml
+*.local.yml
+.kube/
+
+# -----------------------------------------------------------------------------
+# Outputs e arquivos temporários
+# -----------------------------------------------------------------------------
+output/
+tmp/
+*.tmp
+*.bak
