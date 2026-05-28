@@ -1,5 +1,7 @@
 """IxcCustomerSource — implementação do CustomerSourcePort para IXC Soft.
 
+NOTA: este arquivo é só Customer. Contract está em contracts.py.
+
 Responsabilidades:
 1. Paginar `cliente` via IxcHttpClient (formato IXC: GET com body, `page` + `rp`).
 2. Validar cada registro com Pydantic IxcCustomerSchema (Anti-Corruption Layer).

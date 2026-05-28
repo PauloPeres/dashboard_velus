@@ -15,13 +15,19 @@ from apps.integrations.shared.enums import Capability, SourceType
 from apps.integrations.shared.exceptions import AdapterContractError
 
 from .client import IxcHttpClient
+from .plans import IxcPlanCache, PlanInfo
 from .schemas import IxcContractSchema
 
 _logger = structlog.get_logger(__name__)
 
 
 class IxcContractSource:
-    """Adapter IXC para a capability CONTRACTS."""
+    """Adapter IXC para a capability CONTRACTS.
+
+    Pra resolver nome e valor mensal do plano (cliente_contrato só tem FK
+    `id_vd_contrato`), usa IxcPlanCache: 1 GET em vd_contratos no primeiro
+    acesso, depois lookup in-memory por contrato.
+    """
 
     source_type: ClassVar[SourceType] = SourceType.IXC
     capabilities: ClassVar[frozenset[Capability]] = frozenset({Capability.CONTRACTS})
@@ -35,6 +41,7 @@ class IxcContractSource:
         body_filter = self._build_since_filter(since) if since else None
 
         with self._client_factory() as client:
+            plan_cache = IxcPlanCache(client)
             for raw in client.paginate_ixc("cliente_contrato", body_filter=body_filter):
                 try:
                     schema = IxcContractSchema.model_validate(raw)
@@ -47,11 +54,12 @@ class IxcContractSource:
                     raise AdapterContractError(
                         f"IXC retornou contrato com schema inválido (id={raw.get('id')!r}): {exc}"
                     ) from exc
-                yield self._to_dto(schema)
+                yield self._to_dto(schema, plan_cache)
 
     def get_contract(self, external_id: str) -> ContractDTO | None:
         body_filter = {"qtype": "cliente_contrato.id", "query": str(external_id), "oper": "="}
         with self._client_factory() as client:
+            plan_cache = IxcPlanCache(client)
             for raw in client.paginate_ixc("cliente_contrato", body_filter=body_filter, page_size=1):
                 try:
                     schema = IxcContractSchema.model_validate(raw)
@@ -59,11 +67,11 @@ class IxcContractSource:
                     raise AdapterContractError(
                         f"IXC schema inválido id={external_id}: {exc}"
                     ) from exc
-                return self._to_dto(schema)
+                return self._to_dto(schema, plan_cache)
         return None
 
     @staticmethod
-    def _to_dto(schema: IxcContractSchema) -> ContractDTO:
+    def _to_dto(schema: IxcContractSchema, plan_cache: IxcPlanCache) -> ContractDTO:
         status_map = {
             "A": "ACTIVE", "B": "BLOCKED", "CA": "CANCELED",
             "AA": "AWAITING_INSTALL", "FI": "ACTIVE",  # FI = Financeiro em atraso (ainda ativo)
@@ -75,13 +83,23 @@ class IxcContractSource:
         else:
             status = status_map.get(schema.status.upper(), "UNKNOWN")
 
-        plan_name = schema.descricao_plano or schema.id_vd_contrato or "—"
+        # Lookup do plano pra obter nome e valor mensal
+        plan: PlanInfo | None = None
+        if schema.id_vd_contrato:
+            plan = plan_cache.get(schema.id_vd_contrato)
+
+        plan_name = (
+            plan.name if plan else (
+                schema.descricao_plano or f"Plano #{schema.id_vd_contrato}" or "—"
+            )
+        )
+        monthly_amount = plan.monthly_amount if plan else Decimal(schema.mensalidade)
 
         return ContractDTO(
             external_id=schema.id,
             customer_external_id=schema.id_cliente,
             plan_name=plan_name,
-            monthly_amount=Decimal(schema.mensalidade),
+            monthly_amount=monthly_amount,
             status=status,
             activated_at=schema.data_ativacao,
             canceled_at=schema.data_cancelamento,

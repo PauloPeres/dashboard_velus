@@ -217,3 +217,44 @@ class IxcInvoiceSchema(BaseModel):
 
     def get_extras(self) -> dict[str, Any]:
         return dict(self.model_extra or {})
+
+
+# =============================================================================
+# Plano de venda — endpoint /vd_contratos no IXC
+# =============================================================================
+class IxcPlanSchema(BaseModel):
+    """Schema do registro `vd_contratos` (Planos de venda) na API IXC.
+
+    Usado por IxcContractSource pra enriquecer o ContractDTO com nome do plano
+    e mensalidade — `cliente_contrato` só guarda a FK `id_vd_contrato`.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    nome: str = Field(default="")
+    descricao: str | None = Field(default=None)
+    valor_contrato: str = Field(default="0")
+    comissao: str = Field(default="0")
+    fidelidade: str = Field(default="0")  # meses
+    tipo_pessoa: str = Field(default="")
+    moeda: str = Field(default="R$")
+
+    @field_validator("id", "nome", "comissao", "fidelidade", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("descricao", mode="before")
+    @classmethod
+    def _empty_to_none(cls, v: Any) -> Any:
+        if v in (None, "", "null"):
+            return None
+        return v
+
+    @field_validator("valor_contrato", mode="before")
+    @classmethod
+    def _coerce_amount(cls, v: Any) -> str:
+        if v is None or v == "":
+            return "0"
+        return str(v).replace(",", ".")
