@@ -35,7 +35,7 @@ class IxcContractSource:
         body_filter = self._build_since_filter(since) if since else None
 
         with self._client_factory() as client:
-            for raw in client.paginate_ixc("contrato", body_filter=body_filter):
+            for raw in client.paginate_ixc("cliente_contrato", body_filter=body_filter):
                 try:
                     schema = IxcContractSchema.model_validate(raw)
                 except ValidationError as exc:
@@ -50,9 +50,9 @@ class IxcContractSource:
                 yield self._to_dto(schema)
 
     def get_contract(self, external_id: str) -> ContractDTO | None:
-        body_filter = {"qtype": "contrato.id", "query": str(external_id), "oper": "="}
+        body_filter = {"qtype": "cliente_contrato.id", "query": str(external_id), "oper": "="}
         with self._client_factory() as client:
-            for raw in client.paginate_ixc("contrato", body_filter=body_filter, page_size=1):
+            for raw in client.paginate_ixc("cliente_contrato", body_filter=body_filter, page_size=1):
                 try:
                     schema = IxcContractSchema.model_validate(raw)
                 except ValidationError as exc:
@@ -94,7 +94,7 @@ class IxcContractSource:
         from zoneinfo import ZoneInfo
         sp = since.astimezone(ZoneInfo("America/Sao_Paulo"))
         return {
-            "qtype": "contrato.data_alteracao",
+            "qtype": "cliente_contrato.data_alteracao",
             "query": sp.strftime("%Y-%m-%d %H:%M:%S"),
             "oper": ">=",
         }

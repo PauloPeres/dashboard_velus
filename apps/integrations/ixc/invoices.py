@@ -42,7 +42,7 @@ class IxcInvoiceSource:
         body_filter = self._build_since_filter(since) if since else None
 
         with self._client_factory() as client:
-            for raw in client.paginate_ixc("fn", body_filter=body_filter):
+            for raw in client.paginate_ixc("fn_areceber", body_filter=body_filter):
                 try:
                     schema = IxcInvoiceSchema.model_validate(raw)
                 except ValidationError as exc:
@@ -86,7 +86,7 @@ class IxcInvoiceSource:
         from zoneinfo import ZoneInfo
         sp = since.astimezone(ZoneInfo("America/Sao_Paulo"))
         return {
-            "qtype": "fn.data_emissao",
+            "qtype": "fn_areceber.data_emissao",
             "query": sp.strftime("%Y-%m-%d %H:%M:%S"),
             "oper": ">=",
         }
