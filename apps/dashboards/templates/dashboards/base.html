@@ -37,6 +37,11 @@
                     <span class="text-gray-600">{{ current_organization.name }}</span>
                 {% endif %}
                 {% if user.is_authenticated %}
+                    {% if user.is_superuser %}
+                        <a href="/admin/" class="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200" title="Acesso administrativo">
+                            ⚙ Admin
+                        </a>
+                    {% endif %}
                     <span class="text-gray-500">{{ user.email }}</span>
                     <form method="post" action="{% url 'account_logout' %}" class="inline">
                         {% csrf_token %}
