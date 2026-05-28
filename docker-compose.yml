@@ -1,0 +1,48 @@
+# =============================================================================
+# Velus Dashboard — Docker Compose para desenvolvimento local
+# =============================================================================
+# Apenas Postgres e Redis rodam em container. Django/Celery rodam no host
+# via `uv run` (mais rápido para iterar). Em produção tudo vai pra K8s.
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: velus_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: velus_dashboard
+      POSTGRES_USER: velus
+      POSTGRES_PASSWORD: velus
+      # Configurações p/ desenvolvimento — ajuste para teste de carga se necessário.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U velus -d velus_dashboard"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: velus_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:
+    name: velus_postgres_data
+  redis_data:
+    name: velus_redis_data
