@@ -15,12 +15,15 @@ secrets/
 *.pfx
 fernet.key
 
-# Postman collection do IXC contém tokens de produção em texto plano (Basic auth).
-# Mantida apenas localmente. Quando precisar compartilhar, exportar versão
-# sanitizada substituindo os tokens por variáveis {{token}}.
-API - IXC Provedor.postman_collection.json
+# Postman collections — ignoradas por padrão (frequentemente vazam credenciais
+# como Basic auth literal ou tokens em texto plano).
+# A collection do IXC NESTE repo foi sanitizada manualmente (tokens, IXC_Session,
+# emails, CPFs e hashes de senha substituídos por variáveis/placeholders) e está
+# liberada via exceção (!) abaixo. Ao adicionar novas collections, rodar scan
+# antes de remover do gitignore.
 *.postman_collection.json
 *.postman_environment.json
+!API - IXC Provedor.postman_collection.json
 
 # -----------------------------------------------------------------------------
 # Python
