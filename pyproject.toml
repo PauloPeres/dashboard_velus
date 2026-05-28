@@ -1,0 +1,213 @@
+[project]
+name = "velus-dashboard"
+version = "0.1.0"
+description = "Dashboard gerencial multi-tenant da Velus (ISP) com simuladores financeiros"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+authors = [{ name = "Paulo Peres", email = "p.peresjr@gmail.com" }]
+
+dependencies = [
+    # Core framework
+    "django>=5.2,<5.3",
+    "django-environ>=0.11",  # complementa pydantic-settings p/ DATABASE_URL
+
+    # Async / workers
+    "celery[redis]>=5.4",
+    "redis>=5.2",
+
+    # Database
+    "psycopg[binary]>=3.2",  # driver moderno (substitui psycopg2)
+
+    # Settings & validation
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+
+    # Auth & security
+    "django-allauth[socialaccount]>=65.3",  # Google OAuth
+    "django-axes>=7.0",                      # rate limit de login
+    "django-csp>=3.8",                       # Content Security Policy
+    "django-simple-history>=3.7",            # audit log
+    "cryptography>=44.0",                    # Fernet (criptografia de credenciais IXC)
+
+    # HTTP & integrações
+    "httpx>=0.28",                           # cliente HTTP moderno (HTTP/2, async)
+    "tenacity>=9.0",                         # retry exponencial
+
+    # Logging estruturado
+    "structlog>=24.4",
+    "django-structlog>=9.0",
+
+    # Production server & static
+    "gunicorn>=23.0",
+    "whitenoise>=6.8",
+]
+
+[dependency-groups]
+dev = [
+    # Testing
+    "pytest>=8.3",
+    "pytest-django>=4.9",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
+    "pytest-mock>=3.14",
+    "factory-boy>=3.3",
+    "freezegun>=1.5",
+    "respx>=0.21",                          # mock httpx em testes
+
+    # Lint / format / types
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "django-stubs[compatible-mypy]>=5.1",
+    "celery-types>=0.22",
+    "types-cryptography>=3.3",
+
+    # Developer experience
+    "ipython>=8.30",
+    "django-debug-toolbar>=4.4",
+    "pre-commit>=4.0",
+    "django-extensions>=3.2",
+]
+
+# -----------------------------------------------------------------------------
+# uv configuration
+# -----------------------------------------------------------------------------
+[tool.uv]
+default-groups = ["dev"]
+package = false
+
+# -----------------------------------------------------------------------------
+# Ruff — lint + format (substitui black + flake8 + isort)
+# -----------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [
+    "*/migrations/*",
+    ".venv",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "DJ",   # flake8-django
+    "RUF",  # ruff-specific
+    "PT",   # pytest-style
+    "SIM",  # flake8-simplify
+    "ARG",  # flake8-unused-arguments
+    "TID",  # flake8-tidy-imports
+    "S",    # flake8-bandit (security)
+]
+ignore = [
+    "E501",   # line-too-long — formatter cuida
+    "S101",   # assert é ok em testes (per-file-ignores cobre)
+    "DJ001",  # null=True em CharField é às vezes intencional
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "ARG", "PT011", "TID251"]
+"**/conftest.py" = ["ARG"]
+"**/migrations/**" = ["ALL"]
+"manage.py" = ["ALL"]
+# Django convenções (Meta.indexes, REQUIRED_FIELDS, fieldsets, etc.) fazem
+# RUF012 (mutable class attr) gerar falso-positivo. Silenciar nos arquivos
+# onde Django dita o padrão.
+"**/models.py" = ["RUF012"]
+"**/admin.py" = ["RUF012"]
+"**/forms.py" = ["RUF012"]
+# Adapters podem (e precisam) importar de si mesmos — o ban TID251 é
+# pra DOMAIN code, não pra dentro do próprio adapter.
+"apps/integrations/ixc/**" = ["TID251"]
+"apps/integrations/sgp/**" = ["TID251"]
+"apps/integrations/contaazul/**" = ["TID251"]
+"apps/integrations/fake/**" = ["TID251"]
+# Sync importa apenas APIs de domain (CustomerRepository, CustomerDTO) — não
+# adapters. Esse arquivo precisa de tipos pra dispatch dict; é genuíno.
+"apps/sync/**" = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# Impede imports de adapters dentro de bounded contexts de negócio.
+# Bypass legítimo: importar via apps.integrations.shared (registry/ports).
+"apps.integrations.ixc" = { msg = "Domain code não importa adapter — use SourceRegistry" }
+"apps.integrations.sgp" = { msg = "Domain code não importa adapter — use SourceRegistry" }
+"apps.integrations.contaazul" = { msg = "Domain code não importa adapter — use SourceRegistry" }
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# -----------------------------------------------------------------------------
+# Mypy — strict no domain, padrão no resto
+# -----------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+plugins = ["mypy_django_plugin.main"]
+exclude = ["migrations/", "build/", ".venv/"]
+warn_return_any = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+
+[[tool.mypy.overrides]]
+module = "apps.*.domain.*"
+strict = true
+
+[[tool.mypy.overrides]]
+module = "*.migrations.*"
+ignore_errors = true
+
+[tool.django-stubs]
+django_settings_module = "config.settings.development"
+
+# -----------------------------------------------------------------------------
+# Pytest
+# -----------------------------------------------------------------------------
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py", "*_test.py"]
+testpaths = ["tests", "apps"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--tb=short",
+    "-ra",
+]
+asyncio_mode = "auto"
+markers = [
+    "integration: testes que tocam banco real ou serviços externos (devagar)",
+    "e2e: end-to-end com FakeSource (rodam toda a pipeline em memória)",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:django.*",
+]
+
+[tool.coverage.run]
+source = ["apps", "config"]
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+    "config/wsgi.py",
+    "config/asgi.py",
+    "manage.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
