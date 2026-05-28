@@ -6,6 +6,6 @@ Django precisa achá-los aqui pra rodar makemigrations/migrate.
 
 from __future__ import annotations
 
-from .infrastructure.models import Customer
+from .infrastructure.models import Contract, Customer
 
-__all__ = ("Customer",)
+__all__ = ("Contract", "Customer")

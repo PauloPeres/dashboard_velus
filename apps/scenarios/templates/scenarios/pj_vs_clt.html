@@ -1,0 +1,69 @@
+{% extends "scenarios/_base.html" %}
+{% load humanize %}
+
+{% block title %}PJ vs CLT · Velus{% endblock %}
+
+{% block scenario_content %}
+<h1 class="text-2xl font-bold mb-2">Simulador: PJ vs CLT</h1>
+<p class="text-sm text-gray-600 mb-6">Compara o custo total de N técnicos em modelo PJ atual versus contratação CLT direta, considerando encargos, provisões e benefícios.</p>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-4">Inputs</h2>
+        {% include "scenarios/_form_macros.html" %}
+    </div>
+
+    <div class="lg:col-span-2 space-y-6">
+        {% if result %}
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+            <h2 class="text-lg font-semibold mb-4">Resultado</h2>
+            <div class="grid grid-cols-2 gap-4 mb-6">
+                <div class="bg-blue-50 rounded p-4">
+                    <p class="text-xs text-blue-700">PJ — custo mensal/técnico</p>
+                    <p class="text-xl font-bold">R$ {{ result.pj_monthly_per_worker|floatformat:2|intcomma }}</p>
+                    <p class="text-xs text-gray-600 mt-1">Anual total: R$ {{ result.pj_annual_total|floatformat:2|intcomma }}</p>
+                </div>
+                <div class="bg-orange-50 rounded p-4">
+                    <p class="text-xs text-orange-700">CLT — custo mensal/técnico</p>
+                    <p class="text-xl font-bold">R$ {{ result.clt_monthly_per_worker|floatformat:2|intcomma }}</p>
+                    <p class="text-xs text-gray-600 mt-1">Anual total: R$ {{ result.clt_annual_total|floatformat:2|intcomma }}</p>
+                </div>
+            </div>
+            <div class="border-t border-gray-200 pt-4">
+                <p class="text-sm text-gray-600">Diferença anual ({{ result.n_workers }} técnicos):</p>
+                <p class="text-2xl font-bold {% if result.annual_difference > 0 %}text-red-600{% else %}text-green-600{% endif %}">
+                    R$ {{ result.annual_difference|floatformat:2|intcomma }}
+                </p>
+                <p class="text-xs text-gray-500 mt-1">
+                    {% if result.annual_difference > 0 %}CLT é mais caro{% else %}CLT é mais barato{% endif %}
+                </p>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+            <h2 class="text-lg font-semibold mb-4">Detalhamento CLT por técnico</h2>
+            <table class="w-full text-sm">
+                <tbody>
+                    <tr class="border-b"><td class="py-2 text-gray-600">Salário base</td><td class="py-2 text-right">R$ {{ result.clt_breakdown.salary|floatformat:2|intcomma }}</td></tr>
+                    <tr class="border-b"><td class="py-2 text-gray-600">INSS patronal</td><td class="py-2 text-right">R$ {{ result.clt_breakdown.inss_employer|floatformat:2|intcomma }}</td></tr>
+                    <tr class="border-b"><td class="py-2 text-gray-600">FGTS</td><td class="py-2 text-right">R$ {{ result.clt_breakdown.fgts|floatformat:2|intcomma }}</td></tr>
+                    <tr class="border-b"><td class="py-2 text-gray-600">RAT</td><td class="py-2 text-right">R$ {{ result.clt_breakdown.rat|floatformat:2|intcomma }}</td></tr>
+                    <tr class="border-b"><td class="py-2 text-gray-600">Terceiros</td><td class="py-2 text-right">R$ {{ result.clt_breakdown.terceiros|floatformat:2|intcomma }}</td></tr>
+                    <tr class="border-b"><td class="py-2 text-gray-600">Provisão 13º</td><td class="py-2 text-right">R$ {{ result.clt_breakdown.prov_13o|floatformat:2|intcomma }}</td></tr>
+                    <tr class="border-b"><td class="py-2 text-gray-600">Provisão férias</td><td class="py-2 text-right">R$ {{ result.clt_breakdown.prov_ferias|floatformat:2|intcomma }}</td></tr>
+                    <tr class="border-b"><td class="py-2 text-gray-600">Provisão rescisão</td><td class="py-2 text-right">R$ {{ result.clt_breakdown.prov_rescisao|floatformat:2|intcomma }}</td></tr>
+                    <tr class="border-b"><td class="py-2 text-gray-600">Vale alimentação</td><td class="py-2 text-right">R$ {{ result.clt_breakdown.va|floatformat:2|intcomma }}</td></tr>
+                    <tr class="border-b"><td class="py-2 text-gray-600">Vale transporte</td><td class="py-2 text-right">R$ {{ result.clt_breakdown.vt|floatformat:2|intcomma }}</td></tr>
+                    <tr class="font-bold"><td class="py-3">Total mensal/técnico</td><td class="py-3 text-right">R$ {{ result.clt_monthly_per_worker|floatformat:2|intcomma }}</td></tr>
+                    <tr><td class="py-2 text-xs text-gray-500" colspan="2">Encargos: {{ result.clt_breakdown.encargos_pct|floatformat:1 }}% sobre salário</td></tr>
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center text-sm text-yellow-800">
+            Preencha o formulário ao lado e clique em <b>Calcular</b> pra ver o comparativo.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

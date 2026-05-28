@@ -18,8 +18,15 @@ class IxcAdapterConfig(AppConfig):
         from apps.integrations.shared.enums import Capability, SourceType
         from apps.integrations.shared.registry import registry
 
+        from .contracts import IxcContractSource
         from .customers import IxcCustomerSource
+        from .invoices import IxcInvoiceSource
 
-        existing = registry.get_factory(SourceType.IXC, Capability.CUSTOMERS)
-        if existing is None:
-            registry.register(SourceType.IXC, Capability.CUSTOMERS, IxcCustomerSource)
+        # Idempotência — evita duplicação em reload do dev server
+        for cap, cls in [
+            (Capability.CUSTOMERS, IxcCustomerSource),
+            (Capability.CONTRACTS, IxcContractSource),
+            (Capability.INVOICES, IxcInvoiceSource),
+        ]:
+            if registry.get_factory(SourceType.IXC, cap) is None:
+                registry.register(SourceType.IXC, cap, cls)

@@ -175,6 +175,21 @@ class Command(BaseCommand):
                 )
             )
 
+        # ---------------------------------------------------------------------
+        # Assumptions de Scenarios — seed defaults idempotente
+        # ---------------------------------------------------------------------
+        try:
+            from apps.scenarios.domain.defaults import seed_defaults_for_organization
+            n_assumptions = seed_defaults_for_organization(org)
+            if n_assumptions > 0:
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"{n_assumptions} premissas default criadas (edite via admin)"
+                    )
+                )
+        except ImportError:
+            pass  # scenarios não instalado — OK
+
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS(f"✓ Setup completo de '{org.slug}'"))
         self.stdout.write(f"  Fila Celery: {org.celery_queue_name}")

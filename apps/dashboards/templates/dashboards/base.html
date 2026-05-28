@@ -1,0 +1,63 @@
+{% load humanize %}<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Velus Dashboard{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script>
+        // CSRF pra HTMX
+        document.addEventListener("DOMContentLoaded", function() {
+            const csrfToken = document.cookie.split("; ").find(c => c.startsWith("csrftoken="));
+            if (csrfToken) {
+                document.body.addEventListener("htmx:configRequest", function(evt) {
+                    evt.detail.headers["X-CSRFToken"] = csrfToken.split("=")[1];
+                });
+            }
+        });
+    </script>
+</head>
+<body class="bg-gray-50 text-gray-900">
+    <header class="bg-white border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center">
+            <div class="flex items-center gap-8">
+                <a href="{% url 'dashboards:home' %}" class="text-xl font-bold text-blue-600">Velus</a>
+                <nav class="flex gap-6 text-sm">
+                    <a href="{% url 'dashboards:executive' %}" class="hover:text-blue-600">Executivo</a>
+                    <a href="{% url 'dashboards:revenue' %}" class="hover:text-blue-600">Receita</a>
+                    <a href="{% url 'dashboards:financial' %}" class="hover:text-blue-600">Financeiro</a>
+                    <a href="{% url 'scenarios:pj_vs_clt' %}" class="hover:text-blue-600">Simuladores</a>
+                </nav>
+            </div>
+            <div class="flex items-center gap-4 text-sm">
+                {% if current_organization %}
+                    <span class="text-gray-600">{{ current_organization.name }}</span>
+                {% endif %}
+                {% if user.is_authenticated %}
+                    <span class="text-gray-500">{{ user.email }}</span>
+                    <form method="post" action="{% url 'account_logout' %}" class="inline">
+                        {% csrf_token %}
+                        <button type="submit" class="text-blue-600 hover:underline">Sair</button>
+                    </form>
+                {% endif %}
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {% if not current_organization %}
+            <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+                <p class="text-sm text-yellow-800">
+                    Você não está vinculado a nenhuma organização ativa.
+                    <a href="/admin/" class="text-blue-600 hover:underline">Ir ao admin</a>.
+                </p>
+            </div>
+        {% endif %}
+        {% block content %}{% endblock %}
+    </main>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

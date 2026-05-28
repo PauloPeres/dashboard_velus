@@ -1,0 +1,69 @@
+{% extends "scenarios/_base.html" %}
+{% load humanize %}
+
+{% block title %}Split CNPJ — Simples · Velus{% endblock %}
+
+{% block scenario_content %}
+<h1 class="text-2xl font-bold mb-2">Simulador: Split de Faturamento (Simples Nacional)</h1>
+<p class="text-sm text-gray-600 mb-6">Calcula economia tributária dividindo faturamento entre 2 CNPJs no Simples Nacional, Anexo III.</p>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-4">Inputs</h2>
+        {% include "scenarios/_form_macros.html" %}
+    </div>
+
+    <div class="lg:col-span-2 space-y-6">
+        {% if result %}
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+            <h2 class="text-lg font-semibold mb-4">Economia anual com split</h2>
+            <p class="text-3xl font-bold {% if result.annual_savings > 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                R$ {{ result.annual_savings|floatformat:2|intcomma }}
+            </p>
+            <p class="text-sm text-gray-500 mt-1">por ano</p>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+            <h2 class="text-lg font-semibold mb-4">Comparativo</h2>
+            <table class="w-full text-sm">
+                <thead><tr class="border-b"><th class="text-left py-2">Estrutura</th><th class="text-right">Faturamento</th><th class="text-right">Alíq. Efetiva</th><th class="text-right">Imposto Anual</th></tr></thead>
+                <tbody>
+                    <tr class="border-b">
+                        <td class="py-2 font-medium">CNPJ único</td>
+                        <td class="py-2 text-right">R$ {{ result.single_cnpj.revenue_12m|floatformat:2|intcomma }}</td>
+                        <td class="py-2 text-right">{{ result.single_cnpj.aliquota_efetiva|floatformat:2 }}%</td>
+                        <td class="py-2 text-right text-red-600">R$ {{ result.single_cnpj.tax_annual|floatformat:2|intcomma }}</td>
+                    </tr>
+                    <tr class="border-b">
+                        <td class="py-2 font-medium">CNPJ 1</td>
+                        <td class="py-2 text-right">R$ {{ result.cnpj1.revenue_12m|floatformat:2|intcomma }}</td>
+                        <td class="py-2 text-right">{{ result.cnpj1.aliquota_efetiva|floatformat:2 }}%</td>
+                        <td class="py-2 text-right">R$ {{ result.cnpj1.tax_annual|floatformat:2|intcomma }}</td>
+                    </tr>
+                    <tr class="border-b">
+                        <td class="py-2 font-medium">CNPJ 2</td>
+                        <td class="py-2 text-right">R$ {{ result.cnpj2.revenue_12m|floatformat:2|intcomma }}</td>
+                        <td class="py-2 text-right">{{ result.cnpj2.aliquota_efetiva|floatformat:2 }}%</td>
+                        <td class="py-2 text-right">R$ {{ result.cnpj2.tax_annual|floatformat:2|intcomma }}</td>
+                    </tr>
+                    <tr class="font-bold border-t-2">
+                        <td class="py-3">Total split</td>
+                        <td class="py-3 text-right">R$ {{ result.total_revenue|floatformat:2|intcomma }}</td>
+                        <td></td>
+                        <td class="py-3 text-right text-green-600">R$ {{ result.cnpj1.tax_annual|add:result.cnpj2.tax_annual|floatformat:2|intcomma }}</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p class="text-xs text-gray-500 mt-4">
+                ⚠️ Modelo simplificado do Anexo III. Operacionalizar split em 2 CNPJs envolve estruturação societária real,
+                validação contábil e jurídica. Use como referência inicial pra discussão com seu contador.
+            </p>
+        </div>
+        {% else %}
+        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center text-sm text-yellow-800">
+            Preencha e clique em <b>Calcular</b> pra ver a economia simulada.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -11,36 +11,30 @@ dependencies = [
     # Core framework
     "django>=5.2,<5.3",
     "django-environ>=0.11",  # complementa pydantic-settings p/ DATABASE_URL
-
     # Async / workers
     "celery[redis]>=5.4",
     "redis>=5.2",
-
     # Database
     "psycopg[binary]>=3.2",  # driver moderno (substitui psycopg2)
-
     # Settings & validation
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
-
     # Auth & security
     "django-allauth[socialaccount]>=65.3",  # Google OAuth
     "django-axes>=7.0",                      # rate limit de login
     "django-csp>=3.8",                       # Content Security Policy
     "django-simple-history>=3.7",            # audit log
     "cryptography>=44.0",                    # Fernet (criptografia de credenciais IXC)
-
     # HTTP & integrações
     "httpx>=0.28",                           # cliente HTTP moderno (HTTP/2, async)
     "tenacity>=9.0",                         # retry exponencial
-
     # Logging estruturado
     "structlog>=24.4",
     "django-structlog>=9.0",
-
     # Production server & static
     "gunicorn>=23.0",
     "whitenoise>=6.8",
+    "plotly>=6.7.0",
 ]
 
 [dependency-groups]
@@ -111,6 +105,9 @@ ignore = [
     "E501",   # line-too-long — formatter cuida
     "S101",   # assert é ok em testes (per-file-ignores cobre)
     "DJ001",  # null=True em CharField é às vezes intencional
+    "RUF001", # en-dash em strings PT-BR é intencional
+    "RUF002", # idem em docstrings
+    "RUF003", # idem em comments
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -124,6 +121,8 @@ ignore = [
 "**/models.py" = ["RUF012"]
 "**/admin.py" = ["RUF012"]
 "**/forms.py" = ["RUF012"]
+# Seed scripts usam random pra gerar dados sintéticos — não há contexto crypto.
+"apps/customers/management/commands/seed_demo_data.py" = ["S311"]
 # Adapters podem (e precisam) importar de si mesmos — o ban TID251 é
 # pra DOMAIN code, não pra dentro do próprio adapter.
 "apps/integrations/ixc/**" = ["TID251"]

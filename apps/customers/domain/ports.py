@@ -19,7 +19,7 @@ from typing import Protocol, runtime_checkable
 
 from apps.integrations.shared.enums import Capability, SourceType
 
-from .dto import CustomerDTO
+from .dto import ContractDTO, CustomerDTO
 
 
 @runtime_checkable
@@ -54,4 +54,29 @@ class CustomerSourcePort(Protocol):
 
     def get_customer(self, external_id: str) -> CustomerDTO | None:
         """Busca um cliente único pelo ID na fonte externa."""
+        ...
+
+
+@runtime_checkable
+class ContractSourcePort(Protocol):
+    """Adapter que sabe ler contratos (assinaturas recorrentes) de algum sistema externo.
+
+    Contrato sempre referencia um cliente. `ContractDTO.customer_external_id`
+    é o ID no MESMO sistema-fonte do adapter — Repository resolve a FK pra
+    Customer já persistido. Por isso sync de Customers deve preceder Contracts.
+    """
+
+    source_type: SourceType
+    capabilities: frozenset[Capability]
+
+    def list_contracts(
+        self,
+        *,
+        since: datetime | None = None,
+    ) -> Iterator[ContractDTO]:
+        """Itera contratos do sistema externo (bootstrap se since=None)."""
+        ...
+
+    def get_contract(self, external_id: str) -> ContractDTO | None:
+        """Busca contrato único pelo ID na fonte externa."""
         ...

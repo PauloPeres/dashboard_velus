@@ -1,0 +1,41 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Executivo · Velus{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Visão Executiva</h1>
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+    {% include "dashboards/_kpi_card.html" with label="MRR Atual" value="R$ "|add:kpis.mrr_now|floatformat:0|intcomma delta=kpis.mrr_delta_pct|floatformat:1|add:"% vs mês anterior" delta_positive=kpis.mrr_delta_pct %}
+    {% include "dashboards/_kpi_card.html" with label="Contratos Ativos" value=kpis.active_contracts|intcomma subtitle="Snapshot hoje" %}
+    {% include "dashboards/_kpi_card.html" with label="Novos no Mês" value=kpis.new_this_month|intcomma subtitle="Ativados este mês" %}
+    {% include "dashboards/_kpi_card.html" with label="Churn" value=kpis.churn_pct|floatformat:1|add:"%" subtitle="Cancelados no mês" %}
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+    {% include "dashboards/_kpi_card.html" with label="Cancelados no Mês" value=kpis.canceled_this_month|intcomma %}
+    {% include "dashboards/_kpi_card.html" with label="Inadimplência (R$)" value="R$ "|add:kpis.delinquency_amount|floatformat:0|intcomma subtitle=kpis.delinquency_count|intcomma|add:" faturas em atraso" %}
+    {% include "dashboards/_kpi_card.html" with label="% MRR Inadimplente" value=kpis.delinquency_pct_of_mrr|floatformat:1|add:"%" %}
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-4">MRR — últimos 12 meses</h2>
+        <div id="mrr-chart" style="height:340px;"></div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-4">Aging de inadimplência</h2>
+        <div id="aging-chart" style="height:340px;"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ mrr_chart_json|json_script:"mrr-data" }}
+{{ aging_chart_json|json_script:"aging-data" }}
+<script>
+    Plotly.newPlot("mrr-chart", JSON.parse(document.getElementById("mrr-data").textContent), {responsive: true});
+    Plotly.newPlot("aging-chart", JSON.parse(document.getElementById("aging-data").textContent), {responsive: true});
+</script>
+{% endblock %}
