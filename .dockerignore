@@ -1,0 +1,51 @@
+# Versionado / secret / local
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+fernet.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Testing / quality / IDE
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+htmlcov/
+.vscode/
+.idea/
+.DS_Store
+.python-version
+
+# Docker self-reference
+docker-compose.override.yml
+*.local.yml
+
+# Claude Code / agentes
+.claude/
+
+# Docs/postman large files (já têm path no repo, mas evitar duplicação no contexto build)
+*.postman_collection.json.bak
+
+# Local runtime artifacts
+output/
+staticfiles/
+media/
+celerybeat-schedule
+celerybeat.pid
+*.log
+logs/
