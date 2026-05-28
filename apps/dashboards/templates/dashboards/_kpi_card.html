@@ -1,0 +1,13 @@
+{% load humanize %}
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1">{{ label }}</p>
+    <p class="text-2xl font-bold text-gray-900">{{ value }}</p>
+    {% if delta %}
+        <p class="text-xs mt-2 {% if delta_positive %}text-green-600{% else %}text-red-600{% endif %}">
+            {{ delta }}
+        </p>
+    {% endif %}
+    {% if subtitle %}
+        <p class="text-xs text-gray-500 mt-2">{{ subtitle }}</p>
+    {% endif %}
+</div>

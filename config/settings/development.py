@@ -32,3 +32,25 @@ EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 # allauth — relaxar verificação de email em dev
 # -----------------------------------------------------------------------------
 ACCOUNT_EMAIL_VERIFICATION = "optional"
+
+# -----------------------------------------------------------------------------
+# CSP em dev — permite CDNs (Plotly, Tailwind, HTMX) + inline scripts
+# Em produção, Tailwind compilado + Plotly self-host + nonces inline.
+# -----------------------------------------------------------------------------
+CONTENT_SECURITY_POLICY = {
+    "DIRECTIVES": {
+        "default-src": ["'self'"],
+        "script-src": [
+            "'self'", "'unsafe-inline'", "'unsafe-eval'",
+            "https://cdn.plot.ly", "https://cdn.tailwindcss.com",
+            "https://unpkg.com",
+        ],
+        "style-src": ["'self'", "'unsafe-inline'", "https://cdn.tailwindcss.com"],
+        "img-src": ["'self'", "data:"],
+        "font-src": ["'self'", "data:"],
+        "connect-src": ["'self'"],
+        "frame-ancestors": ["'none'"],
+        "base-uri": ["'self'"],
+        "form-action": ["'self'"],
+    },
+}

@@ -36,6 +36,7 @@ DJANGO_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.sites",
+    "django.contrib.humanize",  # filters intcomma, naturaltime, etc.
 ]
 
 THIRD_PARTY_APPS = [
@@ -53,14 +54,13 @@ LOCAL_APPS: list[str] = [
     "apps.tenancy",
     "apps.integrations.shared",
     "apps.customers",
+    "apps.financial",
+    "apps.analytics",
     "apps.integrations.fake",
     "apps.integrations.ixc",
     "apps.sync",
-    # Adicionados conforme criados:
-    # "apps.financial",
-    # "apps.analytics",
-    # "apps.scenarios",
-    # "apps.dashboards",
+    "apps.dashboards",
+    "apps.scenarios",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS

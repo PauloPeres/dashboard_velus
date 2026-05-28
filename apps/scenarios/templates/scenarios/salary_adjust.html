@@ -1,0 +1,50 @@
+{% extends "scenarios/_base.html" %}
+{% load humanize %}
+
+{% block title %}Ajuste Salarial · Velus{% endblock %}
+
+{% block scenario_content %}
+<h1 class="text-2xl font-bold mb-2">Simulador: Ajuste Salarial</h1>
+<p class="text-sm text-gray-600 mb-6">Calcula o impacto mensal/anual de um ajuste de salário, considerando o custo CLT total (encargos + provisões + benefícios).</p>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-4">Inputs</h2>
+        {% include "scenarios/_form_macros.html" %}
+    </div>
+
+    <div class="lg:col-span-2">
+        {% if result %}
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+            <h2 class="text-lg font-semibold mb-4">Impacto pra {{ result.person_name }}</h2>
+            <div class="grid grid-cols-2 gap-4 mb-6">
+                <div class="bg-gray-50 rounded p-4">
+                    <p class="text-xs text-gray-600">Custo atual mensal</p>
+                    <p class="text-xl font-bold">R$ {{ result.current.total_monthly|floatformat:2|intcomma }}</p>
+                    <p class="text-xs text-gray-500">Anual: R$ {{ result.current.total_annual|floatformat:2|intcomma }}</p>
+                </div>
+                <div class="bg-blue-50 rounded p-4">
+                    <p class="text-xs text-blue-700">Custo após ajuste</p>
+                    <p class="text-xl font-bold">R$ {{ result.new.total_monthly|floatformat:2|intcomma }}</p>
+                    <p class="text-xs text-gray-500">Anual: R$ {{ result.new.total_annual|floatformat:2|intcomma }}</p>
+                </div>
+            </div>
+            <div class="border-t border-gray-200 pt-4">
+                <p class="text-sm text-gray-600">Diferença mensal:</p>
+                <p class="text-2xl font-bold {% if result.monthly_diff >= 0 %}text-red-600{% else %}text-green-600{% endif %}">
+                    {% if result.monthly_diff >= 0 %}+{% endif %}R$ {{ result.monthly_diff|floatformat:2|intcomma }}
+                </p>
+                <p class="text-sm text-gray-600 mt-2">Diferença anual:</p>
+                <p class="text-xl font-bold {% if result.annual_diff >= 0 %}text-red-600{% else %}text-green-600{% endif %}">
+                    {% if result.annual_diff >= 0 %}+{% endif %}R$ {{ result.annual_diff|floatformat:2|intcomma }}
+                </p>
+            </div>
+        </div>
+        {% else %}
+        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center text-sm text-yellow-800">
+            Preencha o formulário pra ver o impacto.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Receita · Velus{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Receita & Crescimento</h1>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-4">MRR — últimos 12 meses</h2>
+        <div id="mrr-chart" style="height:340px;"></div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-4">Pipeline (status dos contratos)</h2>
+        <div id="pipeline-chart" style="height:340px;"></div>
+    </div>
+</div>
+
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
+    <h2 class="text-lg font-semibold mb-4">Receita por plano</h2>
+    <div id="arpu-chart" style="height:340px;"></div>
+</div>
+
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+    <h2 class="text-lg font-semibold p-5 pb-0">ARPU por plano</h2>
+    <table class="min-w-full text-sm mt-4">
+        <thead class="bg-gray-50">
+            <tr>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Plano</th>
+                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Receita</th>
+                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Contratos</th>
+                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">ARPU</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-200">
+            {% for row in arpu_data %}
+            <tr>
+                <td class="px-6 py-3">{{ row.plan }}</td>
+                <td class="px-6 py-3 text-right">R$ {{ row.revenue|floatformat:2|intcomma }}</td>
+                <td class="px-6 py-3 text-right">{{ row.count|intcomma }}</td>
+                <td class="px-6 py-3 text-right">R$ {{ row.arpu|floatformat:2|intcomma }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ mrr_chart_json|json_script:"mrr-data" }}
+{{ pipeline_chart_json|json_script:"pipeline-data" }}
+{{ arpu_chart_json|json_script:"arpu-data" }}
+<script>
+    Plotly.newPlot("mrr-chart", JSON.parse(document.getElementById("mrr-data").textContent), {responsive: true});
+    Plotly.newPlot("pipeline-chart", JSON.parse(document.getElementById("pipeline-data").textContent), {responsive: true});
+    Plotly.newPlot("arpu-chart", JSON.parse(document.getElementById("arpu-data").textContent), {responsive: true});
+</script>
+{% endblock %}

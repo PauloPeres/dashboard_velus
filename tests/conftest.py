@@ -10,11 +10,15 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
-from apps.customers.domain.dto import CustomerDTO
+from apps.customers.domain.dto import ContractDTO, CustomerDTO
+from apps.financial.domain.dto import InvoiceDTO, PaymentDTO
+from apps.integrations.fake.contracts import FakeContractSource
 from apps.integrations.fake.customers import FakeCustomerSource
+from apps.integrations.fake.invoices import FakeInvoiceSource, FakePaymentSource
 from apps.integrations.shared.enums import Capability, SourceType
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import (
@@ -30,18 +34,20 @@ from apps.tenancy.models import (
 # =============================================================================
 @pytest.fixture(autouse=True)
 def _clean_state_around_test() -> Iterator[None]:
-    """Cleanup pré/pós teste — contextvar + seed do FakeCustomerSource.
-
-    Hard-set em vez de token-dance pra garantir isolamento entre testes mesmo
-    se um teste anterior não limpou seu próprio estado.
-    """
+    """Cleanup pré/pós teste — contextvar + seeds dos Fake adapters."""
     set_current_organization(None)
     FakeCustomerSource.reset_seed()
+    FakeContractSource.reset_seed()
+    FakeInvoiceSource.reset_seed()
+    FakePaymentSource.reset_seed()
     try:
         yield
     finally:
         set_current_organization(None)
         FakeCustomerSource.reset_seed()
+        FakeContractSource.reset_seed()
+        FakeInvoiceSource.reset_seed()
+        FakePaymentSource.reset_seed()
 
 
 # =============================================================================
@@ -137,3 +143,87 @@ def sample_customer_dtos() -> list[CustomerDTO]:
             created_at_source=datetime(2025, 2, 15, tzinfo=UTC),
         ),
     ]
+
+
+@pytest.fixture
+def sample_contract_dtos() -> list[ContractDTO]:
+    from decimal import Decimal
+    return [
+        ContractDTO(
+            external_id="ctr-1",
+            customer_external_id="ext-1",
+            plan_name="Fibra 500M",
+            monthly_amount=Decimal("150.00"),
+            status="ACTIVE",
+            activated_at=datetime(2025, 1, 15, tzinfo=UTC),
+        ),
+        ContractDTO(
+            external_id="ctr-2",
+            customer_external_id="ext-2",
+            plan_name="Fibra 200M",
+            monthly_amount=Decimal("100.00"),
+            status="BLOCKED",
+            activated_at=datetime(2025, 2, 20, tzinfo=UTC),
+        ),
+    ]
+
+
+@pytest.fixture
+def sample_invoice_dtos() -> list[InvoiceDTO]:
+    from datetime import date
+    from decimal import Decimal
+    return [
+        InvoiceDTO(
+            external_id="inv-1",
+            contract_external_id="ctr-1",
+            amount=Decimal("150.00"),
+            due_date=date(2025, 4, 10),
+            status="PAID",
+            paid_at=datetime(2025, 4, 8, tzinfo=UTC),
+            paid_amount=Decimal("150.00"),
+        ),
+        InvoiceDTO(
+            external_id="inv-2",
+            contract_external_id="ctr-1",
+            amount=Decimal("150.00"),
+            due_date=date(2025, 5, 10),
+            status="PENDING",
+        ),
+    ]
+
+
+@pytest.fixture
+def sample_payment_dtos() -> list[PaymentDTO]:
+    from decimal import Decimal
+    return [
+        PaymentDTO(
+            external_id="pay-1",
+            invoice_external_id="inv-1",
+            contract_external_id="ctr-1",
+            amount=Decimal("150.00"),
+            paid_at=datetime(2025, 4, 8, tzinfo=UTC),
+            method="PIX",
+        ),
+    ]
+
+
+def _make_datasource_factory(capability: Capability) -> Any:
+    """Helper pra criar fixture de OrganizationDataSource FAKE pra qualquer capability."""
+    @pytest.fixture
+    def _ds(db, organization_a: Organization) -> OrganizationDataSource:
+        ds = OrganizationDataSource.objects.create(
+            organization=organization_a,
+            source_type=SourceType.FAKE.value,
+            capability=capability.value,
+            priority=100,
+            is_active=True,
+        )
+        ds.set_credentials({})
+        ds.save()
+        return ds
+    return _ds
+
+
+datasource_fake_contracts_a = _make_datasource_factory(Capability.CONTRACTS)
+datasource_fake_invoices_a = _make_datasource_factory(Capability.INVOICES)
+datasource_fake_payments_a = _make_datasource_factory(Capability.PAYMENTS)

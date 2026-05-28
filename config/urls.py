@@ -9,8 +9,8 @@ from django.urls import include, path
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("accounts/", include("allauth.urls")),
-    # Apps locais serão incluídos conforme criados:
-    # path("", include("apps.dashboards.urls")),
+    path("scenarios/", include("apps.scenarios.urls")),
+    path("", include("apps.dashboards.urls")),
 ]
 
 if settings.DEBUG:

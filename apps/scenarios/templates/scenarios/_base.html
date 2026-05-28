@@ -1,0 +1,14 @@
+{% extends "dashboards/base.html" %}
+
+{% block content %}
+<div class="mb-6 border-b border-gray-200">
+    <nav class="flex gap-6 text-sm">
+        <a href="{% url 'scenarios:pj_vs_clt' %}" class="pb-3 hover:text-blue-600 {% if request.resolver_match.url_name == 'pj_vs_clt' %}border-b-2 border-blue-600 text-blue-600 font-medium{% endif %}">PJ vs CLT</a>
+        <a href="{% url 'scenarios:salary_adjust' %}" class="pb-3 hover:text-blue-600 {% if request.resolver_match.url_name == 'salary_adjust' %}border-b-2 border-blue-600 text-blue-600 font-medium{% endif %}">Ajuste salarial</a>
+        <a href="{% url 'scenarios:union_esp' %}" class="pb-3 hover:text-blue-600 {% if request.resolver_match.url_name == 'union_esp' %}border-b-2 border-blue-600 text-blue-600 font-medium{% endif %}">Sindicato ESP</a>
+        <a href="{% url 'scenarios:simples_split' %}" class="pb-3 hover:text-blue-600 {% if request.resolver_match.url_name == 'simples_split' %}border-b-2 border-blue-600 text-blue-600 font-medium{% endif %}">Split CNPJ</a>
+        <a href="{% url 'scenarios:compare' %}" class="pb-3 hover:text-blue-600 {% if request.resolver_match.url_name == 'compare' %}border-b-2 border-blue-600 text-blue-600 font-medium{% endif %}">Comparar</a>
+    </nav>
+</div>
+{% block scenario_content %}{% endblock %}
+{% endblock %}

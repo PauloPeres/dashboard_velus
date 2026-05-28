@@ -17,8 +17,16 @@ import structlog
 from celery import shared_task
 from django.utils import timezone
 
-from apps.customers.domain.dto import CustomerDTO
-from apps.customers.infrastructure.repositories import CustomerRepository
+from apps.customers.domain.dto import ContractDTO, CustomerDTO
+from apps.customers.infrastructure.repositories import (
+    ContractRepository,
+    CustomerRepository,
+)
+from apps.financial.domain.dto import InvoiceDTO, PaymentDTO
+from apps.financial.infrastructure.repositories import (
+    InvoiceRepository,
+    PaymentRepository,
+)
 from apps.integrations.shared.enums import Capability, SourceType
 from apps.integrations.shared.registry import registry
 from apps.shared.context import (
@@ -44,9 +52,20 @@ def _customer_port_call(source: Any, since: datetime | None) -> Iterator[Custome
     return source.list_customers(since=since)
 
 
-def _customer_repo_upsert(
-    repository: CustomerRepository, dto: CustomerDTO, source_type: SourceType
-) -> None:
+def _contract_port_call(source: Any, since: datetime | None) -> Iterator[ContractDTO]:
+    return source.list_contracts(since=since)
+
+
+def _invoice_port_call(source: Any, since: datetime | None) -> Iterator[InvoiceDTO]:
+    return source.list_invoices(since=since)
+
+
+def _payment_port_call(source: Any, since: datetime | None) -> Iterator[PaymentDTO]:
+    return source.list_payments(since=since)
+
+
+def _repo_upsert(repository: Any, dto: Any, source_type: SourceType) -> None:
+    """Genérico: todos os repositories expõem o mesmo upsert_from_dto."""
     repository.upsert_from_dto(dto, source_type=source_type)
 
 
@@ -58,13 +77,10 @@ _DISPATCH: dict[
         Callable[[Any, Any, SourceType], None],
     ],
 ] = {
-    Capability.CUSTOMERS: (
-        _customer_port_call,
-        CustomerRepository,
-        _customer_repo_upsert,
-    ),
-    # Próximas capabilities: CONTRACTS, INVOICES, PAYMENTS — entram conforme
-    # ports/repos existirem.
+    Capability.CUSTOMERS: (_customer_port_call, CustomerRepository, _repo_upsert),
+    Capability.CONTRACTS: (_contract_port_call, ContractRepository, _repo_upsert),
+    Capability.INVOICES: (_invoice_port_call, InvoiceRepository, _repo_upsert),
+    Capability.PAYMENTS: (_payment_port_call, PaymentRepository, _repo_upsert),
 }
 
 

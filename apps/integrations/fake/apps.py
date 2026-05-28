@@ -19,10 +19,16 @@ class FakeAdapterConfig(AppConfig):
         from apps.integrations.shared.enums import Capability, SourceType
         from apps.integrations.shared.registry import registry
 
+        from .contracts import FakeContractSource
         from .customers import FakeCustomerSource
+        from .invoices import FakeInvoiceSource, FakePaymentSource
 
-        # Idempotência: em reload (runserver --reload), AppConfig.ready() roda 2x.
-        # Reset o registro do FAKE em runtime de dev pra permitir.
-        existing = registry.get_factory(SourceType.FAKE, Capability.CUSTOMERS)
-        if existing is None:
-            registry.register(SourceType.FAKE, Capability.CUSTOMERS, FakeCustomerSource)
+        # Idempotência: AppConfig.ready() pode rodar 2x em dev reload.
+        for cap, cls in [
+            (Capability.CUSTOMERS, FakeCustomerSource),
+            (Capability.CONTRACTS, FakeContractSource),
+            (Capability.INVOICES, FakeInvoiceSource),
+            (Capability.PAYMENTS, FakePaymentSource),
+        ]:
+            if registry.get_factory(SourceType.FAKE, cap) is None:
+                registry.register(SourceType.FAKE, cap, cls)

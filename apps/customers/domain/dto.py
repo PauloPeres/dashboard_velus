@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 
@@ -56,16 +57,29 @@ class CustomerDTO:
 class ContractDTO:
     """Representação neutra de contrato (assinatura recorrente).
 
-    Preliminar — será expandido conforme financial/analytics consumirem.
+    `customer_external_id` é o ID do cliente NO MESMO sistema-fonte.
+    Repository resolve a FK pra Customer via `(source_type, customer_external_id)`.
+    Se o cliente referenciado ainda não existe na base, contrato é persistido
+    sem FK (Customer FK nullable) — sync de Customers deve preceder Contracts.
     """
 
     external_id: str
     customer_external_id: str
     plan_name: str
-    monthly_amount: str  # Decimal serializado pra evitar erros de float
-    status: str  # ACTIVE | BLOCKED | CANCELED | AWAITING_INSTALL
+    monthly_amount: Decimal
+    status: str = "ACTIVE"  # ACTIVE | BLOCKED | CANCELED | AWAITING_INSTALL
 
     activated_at: datetime | None = None
     canceled_at: datetime | None = None
+    address: str | None = None  # endereço de instalação (opcional)
 
     raw_extras: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.external_id:
+            raise ValueError("ContractDTO.external_id não pode ser vazio")
+        if not self.customer_external_id:
+            raise ValueError("ContractDTO.customer_external_id não pode ser vazio")
+        # Coage int/str pra Decimal por segurança (adapters podem passar str)
+        if not isinstance(self.monthly_amount, Decimal):
+            object.__setattr__(self, "monthly_amount", Decimal(str(self.monthly_amount)))
