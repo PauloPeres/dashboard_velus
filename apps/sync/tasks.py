@@ -43,6 +43,52 @@ _logger = structlog.get_logger(__name__)
 
 
 # =============================================================================
+# Beat-scheduled task — itera todas as orgs ativas
+# =============================================================================
+@shared_task(name="apps.sync.tasks.dispatch_incremental_for_all_orgs")
+def dispatch_incremental_for_all_orgs() -> dict[str, int]:
+    """Iterates orgs ativas + suas OrganizationDataSources e dispatcha sync
+    incremental por (org, capability) na fila tenant específica.
+
+    Agendado via CELERY_BEAT_SCHEDULE a cada 3h. Cada (org, cap) vira uma
+    task separada na fila do tenant — paralelismo + isolamento.
+    """
+    return _dispatch_incremental()
+
+
+@allow_cross_tenant(reason="beat orchestrator itera Organization (não-TenantModel)")
+def _dispatch_incremental() -> dict[str, int]:
+    from apps.tenancy.models import OrganizationDataSource
+
+    n_orgs = 0
+    n_tasks = 0
+    seen_orgs: set[int] = set()
+    for cfg in OrganizationDataSource.objects.filter(
+        is_active=True, organization__is_active=True
+    ).select_related("organization"):
+        org = cfg.organization
+        if org.pk not in seen_orgs:
+            seen_orgs.add(org.pk)
+            n_orgs += 1
+        sync_capability.apply_async(
+            kwargs={
+                "organization_id": org.pk,
+                "capability": cfg.capability,
+                "mode": SyncMode.INCREMENTAL.value,
+            },
+            queue=org.celery_queue_name,
+        )
+        n_tasks += 1
+        _logger.info(
+            "beat_dispatched",
+            organization=org.slug,
+            capability=cfg.capability,
+            source_type=cfg.source_type,
+        )
+    return {"orgs": n_orgs, "tasks_dispatched": n_tasks}
+
+
+# =============================================================================
 # Mapping capability → (port method, repo factory)
 # =============================================================================
 # Cada entrada diz: "para sincronizar essa capability, chame esse método no port

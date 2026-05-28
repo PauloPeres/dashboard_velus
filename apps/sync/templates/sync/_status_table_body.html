@@ -1,0 +1,72 @@
+{% load humanize %}
+<tbody id="status-tbody" class="divide-y divide-gray-200">
+{% for row in rows %}
+    <tr>
+        <td class="px-4 py-3 font-medium">{{ row.capability }}</td>
+        <td class="px-4 py-3">{{ row.source_type }}<span class="text-xs text-gray-500 ml-1">priority {{ row.priority }}</span></td>
+        <td class="px-4 py-3">
+            {% if row.adapter_registered %}
+                <span class="inline-block px-2 py-0.5 text-xs rounded bg-green-100 text-green-800">registrado</span>
+            {% else %}
+                <span class="inline-block px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-600">não registrado</span>
+            {% endif %}
+        </td>
+        <td class="px-4 py-3">
+            {% if row.last_job %}
+                {{ row.last_job.started_at|naturaltime|default:"—" }}
+            {% else %}
+                <span class="text-gray-400">nunca</span>
+            {% endif %}
+        </td>
+        <td class="px-4 py-3">
+            {% if row.last_job %}
+                {% if row.last_job.status == 'COMPLETED' %}
+                    <span class="inline-block px-2 py-0.5 text-xs rounded bg-green-100 text-green-800">{{ row.last_job.get_status_display }}</span>
+                {% elif row.last_job.status == 'RUNNING' %}
+                    <span class="inline-block px-2 py-0.5 text-xs rounded bg-blue-100 text-blue-800 animate-pulse">{{ row.last_job.get_status_display }}</span>
+                {% elif row.last_job.status == 'FAILED' %}
+                    <span class="inline-block px-2 py-0.5 text-xs rounded bg-red-100 text-red-800" title="{{ row.last_job.error_message }}">{{ row.last_job.get_status_display }}</span>
+                {% else %}
+                    <span class="inline-block px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-700">{{ row.last_job.get_status_display }}</span>
+                {% endif %}
+                <span class="text-xs text-gray-500 ml-1">{{ row.last_job.get_mode_display }}</span>
+            {% else %}
+                —
+            {% endif %}
+        </td>
+        <td class="px-4 py-3 text-right">{{ row.last_job.records_processed|default:"—"|intcomma }}</td>
+        <td class="px-4 py-3 text-xs text-gray-600">
+            {% if row.checkpoint and row.checkpoint.last_processed_at %}
+                {{ row.checkpoint.last_processed_at|date:"d/m H:i" }}
+            {% else %}
+                <span class="text-gray-400">—</span>
+            {% endif %}
+        </td>
+        <td class="px-4 py-3 text-right">
+            <form method="post" action="{% url 'sync:trigger' %}" class="inline">
+                {% csrf_token %}
+                <input type="hidden" name="capability" value="{{ row.capability }}">
+                <input type="hidden" name="mode" value="INCREMENTAL">
+                <button type="submit" class="px-2 py-1 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100" title="Sincronizar somente o delta desde último checkpoint">
+                    Incremental
+                </button>
+            </form>
+            <form method="post" action="{% url 'sync:trigger' %}" class="inline">
+                {% csrf_token %}
+                <input type="hidden" name="capability" value="{{ row.capability }}">
+                <input type="hidden" name="mode" value="BOOTSTRAP">
+                <button type="submit" class="px-2 py-1 text-xs bg-orange-50 text-orange-700 rounded hover:bg-orange-100" title="Puxa tudo (todo histórico) — uso eventual em primeira carga ou rebuild">
+                    Bootstrap
+                </button>
+            </form>
+        </td>
+    </tr>
+{% empty %}
+    <tr>
+        <td colspan="8" class="px-6 py-8 text-center text-gray-500 text-sm">
+            Nenhuma fonte de dados configurada.
+            <a href="/admin/tenancy/organizationdatasource/add/" class="text-blue-600 hover:underline">Adicionar via admin</a>.
+        </td>
+    </tr>
+{% endfor %}
+</tbody>

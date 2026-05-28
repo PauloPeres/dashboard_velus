@@ -258,8 +258,19 @@ CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000  # restart periódico p/ evitar memory 
 # Filas por tenant — populadas dinamicamente; fila default 'celery' sempre existe.
 CELERY_TASK_DEFAULT_QUEUE = "celery"
 
-# Beat schedules — adicionados conforme tasks criadas.
-CELERY_BEAT_SCHEDULE: dict = {}
+# Beat schedule — sync incremental a cada 3h pra TODAS as orgs ativas.
+# Task `dispatch_incremental_for_all_orgs` itera org-by-org e enfileira
+# uma sub-task por (org, capability) na fila do tenant.
+# Rodar Beat: `uv run celery -A config beat --loglevel=info`
+from celery.schedules import crontab  # noqa: E402
+
+CELERY_BEAT_SCHEDULE: dict = {
+    "sync-incremental-every-3h": {
+        "task": "apps.sync.tasks.dispatch_incremental_for_all_orgs",
+        "schedule": crontab(minute=0, hour="*/3"),
+        "options": {"queue": "celery"},
+    },
+}
 
 # =============================================================================
 # Logging — estruturado via structlog

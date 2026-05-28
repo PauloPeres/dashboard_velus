@@ -1,0 +1,57 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Sync · Velus{% endblock %}
+
+{% block content %}
+<div class="flex justify-between items-center mb-6">
+    <div>
+        <h1 class="text-2xl font-bold">Operação de Sync</h1>
+        <p class="text-sm text-gray-600 mt-1">Estado das integrações externas para <b>{{ organization.name }}</b>.</p>
+    </div>
+    <form method="post" action="{% url 'sync:trigger_all' %}" class="inline">
+        {% csrf_token %}
+        <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium">
+            Sincronizar tudo (incremental)
+        </button>
+    </form>
+</div>
+
+<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 text-sm text-yellow-900">
+    <p><strong>Worker rodando?</strong> Clicar nos botões abaixo dispatcha tasks Celery na fila <code class="bg-yellow-100 px-1 rounded">{{ organization.celery_queue_name }}</code>.
+    Pra processar, rode em outra aba:</p>
+    <pre class="bg-yellow-100 mt-2 p-2 rounded text-xs">uv run celery -A config worker --loglevel=info -Q {{ organization.celery_queue_name }},celery</pre>
+</div>
+
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden"
+     {% if has_running %}
+     hx-get="{% url 'sync:status_rows' %}"
+     hx-trigger="every 3s"
+     hx-target="#status-tbody"
+     hx-swap="outerHTML"
+     {% endif %}>
+    <table class="min-w-full text-sm">
+        <thead class="bg-gray-50">
+            <tr>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Capability</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fonte</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Adapter</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Última execução</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Registros</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Checkpoint</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ações</th>
+            </tr>
+        </thead>
+        {% include "sync/_status_table_body.html" %}
+    </table>
+</div>
+
+<div class="mt-6 text-xs text-gray-500">
+    {% if has_running %}
+        <span class="inline-flex items-center gap-2"><span class="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span> Atualizando a cada 3s enquanto há sync rodando…</span>
+    {% else %}
+        <a href="{% url 'sync:status' %}" class="hover:text-blue-600">Recarregar manualmente</a>
+    {% endif %}
+</div>
+{% endblock %}
