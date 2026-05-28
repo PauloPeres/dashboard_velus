@@ -12,12 +12,14 @@ from typing import Any
 class InvoiceDTO:
     """Representação neutra de fatura/boleto.
 
-    `contract_external_id` referencia contrato no mesmo source — Repository
-    resolve FK pra Contract no upsert (nullable se contrato ainda não chegou).
+    `contract_external_id` é opcional — algumas ISPs registram cobranças avulsas
+    (taxa de adesão, instalação, multa) sem vínculo direto a um contrato.
+    Repository resolve FK pra Contract se houver match; senão persiste com FK
+    nula e mantém `contract_external_id` no campo string pra audit.
     """
 
     external_id: str
-    contract_external_id: str  # FK lógica resolvida no Repository
+    contract_external_id: str  # pode ser "" pra cobrança avulsa
     amount: Decimal
     due_date: date
     status: str = "PENDING"  # PENDING | PAID | OVERDUE | CANCELED
@@ -31,8 +33,6 @@ class InvoiceDTO:
     def __post_init__(self) -> None:
         if not self.external_id:
             raise ValueError("InvoiceDTO.external_id não pode ser vazio")
-        if not self.contract_external_id:
-            raise ValueError("InvoiceDTO.contract_external_id não pode ser vazio")
         if not isinstance(self.amount, Decimal):
             object.__setattr__(self, "amount", Decimal(str(self.amount)))
         if self.paid_amount is not None and not isinstance(self.paid_amount, Decimal):

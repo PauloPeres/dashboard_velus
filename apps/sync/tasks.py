@@ -230,10 +230,22 @@ def _run_sync(
 
                 repository = repo_factory(organization)
                 count = 0
+                skipped = 0
 
                 for dto in port_call(source, since):
-                    repo_upsert(repository, dto, source_type)
-                    count += 1
+                    try:
+                        repo_upsert(repository, dto, source_type)
+                        count += 1
+                    except Exception as record_exc:  # noqa: BLE001
+                        skipped += 1
+                        slog.warning(
+                            "sync_record_skipped",
+                            error=f"{type(record_exc).__name__}: {record_exc}"[:200],
+                            skipped_total=skipped,
+                        )
+                        if skipped > 100:
+                            slog.error("sync_too_many_skips", skipped=skipped)
+                            raise
 
                 checkpoint.last_processed_at = timezone.now()
                 checkpoint.save(update_fields=["last_processed_at", "updated_at"])
