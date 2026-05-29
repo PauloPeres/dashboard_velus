@@ -9,11 +9,12 @@ por signal `sync_completed` (futuro).
 
 from __future__ import annotations
 
+from datetime import date as date_cls
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
-from django.db.models import Count, DecimalField, Max, Sum
+from django.db.models import Count, DecimalField, Max, OuterRef, Subquery, Sum
 from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
 
@@ -30,6 +31,20 @@ from apps.tenancy.models import Organization
 _ZERO = Decimal("0.00")
 
 
+def _first_of_month_n_ago(base: date_cls, n: int) -> date_cls:
+    """Retorna o primeiro dia do calendário N meses antes do mês de `base`.
+
+    Usa aritmética de calendário real — evita bugs com timedelta(days=n*30)
+    que produz meses duplicados quando os meses têm 28-31 dias.
+    """
+    month = base.month - n
+    year = base.year
+    while month <= 0:
+        month += 12
+        year -= 1
+    return base.replace(year=year, month=month, day=1)
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP, escopo é arg explícito")
 def compute_mrr_series(
     organization: Organization, months: int = 12
@@ -42,11 +57,10 @@ def compute_mrr_series(
     today = timezone.now().date()
     series: list[dict[str, Any]] = []
     for i in range(months - 1, -1, -1):
-        # Pega último dia do mês i atrás
-        target_month_first = (today.replace(day=1) - timedelta(days=i * 30)).replace(day=1)
+        # Aritmética de calendário real — timedelta(days=30) duplica meses curtos
+        target_month_first = _first_of_month_n_ago(today, i)
         if i > 0:
-            next_first = (target_month_first + timedelta(days=32)).replace(day=1)
-            sample_date = next_first - timedelta(days=1)
+            sample_date = _first_of_month_n_ago(today, i - 1) - timedelta(days=1)
         else:
             sample_date = today
 
@@ -607,10 +621,10 @@ def compute_contract_status_trend(
     result: list[dict[str, Any]] = []
 
     for i in range(months - 1, -1, -1):
-        target_first = (today.replace(day=1) - timedelta(days=i * 30)).replace(day=1)
+        # Aritmética de calendário real — timedelta(days=30) duplica meses curtos
+        target_first = _first_of_month_n_ago(today, i)
         if i > 0:
-            next_first = (target_first + timedelta(days=32)).replace(day=1)
-            end_of_month = next_first - timedelta(days=1)
+            end_of_month = _first_of_month_n_ago(today, i - 1) - timedelta(days=1)
         else:
             end_of_month = today
 
@@ -656,6 +670,251 @@ def compute_contract_status_trend(
         })
 
     return result
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_churn_by_plan(
+    organization: Organization, months: int = 3
+) -> list[dict[str, Any]]:
+    """Churn por plano nos últimos N meses.
+
+    Para cada plan_name, conta contratos cancelados no período e calcula
+    receita perdida (monthly_amount dos cancelados).
+
+    Retorna lista ordenada por revenue_lost desc.
+    """
+    from apps.customers.infrastructure.models import Contract
+
+    today = timezone.now().date()
+    cutoff = _first_of_month_n_ago(today, months)
+
+    canceled = (
+        Contract.objects.filter(
+            organization=organization,
+            canceled_at__date__gte=cutoff,
+        )
+        .values("plan_name")
+        .annotate(
+            canceled=Count("id"),
+            revenue_lost=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()),
+        )
+        .order_by("-revenue_lost")
+    )
+
+    # Base de ativos no início do período para calcular taxa
+    base_counts = {
+        row["contract__plan_name"]: row["n"]
+        for row in FactContractStatusDaily.objects.filter(
+            organization=organization,
+            date=cutoff,
+            is_active=True,
+        )
+        .values("contract__plan_name")
+        .annotate(n=Count("id"))
+    }
+
+    result = []
+    for row in canceled:
+        plan = row["plan_name"] or "—"
+        base = base_counts.get(plan, 0)
+        churn_rate = float(row["canceled"] / base * 100) if base > 0 else 0.0
+        result.append(
+            {
+                "plan": plan,
+                "canceled": row["canceled"],
+                "revenue_lost": float(row["revenue_lost"]),
+                "base_start": base,
+                "churn_rate": round(churn_rate, 1),
+            }
+        )
+    return result
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_blocked_duration_distribution(
+    organization: Organization,
+) -> list[dict[str, Any]]:
+    """Distribuição de contratos BLOCKED por duração contínua do bloqueio.
+
+    Para cada contrato BLOCKED hoje, calcula há quantos dias está no bloqueio
+    atual (sem interrupção) comparando com o último dia em que NÃO era BLOCKED.
+
+    Agrupa nos buckets: 1–7d · 8–15d · 16–30d · 31–60d · 60+ dias.
+    """
+    today = timezone.now().date()
+
+    # Contratos BLOCKED hoje
+    blocked_ids = list(
+        FactContractStatusDaily.objects.filter(
+            organization=organization, date=today, status="BLOCKED"
+        ).values_list("contract_id", flat=True)
+    )
+    if not blocked_ids:
+        return []
+
+    # Último dia (antes de hoje) em que cada contrato NÃO era BLOCKED
+    last_non_blocked = (
+        FactContractStatusDaily.objects.filter(
+            organization=organization,
+            contract_id__in=blocked_ids,
+            date__lt=today,
+        )
+        .exclude(status="BLOCKED")
+        .values("contract_id")
+        .annotate(last_date=Max("date"))
+    )
+    last_non_blocked_map = {row["contract_id"]: row["last_date"] for row in last_non_blocked}
+
+    buckets: dict[str, dict] = {
+        "1_7":    {"label": "1–7 dias",   "count": 0, "revenue": 0.0},
+        "8_15":   {"label": "8–15 dias",  "count": 0, "revenue": 0.0},
+        "16_30":  {"label": "16–30 dias", "count": 0, "revenue": 0.0},
+        "31_60":  {"label": "31–60 dias", "count": 0, "revenue": 0.0},
+        "over_60":{"label": "60+ dias",   "count": 0, "revenue": 0.0},
+    }
+
+    blocked_rows = FactContractStatusDaily.objects.filter(
+        organization=organization, date=today, status="BLOCKED"
+    ).values("contract_id", "monthly_amount")
+
+    for row in blocked_rows:
+        cid = row["contract_id"]
+        last_ok = last_non_blocked_map.get(cid)
+        if last_ok:
+            days = (today - last_ok).days - 1
+        else:
+            days = 999  # bloqueado desde sempre → over_60
+
+        days = max(1, days)
+        rev = float(row["monthly_amount"] or 0)
+
+        if days <= 7:
+            b = "1_7"
+        elif days <= 15:
+            b = "8_15"
+        elif days <= 30:
+            b = "16_30"
+        elif days <= 60:
+            b = "31_60"
+        else:
+            b = "over_60"
+        buckets[b]["count"] += 1
+        buckets[b]["revenue"] += rev
+
+    return [{"bucket": k, **v} for k, v in buckets.items()]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_blocked_at_risk_summary(
+    organization: Organization, min_days: int = 30
+) -> dict[str, Any]:
+    """KPI — contratos BLOCKED há mais de min_days dias consecutivos."""
+    today = timezone.now().date()
+
+    blocked_ids = list(
+        FactContractStatusDaily.objects.filter(
+            organization=organization, date=today, status="BLOCKED"
+        ).values_list("contract_id", flat=True)
+    )
+    if not blocked_ids:
+        return {"count": 0, "revenue_at_risk": 0.0, "pct_of_blocked": 0.0}
+
+    last_non_blocked = {
+        row["contract_id"]: row["last_date"]
+        for row in FactContractStatusDaily.objects.filter(
+            organization=organization,
+            contract_id__in=blocked_ids,
+            date__lt=today,
+        )
+        .exclude(status="BLOCKED")
+        .values("contract_id")
+        .annotate(last_date=Max("date"))
+    }
+
+    at_risk_ids = []
+    for cid in blocked_ids:
+        last_ok = last_non_blocked.get(cid)
+        days = (today - last_ok).days - 1 if last_ok else 999
+        if days >= min_days:
+            at_risk_ids.append(cid)
+
+    if not at_risk_ids:
+        return {"count": 0, "revenue_at_risk": 0.0, "pct_of_blocked": 0.0}
+
+    revenue_at_risk = float(
+        FactContractStatusDaily.objects.filter(
+            organization=organization, date=today, contract_id__in=at_risk_ids
+        ).aggregate(s=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()))["s"] or 0
+    )
+
+    return {
+        "count": len(at_risk_ids),
+        "revenue_at_risk": revenue_at_risk,
+        "pct_of_blocked": round(len(at_risk_ids) / len(blocked_ids) * 100, 1) if blocked_ids else 0.0,
+    }
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_at_risk_contracts(
+    organization: Organization, min_days: int = 30, limit: int = 50
+) -> list[dict[str, Any]]:
+    """Contratos BLOCKED há mais de min_days dias — lista para ação de cobrança."""
+    from apps.customers.infrastructure.models import Contract
+
+    today = timezone.now().date()
+
+    blocked_ids = list(
+        FactContractStatusDaily.objects.filter(
+            organization=organization, date=today, status="BLOCKED"
+        ).values_list("contract_id", flat=True)
+    )
+    if not blocked_ids:
+        return []
+
+    last_non_blocked = {
+        row["contract_id"]: row["last_date"]
+        for row in FactContractStatusDaily.objects.filter(
+            organization=organization,
+            contract_id__in=blocked_ids,
+            date__lt=today,
+        )
+        .exclude(status="BLOCKED")
+        .values("contract_id")
+        .annotate(last_date=Max("date"))
+    }
+
+    # Enriquecer com dados do Contract model
+    contracts_map = {
+        c.id: c
+        for c in Contract.objects.filter(
+            organization=organization, id__in=blocked_ids
+        ).select_related("customer")
+    }
+
+    result = []
+    for cid in blocked_ids:
+        last_ok = last_non_blocked.get(cid)
+        days = (today - last_ok).days - 1 if last_ok else 999
+        if days < min_days:
+            continue
+        c = contracts_map.get(cid)
+        if not c:
+            continue
+        blocked_since = (last_ok + timedelta(days=1)).isoformat() if last_ok else "—"
+        result.append(
+            {
+                "contract_id": cid,
+                "contract_external_id": c.external_id,
+                "customer_name": c.customer.name if c.customer else "—",
+                "plan_name": c.plan_name or "—",
+                "monthly_amount": float(c.monthly_amount),
+                "blocked_since": blocked_since,
+                "days_blocked": days,
+            }
+        )
+
+    result.sort(key=lambda x: x["days_blocked"], reverse=True)
+    return result[:limit]
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")

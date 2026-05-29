@@ -17,9 +17,13 @@ from django.views.decorators.cache import never_cache
 from apps.analytics.application.aggregations import (
     compute_aging_distribution,
     compute_arpu_by_plan,
+    compute_at_risk_contracts,
+    compute_blocked_at_risk_summary,
+    compute_blocked_duration_distribution,
     compute_burn_rate,
     compute_cash_received_series,
     compute_cashflow_series,
+    compute_churn_by_plan,
     compute_contract_status_trend,
     compute_delinquency_trend,
     compute_dre,
@@ -151,19 +155,43 @@ def revenue(request: HttpRequest) -> HttpResponse:
         return org_or_redirect
     org = org_or_redirect
 
-    arpu_data = compute_arpu_by_plan(org)
-    pipeline = compute_pipeline_by_status(org)
+    kpis = compute_kpis(org)
     mrr_series = compute_mrr_series(org, months=12)
+    arpu_data = compute_arpu_by_plan(org)
+    status_trend = compute_contract_status_trend(org, months=12)
+    churn_plan = compute_churn_by_plan(org, months=3)
+
+    arpu = (
+        kpis["mrr_now"] / kpis["active_contracts"]
+        if kpis["active_contracts"] > 0
+        else 0.0
+    )
+    total_revenue = sum(r["revenue"] for r in arpu_data)
+    arpu_data_enriched = [
+        {**r, "pct": round(r["revenue"] / total_revenue * 100, 1) if total_revenue > 0 else 0.0}
+        for r in arpu_data
+    ]
 
     return render(
         request,
         "dashboards/revenue.html",
         {
-            "arpu_data": arpu_data,
-            "pipeline": pipeline,
-            "mrr_chart_json": charts.mrr_line_chart(mrr_series),
+            "kpis": kpis,
+            "arpu_data": arpu_data_enriched,
+            "churn_plan": churn_plan,
+            "mrr_now_str": _fmt_brl(kpis["mrr_now"]),
+            "arpu_str": _fmt_brl(arpu),
+            "churn_pct_str": f"{kpis['churn_pct']:.1f}%",
+            "churn_subtitle": f"{kpis['canceled_this_month']} cancelados · {kpis['new_this_month']} novos este mês",
+            "churn_variant": "border-orange-300" if kpis["churn_pct"] > 1.5 else "border-gray-200",
+            "mrr_delta_str": f"{kpis['mrr_delta_pct']:.1f}% vs mês anterior",
+            "mrr_delta_positive": kpis["mrr_delta_pct"] >= 0,
+            "mrr_subtitle": f"{_fmt_brl(kpis['mrr_prev'])} no mês anterior",
+            # charts
+            "mrr_dual_json": charts.mrr_contracts_dual_axis(mrr_series),
+            "status_trend_json": charts.contract_status_stacked_chart(status_trend),
             "arpu_chart_json": charts.arpu_bar_chart(arpu_data),
-            "pipeline_chart_json": charts.pipeline_pie(pipeline),
+            "churn_plan_json": charts.churn_by_plan_bar(churn_plan),
         },
     )
 
@@ -291,17 +319,103 @@ def financial(request: HttpRequest) -> HttpResponse:
         return org_or_redirect
     org = org_or_redirect
 
+    kpis = compute_kpis(org)
     aging = compute_aging_distribution(org)
     top_delinquent = compute_top_delinquent_invoices(org, limit=50)
     cash_series = compute_cash_received_series(org, months=12)
+    delinquency_trend = compute_delinquency_trend(org, months=12)
+    status_trend = compute_contract_status_trend(org, months=12)
+
+    # KPI cards extras
+    over_90 = next((b for b in aging if b["key"] == "OVER_90"), {})
+    at_risk = sum(b["amount"] for b in aging if b["key"] in ("31_60", "61_90"))
+    new_del = next((b for b in aging if b["key"] == "0_30"), {})
+
+    # Blocked contracts série isolada (para o gráfico)
+    blocked_series = [
+        {"month": s["month"], "label": s["label"], "blocked": s["blocked"]}
+        for s in status_trend
+    ]
 
     return render(
         request,
         "dashboards/financial.html",
         {
+            "kpis": kpis,
             "aging": aging,
             "top_delinquent": top_delinquent,
+            "over_90": over_90,
+            "at_risk_amount": at_risk,
+            "new_del": new_del,
+            "delinquency_amount_str": _fmt_brl(kpis["delinquency_amount"]),
+            "delinquency_pct_str": f"{kpis['delinquency_pct_of_mrr']:.1f}%",
+            "over_90_value": _fmt_brl(over_90.get("amount", 0)),
+            "at_risk_str": _fmt_brl(at_risk),
+            "new_del_str": _fmt_brl(new_del.get("amount", 0)),
+            "delinquency_subtitle": f"{kpis['delinquency_count']:,} faturas vencidas".replace(",", "."),
+            # charts
             "aging_chart_json": charts.aging_bar_chart(aging),
+            "delinquency_trend_json": charts.delinquency_trend_chart(delinquency_trend),
             "cash_chart_json": charts.cash_received_chart(cash_series),
+            "blocked_series_json": charts.blocked_trend_line(blocked_series),
+        },
+    )
+
+
+@login_required
+@never_cache
+def contracts(request: HttpRequest) -> HttpResponse:
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    kpis = compute_kpis(org)
+    status_trend = compute_contract_status_trend(org, months=12)
+    arpu_data = compute_arpu_by_plan(org)
+    churn_plan = compute_churn_by_plan(org, months=3)
+    blocked_dist = compute_blocked_duration_distribution(org)
+    at_risk_summary = compute_blocked_at_risk_summary(org, min_days=30)
+    at_risk_list = compute_at_risk_contracts(org, min_days=30, limit=50)
+
+    arpu = (
+        kpis["mrr_now"] / kpis["active_contracts"]
+        if kpis["active_contracts"] > 0
+        else 0.0
+    )
+
+    from apps.sync.models import SyncJob, SyncStatus
+    last_sync_job = (
+        SyncJob.objects
+        .filter(organization=org, status=SyncStatus.COMPLETED)
+        .order_by("-finished_at")
+        .first()
+    )
+    last_sync = last_sync_job.finished_at if last_sync_job else None
+
+    return render(
+        request,
+        "dashboards/contracts.html",
+        {
+            "kpis": kpis,
+            "at_risk_summary": at_risk_summary,
+            "at_risk_list": at_risk_list,
+            "last_sync": last_sync,
+            "arpu_str": _fmt_brl(arpu),
+            "churn_pct_str": f"{kpis['churn_pct']:.1f}%",
+            "churn_subtitle": f"{kpis['canceled_this_month']} cancelados · {kpis['new_this_month']} novos",
+            "churn_variant": "border-orange-300" if kpis["churn_pct"] > 1.5 else "border-gray-200",
+            "at_risk_str": str(at_risk_summary["count"]),
+            "at_risk_revenue_str": _fmt_brl(at_risk_summary["revenue_at_risk"]),
+            "at_risk_subtitle": (
+                f"{_fmt_brl(at_risk_summary['revenue_at_risk'])} em risco · "
+                f"{at_risk_summary['pct_of_blocked']:.0f}% dos bloqueados"
+            ),
+            "pipeline_str": str(kpis["awaiting_contracts"]),
+            # charts
+            "status_trend_json": charts.contract_status_stacked_chart(status_trend),
+            "arpu_chart_json": charts.arpu_bar_chart(arpu_data),
+            "churn_plan_json": charts.churn_by_plan_bar(churn_plan),
+            "blocked_dist_json": charts.blocked_duration_histogram(blocked_dist),
         },
     )

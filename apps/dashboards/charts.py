@@ -335,6 +335,125 @@ def contract_status_stacked_chart(series: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+def mrr_contracts_dual_axis(series: list[dict[str, Any]]) -> str:
+    """Linha dupla — MRR (eixo esquerdo) + contratos ativos (eixo direito)."""
+    labels = [p["label"] for p in series]
+    mrr_vals = [p["mrr"] for p in series]
+    contract_vals = [p["active_contracts"] for p in series]
+    fig = go.Figure(
+        data=[
+            go.Scatter(
+                name="MRR",
+                x=labels, y=mrr_vals,
+                mode="lines+markers",
+                line={"color": "#2563eb", "width": 3},
+                marker={"size": 7},
+                yaxis="y",
+                hovertemplate="<b>%{x}</b><br>MRR: R$ %{y:,.0f}<extra></extra>",
+            ),
+            go.Scatter(
+                name="Contratos",
+                x=labels, y=contract_vals,
+                mode="lines+markers",
+                line={"color": "#10b981", "width": 2, "dash": "dot"},
+                marker={"size": 6},
+                yaxis="y2",
+                hovertemplate="<b>%{x}</b><br>Contratos: %{y:,d}<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "showlegend": True,
+            "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f", "title": "MRR"},
+            "yaxis2": {
+                "title": "Contratos",
+                "overlaying": "y",
+                "side": "right",
+                "showgrid": False,
+                "tickformat": ",d",
+            },
+            "legend": {"orientation": "h", "y": -0.25},
+        },
+    )
+    return _to_json(fig)
+
+
+def churn_by_plan_bar(data: list[dict[str, Any]]) -> str:
+    """Barras horizontais — cancelamentos e receita perdida por plano."""
+    labels = [d["plan"] for d in data]
+    canceled = [d["canceled"] for d in data]
+    revenue_lost = [d["revenue_lost"] for d in data]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                name="Cancelamentos",
+                x=canceled, y=labels, orientation="h",
+                marker_color="#ef4444",
+                hovertemplate=(
+                    "<b>%{y}</b><br>Cancelamentos: %{x}<br>"
+                    "Taxa: %{customdata:.1f}%<extra></extra>"
+                ),
+                customdata=[d["churn_rate"] for d in data],
+                xaxis="x",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "xaxis": {"title": "Contratos cancelados"},
+            "margin": {"l": 160, "r": 20, "t": 30, "b": 50},
+            "showlegend": False,
+        },
+    )
+    return _to_json(fig)
+
+
+def blocked_trend_line(series: list[dict[str, Any]]) -> str:
+    """Linha — evolução de contratos BLOCKED ao longo do tempo (últimos 12 meses)."""
+    labels = [s["label"] for s in series]
+    values = [s["blocked"] for s in series]
+    fig = go.Figure(
+        data=[
+            go.Scatter(
+                x=labels, y=values,
+                mode="lines+markers",
+                line={"color": "#f97316", "width": 3},
+                marker={"size": 8, "color": "#f97316"},
+                fill="tozeroy",
+                fillcolor="rgba(249,115,22,0.10)",
+                hovertemplate="<b>%{x}</b><br>Bloqueados: %{y:,d}<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "yaxis": {"title": "Contratos bloqueados"}},
+    )
+    return _to_json(fig)
+
+
+def blocked_duration_histogram(data: list[dict[str, Any]]) -> str:
+    """Barras — distribuição de contratos BLOCKED por duração do bloqueio."""
+    labels = [d["label"] for d in data]
+    counts = [d["count"] for d in data]
+    revenues = [d["revenue"] for d in data]
+    colors = ["#fbbf24", "#f97316", "#ef4444", "#dc2626", "#991b1b"]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=labels, y=counts,
+                marker_color=colors[: len(labels)],
+                customdata=revenues,
+                hovertemplate=(
+                    "<b>%{x}</b><br>Contratos: %{y}<br>"
+                    "Receita em risco: R$ %{customdata:,.0f}<extra></extra>"
+                ),
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "yaxis": {"title": "Contratos"},
+        },
+    )
+    return _to_json(fig)
+
+
 def forecast_area(
     historical: list[dict[str, Any]], forecast: list[dict[str, Any]]
 ) -> str:
