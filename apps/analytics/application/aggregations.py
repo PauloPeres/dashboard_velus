@@ -14,7 +14,7 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
-from django.db.models import Count, DecimalField, Max, OuterRef, Subquery, Sum
+from django.db.models import Count, DecimalField, Max, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
 
@@ -29,6 +29,10 @@ from apps.shared.decorators import allow_cross_tenant
 from apps.tenancy.models import Organization
 
 _ZERO = Decimal("0.00")
+
+# Contratos cancelados: status explícito OU UNKNOWN com data de cancelamento definida.
+# Defensivo contra re-syncs que revertem CANCELED → UNKNOWN (bug histórico do adapter IXC).
+_CANCELED_Q = Q(status="CANCELED") | Q(status="UNKNOWN", canceled_at__isnull=False)
 
 
 def _first_of_month_n_ago(base: date_cls, n: int) -> date_cls:
@@ -1086,9 +1090,8 @@ def compute_churn_by_reason(
 
     canceled = Contract.objects.filter(
         organization=organization,
-        status="CANCELED",
         canceled_at__date__gte=cutoff,
-    )
+    ).filter(_CANCELED_Q)
 
     reasons: dict[str, dict] = {}
     for c in canceled.iterator():
@@ -1130,10 +1133,9 @@ def compute_ltv_distribution(
 
     canceled = Contract.objects.filter(
         organization=organization,
-        status="CANCELED",
         canceled_at__isnull=False,
         activated_at__isnull=False,
-    ).iterator()
+    ).filter(_CANCELED_Q).iterator()
 
     buckets: dict[str, dict] = {
         "lt_3":   {"label": "< 3 meses",    "count": 0, "mrr_sum": 0.0},
@@ -1195,10 +1197,9 @@ def compute_churn_plan_detail(
 
     canceled = Contract.objects.filter(
         organization=organization,
-        status="CANCELED",
         canceled_at__date__gte=cutoff,
         activated_at__isnull=False,
-    )
+    ).filter(_CANCELED_Q)
 
     # Agrupa por plano
     by_plan: dict[str, dict] = {}
@@ -1285,10 +1286,11 @@ def compute_churn_summary(organization: Organization) -> dict[str, Any]:
     month_first = today.replace(day=1)
     prev_month_first = _first_of_month_n_ago(today, 1)
 
-    # Apenas contratos que foram ativados — pré-contratos abandonados não geram MRR
+    # Apenas contratos que foram ativados — pré-contratos abandonados não geram MRR.
+    # _CANCELED_Q: defensivo contra UNKNOWN c/ canceled_at (bug histórico de re-sync).
     canceled_qs = Contract.objects.filter(
-        organization=organization, status="CANCELED", activated_at__isnull=False
-    )
+        organization=organization, activated_at__isnull=False
+    ).filter(_CANCELED_Q)
 
     this_month = canceled_qs.filter(
         canceled_at__date__gte=month_first,

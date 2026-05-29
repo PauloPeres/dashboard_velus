@@ -122,6 +122,19 @@ class IxcContractSource:
                 except (ValueError, TypeError):
                     pass
 
+        # Hardening: IXC às vezes retorna status=null (→ ACTIVE/UNKNOWN) em contratos
+        # que já foram cancelados. Se motivo_cancelamento está definido e não-zero,
+        # o contrato é definitivamente cancelado — override independente do campo status.
+        motivo_cancelamento = str(extras.get("motivo_cancelamento") or "0")
+        if motivo_cancelamento not in ("0", "", "null") and status not in ("CANCELED",):
+            status = "CANCELED"
+            _logger.debug(
+                "ixc_contract_status_override",
+                external_id=schema.id,
+                original_status=schema.status,
+                motivo_cancelamento=motivo_cancelamento,
+            )
+
         return ContractDTO(
             external_id=schema.id,
             customer_external_id=schema.id_cliente,
