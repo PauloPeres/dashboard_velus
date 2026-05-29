@@ -159,13 +159,16 @@ LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/accounts/login/"
 
 # -----------------------------------------------------------------------------
-# django-allauth — login só via Google (sem cadastro com senha)
+# django-allauth — email+senha (+ Google OAuth opcional)
 # -----------------------------------------------------------------------------
 ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_SIGNUP_FIELDS = ["email*"]  # signup desabilitado em prod via flag separada
 ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 ACCOUNT_SESSION_REMEMBER = False
 ACCOUNT_UNIQUE_EMAIL = True
+# Desabilita o "Login by Code" (passwordless via email) introduzido no allauth 0.63+
+# — queremos email+senha clássico, não OTP por email
+ACCOUNT_LOGIN_BY_CODE_ENABLED = False
 SOCIALACCOUNT_AUTO_SIGNUP = True
 SOCIALACCOUNT_LOGIN_ON_GET = True
 SOCIALACCOUNT_PROVIDERS = {

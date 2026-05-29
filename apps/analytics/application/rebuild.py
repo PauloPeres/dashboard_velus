@@ -127,21 +127,40 @@ def _aging_bucket(
     return days, "OVER_90"
 
 
+_FACT_CONTRACT_BATCH = 10_000  # linhas por bulk_create batch
+
+
 def _rebuild_fact_contract_status_daily(
     organization: Organization, since_date: date | None = None
 ) -> int:
     """Para cada Contract, gera snapshot diário até hoje (a partir de activated_at).
 
     Idempotente via UniqueConstraint (org, contract, date).
-    Em produção: rodar em chunks com cursor pra evitar OOM em orgs grandes.
+    Usa bulk_create com update_conflicts pra ser ~100x mais rápido do que
+    update_or_create individual (crítico pra ISPs com 8k+ contratos × 400 dias).
     """
     today = timezone.now().date()
     start_default = today - timedelta(days=400)  # ~13 meses ringbuffer
     count = 0
+    batch: list[FactContractStatusDaily] = []
+
+    def _flush(records: list[FactContractStatusDaily]) -> int:
+        if not records:
+            return 0
+        FactContractStatusDaily.objects.bulk_create(
+            records,
+            update_conflicts=True,
+            unique_fields=["organization", "contract", "date"],
+            update_fields=["status", "monthly_amount", "is_active"],
+            batch_size=_FACT_CONTRACT_BATCH,
+        )
+        return len(records)
 
     contracts = Contract.objects.filter(organization=organization)
     for contract in contracts.iterator():
         contract_start = contract.activated_at.date() if contract.activated_at else start_default
+        # Cap no início do ringbuffer pra não gerar anos de snapshots
+        contract_start = max(contract_start, start_default)
         if since_date and since_date > contract_start:
             contract_start = since_date
 
@@ -151,22 +170,27 @@ def _rebuild_fact_contract_status_daily(
         if contract_start > today:
             continue
 
+        is_active = contract.status in _ACTIVE_STATUSES
         # Status snapshot — usamos o status atual (simplificação MVP).
         # Refinamento futuro: ler de simple_history pra status histórico real.
         d = contract_start
         while d <= contract_end:
-            FactContractStatusDaily.objects.update_or_create(
-                organization=organization,
-                contract=contract,
-                date=d,
-                defaults={
-                    "status": contract.status,
-                    "monthly_amount": contract.monthly_amount,
-                    "is_active": contract.status in _ACTIVE_STATUSES,
-                },
+            batch.append(
+                FactContractStatusDaily(
+                    organization=organization,
+                    contract=contract,
+                    date=d,
+                    status=contract.status,
+                    monthly_amount=contract.monthly_amount,
+                    is_active=is_active,
+                )
             )
-            count += 1
             d += timedelta(days=1)
+            if len(batch) >= _FACT_CONTRACT_BATCH:
+                count += _flush(batch)
+                batch = []
+
+    count += _flush(batch)
     return count
 
 
