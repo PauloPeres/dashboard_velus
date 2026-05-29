@@ -4,54 +4,117 @@
 {% block title %}Sync · Velus{% endblock %}
 
 {% block content %}
-<div class="flex justify-between items-center mb-6">
-    <div>
-        <h1 class="text-2xl font-bold">Operação de Sync</h1>
-        <p class="text-sm text-gray-600 mt-1">Estado das integrações externas para <b>{{ organization.name }}</b>.</p>
-    </div>
-    <form method="post" action="{% url 'sync:trigger_all' %}" class="inline">
-        {% csrf_token %}
-        <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium">
-            Sincronizar tudo (incremental)
-        </button>
+
+<!-- ── Cabeçalho ─────────────────────────────────────────────── -->
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Operações de Sync</h1>
+    <p class="text-sm text-gray-500 mt-0.5">
+      Integrações externas de <strong>{{ organization.name }}</strong>
+      &nbsp;·&nbsp;
+      fila <code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs font-mono text-gray-700">{{ organization.celery_queue_name }}</code>
+    </p>
+  </div>
+  <div class="flex items-center gap-2 shrink-0">
+    <!-- Próximo beat -->
+    <span class="hidden sm:inline-flex items-center gap-1.5 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+      <svg class="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      Beat em <strong class="text-gray-700">{{ mins_to_beat }}min</strong>
+      <span class="text-gray-400">({{ next_beat|date:"H:i" }})</span>
+    </span>
+    <form method="post" action="{% url 'sync:trigger_all' %}">
+      {% csrf_token %}
+      <button type="submit"
+              class="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+        Sync incremental de tudo
+      </button>
     </form>
+  </div>
 </div>
 
-<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 text-sm text-yellow-900">
-    <p><strong>Worker rodando?</strong> Clicar nos botões abaixo dispatcha tasks Celery na fila <code class="bg-yellow-100 px-1 rounded">{{ organization.celery_queue_name }}</code>.
-    Pra processar, rode em outra aba:</p>
-    <pre class="bg-yellow-100 mt-2 p-2 rounded text-xs">uv run celery -A config worker --loglevel=info -Q {{ organization.celery_queue_name }},celery</pre>
+<!-- ── Workers Celery (carregado async via HTMX) ─────────────── -->
+<div id="workers-panel"
+     hx-get="{% url 'sync:workers' %}"
+     hx-trigger="load"
+     hx-swap="outerHTML"
+     class="mb-6">
+  <!-- Skeleton enquanto carrega -->
+  <div class="bg-white border border-gray-200 rounded-xl p-4 animate-pulse">
+    <div class="flex items-center gap-2 mb-3">
+      <div class="w-4 h-4 bg-gray-200 rounded"></div>
+      <div class="w-28 h-4 bg-gray-200 rounded"></div>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div class="h-16 bg-gray-100 rounded-lg"></div>
+      <div class="h-16 bg-gray-100 rounded-lg"></div>
+      <div class="h-16 bg-gray-100 rounded-lg"></div>
+    </div>
+  </div>
 </div>
 
-<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden"
+<!-- ── Tabela de capabilities ─────────────────────────────────── -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden"
      {% if has_running %}
      hx-get="{% url 'sync:status_rows' %}"
      hx-trigger="every 3s"
      hx-target="#status-tbody"
      hx-swap="outerHTML"
      {% endif %}>
-    <table class="min-w-full text-sm">
-        <thead class="bg-gray-50">
-            <tr>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Capability</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fonte</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Adapter</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Última execução</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Registros</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Checkpoint</th>
-                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ações</th>
-            </tr>
-        </thead>
-        {% include "sync/_status_table_body.html" %}
-    </table>
+
+  <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+    <h2 class="text-sm font-semibold text-gray-700">Capabilities configuradas</h2>
+    {% if has_running %}
+      <span class="inline-flex items-center gap-1.5 text-xs text-blue-600">
+        <span class="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
+        Atualizando a cada 3s
+      </span>
+    {% else %}
+      <a href="{% url 'sync:status' %}" class="text-xs text-gray-400 hover:text-blue-600">
+        Recarregar
+      </a>
+    {% endif %}
+  </div>
+
+  <table class="min-w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-100">
+      <tr>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">Capability</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">Fonte</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">Status</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">Duração</th>
+        <th class="px-4 py-2.5 text-right text-xs font-medium text-gray-500 uppercase tracking-wide">Registros</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">Checkpoint</th>
+        <th class="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">Última vez</th>
+        <th class="px-4 py-2.5 text-right text-xs font-medium text-gray-500 uppercase tracking-wide">Ações</th>
+      </tr>
+    </thead>
+    {% include "sync/_status_table_body.html" %}
+  </table>
 </div>
 
-<div class="mt-6 text-xs text-gray-500">
-    {% if has_running %}
-        <span class="inline-flex items-center gap-2"><span class="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span> Atualizando a cada 3s enquanto há sync rodando…</span>
-    {% else %}
-        <a href="{% url 'sync:status' %}" class="hover:text-blue-600">Recarregar manualmente</a>
-    {% endif %}
-</div>
+<!-- ── Como rodar o worker ────────────────────────────────────── -->
+<details class="mt-6 bg-gray-50 border border-gray-200 rounded-xl overflow-hidden">
+  <summary class="px-4 py-3 text-sm font-medium text-gray-600 cursor-pointer select-none hover:bg-gray-100 flex items-center gap-2">
+    <svg class="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+    </svg>
+    Como iniciar o worker e o Beat
+  </summary>
+  <div class="px-4 pb-4 text-sm text-gray-600 space-y-3">
+    <div>
+      <p class="font-medium text-gray-700 mb-1">Worker (processa tasks):</p>
+      <pre class="bg-gray-900 text-green-400 text-xs rounded-lg p-3 overflow-x-auto">uv run celery -A config worker --loglevel=info -Q {{ organization.celery_queue_name }},celery</pre>
+    </div>
+    <div>
+      <p class="font-medium text-gray-700 mb-1">Beat (dispara incrementals automáticos a cada 3h):</p>
+      <pre class="bg-gray-900 text-green-400 text-xs rounded-lg p-3 overflow-x-auto">uv run celery -A config beat --loglevel=info</pre>
+    </div>
+  </div>
+</details>
+
 {% endblock %}

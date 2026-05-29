@@ -1,0 +1,125 @@
+{% load humanize %}
+<!-- Workers panel — recarregável via HTMX -->
+<div id="workers-panel"
+     class="bg-white border border-gray-200 rounded-xl overflow-hidden mb-6"
+     hx-get="{% url 'sync:workers' %}"
+     hx-trigger="every 15s"
+     hx-swap="outerHTML">
+
+  <!-- Header -->
+  <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <svg class="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/>
+      </svg>
+      <h2 class="text-sm font-semibold text-gray-700">Workers Celery</h2>
+      {% if worker_info.any_online %}
+        <span class="inline-flex items-center gap-1 text-xs text-green-600 bg-green-50 border border-green-100 rounded-full px-2 py-0.5">
+          <span class="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
+          {{ worker_info.worker_count }} online
+        </span>
+      {% else %}
+        <span class="inline-flex items-center gap-1 text-xs text-red-600 bg-red-50 border border-red-100 rounded-full px-2 py-0.5">
+          <span class="w-1.5 h-1.5 bg-red-400 rounded-full"></span>
+          offline
+        </span>
+      {% endif %}
+    </div>
+    <span class="text-xs text-gray-400">
+      atualizado {{ worker_info.checked_at|naturaltime }}
+    </span>
+  </div>
+
+  <!-- Sem workers online -->
+  {% if not worker_info.any_online %}
+    <div class="px-5 py-6 flex items-start gap-4">
+      <div class="w-10 h-10 bg-red-50 rounded-xl flex items-center justify-center shrink-0">
+        <svg class="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+      </div>
+      <div class="flex-1">
+        <p class="text-sm font-medium text-gray-800">Nenhum worker respondendo</p>
+        <p class="text-xs text-gray-500 mt-0.5 mb-2">
+          Tasks enfileiradas ficam pendentes até um worker iniciar.
+        </p>
+        <code class="block bg-gray-900 text-green-400 text-xs rounded-lg px-3 py-2 font-mono">
+          uv run celery -A config worker --loglevel=info -Q {{ organization.celery_queue_name }},celery
+        </code>
+        {% if worker_info.error %}
+          <p class="text-xs text-red-500 mt-1">Erro inspect: {{ worker_info.error }}</p>
+        {% endif %}
+      </div>
+    </div>
+
+  <!-- Workers encontrados -->
+  {% else %}
+    <div class="px-4 py-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for worker in worker_info.workers %}
+        <div class="border border-gray-100 rounded-xl p-4 {% if worker.online %}bg-gray-50{% else %}bg-red-50 border-red-100{% endif %}">
+          <!-- Hostname + status -->
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full {% if worker.online %}bg-green-500{% else %}bg-red-400{% endif %}"></span>
+              <span class="text-sm font-mono font-medium text-gray-800 truncate max-w-32" title="{{ worker.hostname }}">
+                {{ worker.short_hostname }}
+              </span>
+            </div>
+            {% if worker.online %}
+              <span class="text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded-full">online</span>
+            {% else %}
+              <span class="text-xs text-red-700 bg-red-100 px-2 py-0.5 rounded-full">offline</span>
+            {% endif %}
+          </div>
+
+          <!-- Contadores -->
+          <div class="grid grid-cols-3 gap-2 mb-3">
+            <div class="text-center">
+              <div class="text-lg font-bold {% if worker.active_count > 0 %}text-blue-600{% else %}text-gray-400{% endif %}">
+                {{ worker.active_count }}
+              </div>
+              <div class="text-xs text-gray-500">ativas</div>
+            </div>
+            <div class="text-center">
+              <div class="text-lg font-bold {% if worker.reserved_count > 0 %}text-orange-500{% else %}text-gray-400{% endif %}">
+                {{ worker.reserved_count }}
+              </div>
+              <div class="text-xs text-gray-500">aguardando</div>
+            </div>
+            <div class="text-center">
+              <div class="text-lg font-bold text-gray-500">{{ worker.total_processed|default:"0"|intcomma }}</div>
+              <div class="text-xs text-gray-500">total</div>
+            </div>
+          </div>
+
+          <!-- Tarefas ativas -->
+          {% if worker.active_summaries %}
+            <div class="space-y-1 mb-3">
+              {% for t in worker.active_summaries %}
+                <div class="flex items-center gap-1.5 text-xs bg-blue-50 border border-blue-100 rounded-lg px-2 py-1">
+                  <span class="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse shrink-0"></span>
+                  <span class="font-medium text-blue-800">{{ t.capability }}</span>
+                  {% if t.mode %}
+                    <span class="text-blue-500">{{ t.mode }}</span>
+                  {% endif %}
+                  {% if t.elapsed %}
+                    <span class="ml-auto text-blue-400 font-mono">{{ t.elapsed }}</span>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+
+          <!-- Filas -->
+          {% if worker.queues %}
+            <div class="flex flex-wrap gap-1">
+              {% for q in worker.queues %}
+                <span class="text-xs bg-white border border-gray-200 text-gray-600 px-1.5 py-0.5 rounded font-mono">{{ q }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>

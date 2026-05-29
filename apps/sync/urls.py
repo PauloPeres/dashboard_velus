@@ -11,6 +11,8 @@ app_name = "sync"
 urlpatterns = [
     path("", views.status_page, name="status"),
     path("rows/", views.status_rows_partial, name="status_rows"),
+    path("workers/", views.worker_status_partial, name="workers"),
+    path("history/<str:capability>/", views.job_history_partial, name="job_history"),
     path("trigger/", views.trigger_sync, name="trigger"),
     path("trigger-all/", views.trigger_all_sync, name="trigger_all"),
 ]
