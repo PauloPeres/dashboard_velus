@@ -38,11 +38,19 @@ class IxcContractSource:
         )
 
     def list_contracts(self, *, since: datetime | None = None) -> Iterator[ContractDTO]:
-        body_filter = self._build_since_filter(since) if since else None
+        # IXC não expõe `data_alteracao` no endpoint `cliente_contrato` — filtro
+        # server-side retorna HTML de erro (HTTP 200). Full scan garante que mudanças
+        # de status (ACTIVE→CANCELED) sejam capturadas; SCD2 no repo cuida da idempotência.
+        if since:
+            _logger.debug(
+                "ixc_contract_incremental_full_scan",
+                since=since.isoformat(),
+                reason="data_alteracao filter unsupported on cliente_contrato endpoint",
+            )
 
         with self._client_factory() as client:
             plan_cache = IxcPlanCache(client)
-            for raw in client.paginate_ixc("cliente_contrato", body_filter=body_filter):
+            for raw in client.paginate_ixc("cliente_contrato"):
                 try:
                     schema = IxcContractSchema.model_validate(raw)
                 except ValidationError as exc:
@@ -107,12 +115,3 @@ class IxcContractSource:
             raw_extras=schema.get_extras(),
         )
 
-    @staticmethod
-    def _build_since_filter(since: datetime) -> dict[str, str]:
-        from zoneinfo import ZoneInfo
-        sp = since.astimezone(ZoneInfo("America/Sao_Paulo"))
-        return {
-            "qtype": "cliente_contrato.data_alteracao",
-            "query": sp.strftime("%Y-%m-%d %H:%M:%S"),
-            "oper": ">=",
-        }

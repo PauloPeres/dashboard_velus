@@ -213,7 +213,8 @@ class TestIxcCustomerSourceListCustomers:
         request = route.calls[0].request
         assert request.headers.get("ixcsoft") == "listar"
 
-    def test_incremental_sends_since_filter(self, respx_mock: respx.MockRouter) -> None:
+    def test_incremental_does_full_scan(self, respx_mock: respx.MockRouter) -> None:
+        """IXC não suporta filtro data_alteracao em cliente — incremental faz full scan."""
         route = respx_mock.get(f"{BASE_URL}/cliente").mock(
             return_value=Response(200, json={"page": "1", "total": "0", "registros": []})
         )
@@ -221,8 +222,7 @@ class TestIxcCustomerSourceListCustomers:
         since = datetime(2025, 5, 1, 12, 0, tzinfo=ZoneInfo("UTC"))
         list(source.list_customers(since=since))
 
+        # Mesmo com since, não envia filtro data_alteracao (causaria HTML 200 no IXC)
         body = json.loads(route.calls[0].request.content)
-        assert body["qtype"] == "cliente.data_alteracao"
-        assert body["oper"] == ">="
-        # SP = UTC-3 → 12:00 UTC vira 09:00 local
-        assert "2025-05-01 09:00:00" in body["query"]
+        assert "qtype" not in body, "não deve enviar filtro server-side para cliente"
+        assert "oper" not in body

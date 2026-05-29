@@ -9,9 +9,11 @@ Responsabilidades:
 
 Filtros usados:
 - Bootstrap (since=None): sem filtro além de paginação.
-- Incremental (since=<dt>): filtro `data_alteracao >= since` se IXC suportar
-  no payload. Confirmar com instalação real — fallback é puxar tudo e filtrar
-  client-side (mais lento mas robusto).
+- Incremental (since=<dt>): **full scan** — o endpoint `cliente` não expõe o campo
+  `data_alteracao` para filtragem; qualquer tentativa retorna HTML de erro (HTTP 200).
+  A idempotência é garantida pelo SCD2 no CustomerRepository (upsert por external_id).
+  Com ~9 K clientes e page_size=100 isso representa ~90 requests por run, totalmente
+  viável a cada 3h.
 """
 
 from __future__ import annotations
@@ -61,10 +63,18 @@ class IxcCustomerSource:
         *,
         since: datetime | None = None,
     ) -> Iterator[CustomerDTO]:
-        body_filter = self._build_since_filter(since) if since else None
+        # IXC não expõe `data_alteracao` no endpoint `cliente` — filtro server-side
+        # retorna HTML de erro (HTTP 200). Full scan garante que mudanças de status
+        # (ACTIVE→CANCELED) sejam capturadas; SCD2 no repo cuida da idempotência.
+        if since:
+            _logger.debug(
+                "ixc_customer_incremental_full_scan",
+                since=since.isoformat(),
+                reason="data_alteracao filter unsupported on cliente endpoint",
+            )
 
         with self._client_factory() as client:
-            for raw in client.paginate_ixc("cliente", body_filter=body_filter):
+            for raw in client.paginate_ixc("cliente"):
                 try:
                     schema = IxcCustomerSchema.model_validate(raw)
                 except ValidationError as exc:
@@ -120,18 +130,3 @@ class IxcCustomerSource:
             raw_extras=schema.get_extras(),
         )
 
-    @staticmethod
-    def _build_since_filter(since: datetime) -> dict[str, str]:
-        """Constrói filtro de incremental baseado em `data_alteracao`.
-
-        IXC usa formato `YYYY-MM-DD HH:MM:SS` em queries. Convertemos pra
-        horário local de São Paulo (IXC roda local).
-        """
-        from zoneinfo import ZoneInfo
-
-        sp = since.astimezone(ZoneInfo("America/Sao_Paulo"))
-        return {
-            "qtype": "cliente.data_alteracao",
-            "query": sp.strftime("%Y-%m-%d %H:%M:%S"),
-            "oper": ">=",
-        }
