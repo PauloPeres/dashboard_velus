@@ -18,4 +18,5 @@ urlpatterns = [
     path("financial/forecast/", views.forecast, name="forecast"),
     path("financial/dre/", views.dre, name="dre"),
     path("financial/burn/", views.burn, name="burn"),
+    path("churn/", views.churn, name="churn"),
 ]

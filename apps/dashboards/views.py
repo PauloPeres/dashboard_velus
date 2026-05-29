@@ -24,6 +24,9 @@ from apps.analytics.application.aggregations import (
     compute_cash_received_series,
     compute_cashflow_series,
     compute_churn_by_plan,
+    compute_churn_by_reason,
+    compute_churn_plan_detail,
+    compute_churn_summary,
     compute_contract_status_trend,
     compute_delinquency_trend,
     compute_dre,
@@ -31,6 +34,8 @@ from apps.analytics.application.aggregations import (
     compute_expense_by_supplier,
     compute_expense_series,
     compute_kpis,
+    compute_ltv_distribution,
+    compute_mrr_churn_series,
     compute_mrr_series,
     compute_pipeline_by_status,
     compute_revenue_forecast,
@@ -417,5 +422,67 @@ def contracts(request: HttpRequest) -> HttpResponse:
             "arpu_chart_json": charts.arpu_bar_chart(arpu_data),
             "churn_plan_json": charts.churn_by_plan_bar(churn_plan),
             "blocked_dist_json": charts.blocked_duration_histogram(blocked_dist),
+        },
+    )
+
+
+@login_required
+@never_cache
+def churn(request: HttpRequest) -> HttpResponse:
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    summary = compute_churn_summary(org)
+    mrr_series = compute_mrr_churn_series(org, months=12)
+    reasons = compute_churn_by_reason(org, months=12)
+    ltv_dist = compute_ltv_distribution(org)
+    plan_detail = compute_churn_plan_detail(org, months=12)
+
+    # Derivados para KPI cards
+    net_mrr = summary["net_mrr_this_month"]
+    logo_churn_pct_str = f"{summary['logo_churn_pct']:.1f}%"
+    mrr_lost_str = _fmt_brl(summary["mrr_lost_this_month"])
+    mrr_recovered_str = _fmt_brl(summary["mrr_recovered_this_month"])
+    net_mrr_str = _fmt_brl(abs(net_mrr))
+
+    # Plano mais cancelado por MRR
+    top_plan = plan_detail[0]["plan"] if plan_detail else "—"
+
+    # Percentuais controláveis
+    total_mrr_lost = sum(r["mrr_lost"] for r in reasons)
+    controllable_pct = (
+        round(sum(r["mrr_lost"] for r in reasons if r["controlavel"] is True)
+              / total_mrr_lost * 100, 1)
+        if total_mrr_lost > 0 else 0.0
+    )
+
+    return render(
+        request,
+        "dashboards/churn.html",
+        {
+            "summary": summary,
+            "plan_detail": plan_detail,
+            "reasons": reasons,
+            "ltv_dist": ltv_dist,
+            # Formatados para os KPI cards
+            "logo_churn_pct_str": logo_churn_pct_str,
+            "logo_churn_variant": "border-orange-300" if summary["logo_churn_pct"] > 1.5 else "border-gray-200",
+            "mrr_lost_str": mrr_lost_str,
+            "mrr_recovered_str": mrr_recovered_str,
+            "net_mrr_str": net_mrr_str,
+            "net_mrr_positive": net_mrr >= 0,
+            "ltv_avg_str": f"{summary['ltv_avg_months']:.1f} meses",
+            "top_plan": top_plan,
+            "controllable_pct": controllable_pct,
+            "ticket_alert": summary["ticket_alert"],
+            "avg_ticket_canceled_str": _fmt_brl(summary["avg_ticket_canceled"]),
+            "avg_ticket_active_str": _fmt_brl(summary["avg_ticket_active"]),
+            # Charts
+            "churn_mrr_json": charts.churn_mrr_waterfall(mrr_series),
+            "churn_logo_json": charts.churn_logo_line(mrr_series),
+            "churn_reason_json": charts.churn_reason_pareto(reasons),
+            "ltv_hist_json": charts.ltv_histogram(ltv_dist),
         },
     )

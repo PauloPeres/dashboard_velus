@@ -454,6 +454,140 @@ def blocked_duration_histogram(data: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+def churn_mrr_waterfall(series: list[dict[str, Any]]) -> str:
+    """Barras agrupadas — MRR perdido vs recuperado + linha de MRR líquido mensal."""
+    labels = [s["label"] for s in series]
+    lost = [s["mrr_lost"] for s in series]
+    recovered = [s["mrr_recovered"] for s in series]
+    net = [s["net_mrr"] for s in series]
+    net_colors = ["#16a34a" if v >= 0 else "#ef4444" for v in net]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                name="MRR Perdido",
+                x=labels, y=lost,
+                marker_color="#ef4444",
+                hovertemplate="<b>%{x}</b><br>MRR perdido: R$ %{y:,.0f}<extra></extra>",
+            ),
+            go.Bar(
+                name="MRR Recuperado",
+                x=labels, y=recovered,
+                marker_color="#10b981",
+                hovertemplate="<b>%{x}</b><br>MRR recuperado: R$ %{y:,.0f}<extra></extra>",
+            ),
+            go.Scatter(
+                name="MRR Líquido",
+                x=labels, y=net,
+                mode="lines+markers",
+                line={"color": "#2563eb", "width": 2, "dash": "dot"},
+                marker={"size": 8, "color": net_colors},
+                hovertemplate="<b>%{x}</b><br>Líquido: R$ %{y:,.0f}<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "group",
+            "showlegend": True,
+            "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f"},
+            "legend": {"orientation": "h", "y": -0.25},
+        },
+    )
+    return _to_json(fig)
+
+
+def churn_reason_pareto(data: list[dict[str, Any]]) -> str:
+    """Barras horizontais + linha de % acumulado (Pareto) por motivo de cancelamento."""
+    labels = [d["label"] for d in data]
+    mrr_vals = [d["mrr_lost"] for d in data]
+    pct_acc = [d["pct_acc"] for d in data]
+    # Cores: controlável=vermelho, não-controlável=cinza, neutro=laranja
+    color_map = {True: "#ef4444", False: "#9ca3af", None: "#f97316"}
+    bar_colors = [color_map.get(d["controlavel"], "#6b7280") for d in data]
+
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                name="MRR perdido",
+                x=mrr_vals, y=labels, orientation="h",
+                marker_color=bar_colors,
+                customdata=[[d["count"], d["pct"]] for d in data],
+                hovertemplate=(
+                    "<b>%{y}</b><br>MRR: R$ %{x:,.0f}<br>"
+                    "Contratos: %{customdata[0]}<br>%{customdata[1]:.1f}% do total<extra></extra>"
+                ),
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "xaxis": {"tickprefix": "R$ ", "tickformat": ",.0f"},
+            "margin": {"l": 200, "r": 60, "t": 30, "b": 50},
+            "showlegend": False,
+            "height": 400,
+        },
+    )
+    return _to_json(fig)
+
+
+def ltv_histogram(data: list[dict[str, Any]]) -> str:
+    """Barras — histograma de LTV dos contratos cancelados."""
+    labels = [d["label"] for d in data]
+    counts = [d["count"] for d in data]
+    avg_mrr = [d["avg_mrr"] for d in data]
+    colors = ["#fbbf24", "#f97316", "#ef4444", "#dc2626"]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=labels, y=counts,
+                marker_color=colors[: len(labels)],
+                customdata=avg_mrr,
+                hovertemplate=(
+                    "<b>%{x}</b><br>Contratos: %{y}<br>"
+                    "Ticket médio: R$ %{customdata:,.0f}<extra></extra>"
+                ),
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "yaxis": {"title": "Contratos cancelados"},
+        },
+    )
+    return _to_json(fig)
+
+
+def churn_logo_line(series: list[dict[str, Any]]) -> str:
+    """Linha dupla — cancelamentos vs novas ativações por mês."""
+    labels = [s["label"] for s in series]
+    churned = [s["logo_churn"] for s in series]
+    new_logos = [s["new_logos"] for s in series]
+    fig = go.Figure(
+        data=[
+            go.Scatter(
+                name="Cancelamentos",
+                x=labels, y=churned,
+                mode="lines+markers",
+                line={"color": "#ef4444", "width": 3},
+                marker={"size": 8},
+                hovertemplate="<b>%{x}</b><br>Cancelados: %{y}<extra></extra>",
+            ),
+            go.Scatter(
+                name="Novas ativações",
+                x=labels, y=new_logos,
+                mode="lines+markers",
+                line={"color": "#10b981", "width": 3},
+                marker={"size": 8},
+                hovertemplate="<b>%{x}</b><br>Ativações: %{y}<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "showlegend": True,
+            "yaxis": {"title": "Contratos"},
+            "legend": {"orientation": "h", "y": -0.25},
+        },
+    )
+    return _to_json(fig)
+
+
 def forecast_area(
     historical: list[dict[str, Any]], forecast: list[dict[str, Any]]
 ) -> str:

@@ -917,6 +917,348 @@ def compute_at_risk_contracts(
     return result[:limit]
 
 
+# ---------------------------------------------------------------------------
+# Mapeamento de motivos de cancelamento IXC → label legível + categoria
+# ---------------------------------------------------------------------------
+# Fonte: análise de obs_cancelamento nos contratos cancelados da base real.
+# Categoria: True = controlável (ação de retenção possível)
+#            False = não controlável (mobilidade, titularidade, etc.)
+#            None = neutro/operacional
+_IXC_MOTIVO_MAP: dict[str, tuple[str, bool | None]] = {
+    "4":  ("Mudança de titularidade", None),
+    "5":  ("Mudança de endereço", False),
+    "6":  ("Inadimplência acumulada", True),   # sistema cancela após bloqueio prolongado
+    "8":  ("Outros", None),
+    "9":  ("Fora da área de cobertura", False),
+    "24": ("Desistência pré-instalação", None),
+    "25": ("Trocou de provedor", True),
+    "26": ("Cancelou serviço adicional", None),
+    "27": ("Problemas de qualidade/suporte", True),
+    "29": ("Contrato sem uso (operacional)", None),
+    "30": ("Mudança de titularidade", None),
+    "31": ("Mudança de cidade", False),
+    "32": ("Saindo do local", False),
+}
+
+
+def _motivo_label(mid: str) -> str:
+    return _IXC_MOTIVO_MAP.get(str(mid), (f"Motivo #{mid}", None))[0]
+
+
+def _motivo_controlavel(mid: str) -> bool | None:
+    return _IXC_MOTIVO_MAP.get(str(mid), (None, None))[1]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_mrr_churn_series(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Série mensal de MRR Churn + Logo Churn + MRR Recuperado.
+
+    Para cada mês:
+      - mrr_lost: soma das mensalidades dos contratos cancelados no mês
+      - logo_churn: contagem de cancelamentos
+      - mrr_recovered: soma das mensalidades de contratos ativados no mês
+      - new_logos: contagem de ativações no mês
+      - net_mrr: mrr_recovered - mrr_lost
+
+    Retorna lista cronológica (mais antigo primeiro).
+    """
+    from apps.customers.infrastructure.models import Contract
+
+    today = timezone.now().date()
+    result = []
+
+    for i in range(months - 1, -1, -1):
+        m_start = _first_of_month_n_ago(today, i)
+        m_end = _first_of_month_n_ago(today, i - 1) - timedelta(days=1) if i > 0 else today
+        label = m_start.strftime("%b/%y")
+        month_key = m_start.strftime("%Y-%m")
+
+        # Cancelamentos
+        canceled_agg = Contract.objects.filter(
+            organization=organization,
+            status="CANCELED",
+            canceled_at__date__gte=m_start,
+            canceled_at__date__lte=m_end,
+        ).aggregate(
+            n=Count("id"),
+            mrr=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()),
+        )
+
+        # Ativações
+        activated_agg = Contract.objects.filter(
+            organization=organization,
+            activated_at__date__gte=m_start,
+            activated_at__date__lte=m_end,
+        ).aggregate(
+            n=Count("id"),
+            mrr=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()),
+        )
+
+        mrr_lost = float(canceled_agg["mrr"] or 0)
+        mrr_recovered = float(activated_agg["mrr"] or 0)
+        result.append({
+            "month": month_key,
+            "label": label,
+            "mrr_lost": mrr_lost,
+            "logo_churn": canceled_agg["n"] or 0,
+            "mrr_recovered": mrr_recovered,
+            "new_logos": activated_agg["n"] or 0,
+            "net_mrr": mrr_recovered - mrr_lost,
+        })
+
+    return result
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_churn_by_reason(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """MRR perdido por motivo de cancelamento (dos últimos N meses).
+
+    Agrega por `motivo_cancelamento` do raw_extras. Retorna lista ordenada
+    por mrr_lost desc, com label legível e categoria controlável/não.
+    """
+    from apps.customers.infrastructure.models import Contract
+
+    today = timezone.now().date()
+    cutoff = _first_of_month_n_ago(today, months)
+
+    canceled = Contract.objects.filter(
+        organization=organization,
+        status="CANCELED",
+        canceled_at__date__gte=cutoff,
+    )
+
+    reasons: dict[str, dict] = {}
+    for c in canceled.iterator():
+        mid = str((c.raw_extras or {}).get("motivo_cancelamento", "0") or "0")
+        if mid not in reasons:
+            reasons[mid] = {
+                "motivo_id": mid,
+                "label": _motivo_label(mid),
+                "controlavel": _motivo_controlavel(mid),
+                "count": 0,
+                "mrr_lost": 0.0,
+            }
+        reasons[mid]["count"] += 1
+        reasons[mid]["mrr_lost"] += float(c.monthly_amount or 0)
+
+    result = sorted(reasons.values(), key=lambda x: -x["mrr_lost"])
+
+    # Adicionar % acumulado (Pareto)
+    total = sum(r["mrr_lost"] for r in result)
+    acc = 0.0
+    for r in result:
+        acc += r["mrr_lost"]
+        r["pct"] = round(r["mrr_lost"] / total * 100, 1) if total > 0 else 0.0
+        r["pct_acc"] = round(acc / total * 100, 1) if total > 0 else 0.0
+
+    return result
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_ltv_distribution(
+    organization: Organization,
+) -> list[dict[str, Any]]:
+    """Histograma de LTV — tempo de vida dos contratos cancelados.
+
+    Buckets: <3 meses · 3–12 meses · 12–24 meses · 24+ meses.
+    Retorna count + MRR médio por bucket.
+    """
+    from apps.customers.infrastructure.models import Contract
+
+    canceled = Contract.objects.filter(
+        organization=organization,
+        status="CANCELED",
+        canceled_at__isnull=False,
+        activated_at__isnull=False,
+    ).iterator()
+
+    buckets: dict[str, dict] = {
+        "lt_3":   {"label": "< 3 meses",    "count": 0, "mrr_sum": 0.0},
+        "3_12":   {"label": "3–12 meses",   "count": 0, "mrr_sum": 0.0},
+        "12_24":  {"label": "12–24 meses",  "count": 0, "mrr_sum": 0.0},
+        "over_24":{"label": "24+ meses",    "count": 0, "mrr_sum": 0.0},
+    }
+
+    for c in canceled:
+        months = (c.canceled_at - c.activated_at).days / 30.4
+        mrr = float(c.monthly_amount or 0)
+        if months < 3:
+            b = "lt_3"
+        elif months < 12:
+            b = "3_12"
+        elif months < 24:
+            b = "12_24"
+        else:
+            b = "over_24"
+        buckets[b]["count"] += 1
+        buckets[b]["mrr_sum"] += mrr
+
+    result = []
+    for key, data in buckets.items():
+        avg_mrr = data["mrr_sum"] / data["count"] if data["count"] > 0 else 0.0
+        result.append({
+            "bucket": key,
+            "label": data["label"],
+            "count": data["count"],
+            "avg_mrr": round(avg_mrr, 2),
+        })
+    return result
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_churn_plan_detail(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Tabela detalhada de churn por plano (últimos N meses).
+
+    Retorna lista com: plano, cancelamentos, MRR perdido, % total,
+    LTV médio, churn_rate (cancelados / ativos no início do período).
+    Ordenado por mrr_lost desc.
+    """
+    from apps.customers.infrastructure.models import Contract
+
+    today = timezone.now().date()
+    cutoff = _first_of_month_n_ago(today, months)
+
+    canceled = Contract.objects.filter(
+        organization=organization,
+        status="CANCELED",
+        canceled_at__date__gte=cutoff,
+        activated_at__isnull=False,
+    )
+
+    # Agrupa por plano
+    by_plan: dict[str, dict] = {}
+    for c in canceled.iterator():
+        plan = c.plan_name or "—"
+        if plan not in by_plan:
+            by_plan[plan] = {"count": 0, "mrr_lost": 0.0, "ltv_days": []}
+        by_plan[plan]["count"] += 1
+        by_plan[plan]["mrr_lost"] += float(c.monthly_amount or 0)
+        days = (c.canceled_at - c.activated_at).days
+        by_plan[plan]["ltv_days"].append(days)
+
+    # Base de ativos no início do período (para churn rate)
+    base_counts = {
+        row["contract__plan_name"]: row["n"]
+        for row in FactContractStatusDaily.objects.filter(
+            organization=organization,
+            date=cutoff,
+            is_active=True,
+        )
+        .values("contract__plan_name")
+        .annotate(n=Count("id"))
+    }
+
+    total_mrr = sum(v["mrr_lost"] for v in by_plan.values())
+    result = []
+    for plan, data in by_plan.items():
+        ltv_avg = sum(data["ltv_days"]) / len(data["ltv_days"]) / 30.4 if data["ltv_days"] else 0.0
+        base = base_counts.get(plan, 0)
+        churn_rate = round(data["count"] / base * 100, 1) if base > 0 else None
+        result.append({
+            "plan": plan,
+            "count": data["count"],
+            "mrr_lost": round(data["mrr_lost"], 2),
+            "pct_of_total": round(data["mrr_lost"] / total_mrr * 100, 1) if total_mrr > 0 else 0.0,
+            "ltv_avg_months": round(ltv_avg, 1),
+            "churn_rate": churn_rate,
+        })
+
+    return sorted(result, key=lambda x: -x["mrr_lost"])
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_churn_summary(organization: Organization) -> dict[str, Any]:
+    """KPIs de churn para o topo do dashboard.
+
+    Retorna:
+      - mrr_lost_this_month: R$ perdido no mês corrente
+      - logo_churn_this_month: contratos cancelados no mês
+      - logo_churn_pct: logo_churn / ativos no início do mês
+      - mrr_recovered_this_month: R$ de novos contratos ativados no mês
+      - net_mrr_this_month: recovered - lost
+      - ltv_avg_months: LTV médio de todos os cancelados com ativação
+      - avg_ticket_canceled: ticket médio dos cancelados últimos 3m
+      - avg_ticket_active: ticket médio dos contratos ativos hoje
+    """
+    from apps.customers.infrastructure.models import Contract
+    from django.db.models import Avg
+
+    today = timezone.now().date()
+    month_first = today.replace(day=1)
+    prev_month_first = _first_of_month_n_ago(today, 1)
+
+    canceled_qs = Contract.objects.filter(organization=organization, status="CANCELED")
+
+    this_month = canceled_qs.filter(
+        canceled_at__date__gte=month_first,
+    ).aggregate(
+        n=Count("id"),
+        mrr=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()),
+    )
+
+    activated_this = Contract.objects.filter(
+        organization=organization,
+        activated_at__date__gte=month_first,
+    ).aggregate(
+        n=Count("id"),
+        mrr=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()),
+    )
+
+    # Base ativa no início do mês
+    base_start = FactContractStatusDaily.objects.filter(
+        organization=organization,
+        date=prev_month_first,
+        is_active=True,
+    ).count()
+
+    logo_churn = this_month["n"] or 0
+    mrr_lost = float(this_month["mrr"] or 0)
+    mrr_recovered = float(activated_this["mrr"] or 0)
+
+    # LTV médio
+    ltv_data = canceled_qs.filter(
+        canceled_at__isnull=False, activated_at__isnull=False
+    ).extra(
+        select={"days": "EXTRACT(DAY FROM (canceled_at - activated_at))"}
+    )
+    # Python-based avg (simpler cross-db)
+    ltv_days_list = []
+    for c in canceled_qs.filter(canceled_at__isnull=False, activated_at__isnull=False)[:2000].iterator():
+        ltv_days_list.append((c.canceled_at - c.activated_at).days)
+    ltv_avg_months = (sum(ltv_days_list) / len(ltv_days_list) / 30.4) if ltv_days_list else 0.0
+
+    # Avg ticket comparison
+    cutoff_3m = _first_of_month_n_ago(today, 3)
+    avg_canceled = canceled_qs.filter(canceled_at__date__gte=cutoff_3m).aggregate(
+        avg=Coalesce(Avg("monthly_amount"), _ZERO, output_field=DecimalField())
+    )
+    avg_active = Contract.objects.filter(
+        organization=organization, status="ACTIVE"
+    ).aggregate(avg=Coalesce(Avg("monthly_amount"), _ZERO, output_field=DecimalField()))
+
+    avg_ticket_canceled = float(avg_canceled["avg"] or 0)
+    avg_ticket_active = float(avg_active["avg"] or 0)
+
+    return {
+        "mrr_lost_this_month": mrr_lost,
+        "logo_churn_this_month": logo_churn,
+        "logo_churn_pct": round(logo_churn / base_start * 100, 2) if base_start > 0 else 0.0,
+        "mrr_recovered_this_month": mrr_recovered,
+        "new_logos_this_month": activated_this["n"] or 0,
+        "net_mrr_this_month": mrr_recovered - mrr_lost,
+        "ltv_avg_months": round(ltv_avg_months, 1),
+        "avg_ticket_canceled": avg_ticket_canceled,
+        "avg_ticket_active": avg_ticket_active,
+        "ticket_alert": avg_ticket_canceled > avg_ticket_active,  # True = perdendo planos mais caros
+    }
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_top_delinquent_invoices(
     organization: Organization, limit: int = 50
