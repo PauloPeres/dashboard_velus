@@ -103,17 +103,6 @@ def executive(request: HttpRequest) -> HttpResponse:
     mrr_delta_str = f"{kpis['mrr_delta_pct']:.1f}% vs mês anterior"
     mrr_subtitle = f"{_fmt_brl(kpis['mrr_prev'])} no mês anterior"
 
-    # Contratos: ACTIVE + BLOCKED + AWAITING — mostrar breakdown no subtitle
-    blocked = kpis["blocked_contracts"]
-    awaiting = kpis["awaiting_contracts"]
-    active_only = kpis["active_only"]
-    contracts_subtitle_parts = [f"{active_only:,} ativos".replace(",", ".")]
-    if blocked:
-        contracts_subtitle_parts.append(f"{blocked:,} bloqueados".replace(",", "."))
-    if awaiting:
-        contracts_subtitle_parts.append(f"{awaiting:,} ag. instalação".replace(",", "."))
-    contracts_subtitle = " · ".join(contracts_subtitle_parts)
-
     delinquency_subtitle = (
         f"{kpis['delinquency_count']:,} faturas vencidas — mensalidades acumuladas não pagas".replace(",", ".")
     )
@@ -134,7 +123,6 @@ def executive(request: HttpRequest) -> HttpResponse:
             "mrr_delta_str": mrr_delta_str,
             "mrr_delta_positive": kpis["mrr_delta_pct"] >= 0,
             "arpu_str": _fmt_brl(arpu),
-            "contracts_subtitle": contracts_subtitle,
             "churn_pct_str": churn_pct_str,
             "churn_subtitle": churn_subtitle,
             "churn_variant": "border-orange-300" if kpis["churn_pct"] > 1.5 else "border-gray-200",
