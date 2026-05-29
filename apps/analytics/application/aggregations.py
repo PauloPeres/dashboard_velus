@@ -1414,6 +1414,21 @@ _PLANEJAMENTO: dict[str, dict[str, str]] = {
     "0":  {"cod": "",                 "nome": "(Sem categoria)",                      "tipo": "?"},
 }
 
+# Mapeamento: prefixo do cod contábil → (nome da seção DRE, ordem)
+# Dois segmentos têm prioridade sobre um segmento.
+_DRE_SECTION_MAP: dict[str, tuple[str, int]] = {
+    "5.1": ("Despesas Comerciais",              2),
+    "5.2": ("Despesas Operacionais",            3),
+    "5.3": ("Despesas Financeiras",             4),
+    "5.4": ("Outras Despesas",                  5),
+    # Fallbacks single-segment
+    "4":   ("Custos dos Serviços",              1),
+    "5":   ("Outras Despesas",                  5),
+    "2":   ("Despesas Gerais (A Classificar)",  6),
+    "3":   ("Outros Lançamentos",               7),
+    "1":   ("Movimentações de Ativo",           8),
+}
+
 # Fornecedores que são pessoas físicas ou PJ individuais (não empresas grandes)
 # Mapeados a partir do endpoint `fornecedor` da API IXC.
 # Formato: supplier_external_id → (nome_display, tipo)
@@ -1464,31 +1479,77 @@ def _get_planeja_label(id_contas: str | None) -> str:
     return f"Conta #{id_contas}"
 
 
+def _get_dre_section(cod: str) -> tuple[str, int]:
+    """Mapeia cod contábil para (seção DRE, ordem).
+
+    Verifica prefixo de dois segmentos antes de um — ex: "5.2" tem prioridade
+    sobre "5". Usado para montar a estrutura de linhas da DRE.
+    """
+    if not cod:
+        return ("Sem Categoria", 99)
+    parts = cod.strip().rstrip(".").split(".")
+    top = parts[0]
+    two_prefix = f"{top}.{parts[1]}" if len(parts) > 1 else ""
+    entry = _DRE_SECTION_MAP.get(two_prefix) or _DRE_SECTION_MAP.get(top)
+    return entry or ("Sem Categoria", 99)
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_dre_by_account(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    from_ym: str | None = None,
+    to_ym: str | None = None,
 ) -> dict[str, Any]:
-    """DRE usando categorias do plano de contas IXC (planejamento).
+    """DRE estruturado por plano de contas IXC.
 
-    Agrupa despesas PAGAS por mês e por `id_contas` (do campo raw_extras).
+    Suporta janela relativa (months=N, padrão) ou janela fixa via from_ym/to_ym
+    (strings no formato "YYYY-MM").
+
     Retorna:
-      - months: lista de rótulos de mês (ex: ['Jan/25', ...])
-      - categories: lista de {id, label, tipo, monthly: [float], total: float}
-      - revenue_series: lista de {month, label, mrr} (do compute_mrr_series)
-      - summary: {total_expenses, total_revenue, ebitda} para o período
+      - months / month_labels: lista de períodos no intervalo
+      - categories: lista flat de contas com {id, cod, nome, label, tipo,
+          section, section_order, monthly, total}
+      - sections: contas agrupadas por seção DRE
+          [{section, order, monthly, total, accounts}]
+      - dre_rows: linhas estruturadas da DRE para tabela P&L:
+          tipo "header" | "section" | "subtotal" | "total"
+      - revenue_series: [{month, label, mrr}] alinhado ao intervalo
+      - summary: {total_expenses, total_revenue, ebitda}
     """
+    import calendar
     from apps.financial.infrastructure.models import Expense as ExpenseModel
 
     today = timezone.now().date()
-    cutoff = _first_of_month_n_ago(today, months)
 
-    # Query expenses with id_contas extracted from raw_extras
+    # --- Intervalo de datas ---
+    if from_ym and to_ym:
+        try:
+            cutoff = date_cls.fromisoformat(from_ym + "-01")
+            end_ym = date_cls.fromisoformat(to_ym + "-01")
+            _, last_day = calendar.monthrange(end_ym.year, end_ym.month)
+            end_date = end_ym.replace(day=last_day)
+        except ValueError:
+            from_ym = to_ym = None
+
+    if not (from_ym and to_ym):
+        cutoff = _first_of_month_n_ago(today, months)
+        end_date = today
+
+    # Quantos meses de histórico precisamos para MRR
+    months_back_for_mrr = max(
+        months,
+        (today.year - cutoff.year) * 12 + (today.month - cutoff.month) + 2,
+    )
+
+    # --- Query de despesas ---
     qs = (
         ExpenseModel.objects.filter(
             organization=organization,
             status="PAID",
             paid_at__isnull=False,
             paid_at__gte=cutoff,
+            paid_at__lte=end_date,
         )
         .annotate(
             month=TruncMonth("paid_at"),
@@ -1499,54 +1560,149 @@ def compute_dre_by_account(
         .order_by("month", "id_contas_str")
     )
 
-    # Build month list
+    # Monta mapa: id_contas → {YYYY-MM → valor}
     all_months_set: set[str] = set()
-    # raw data: {id_contas → {month_key → amount}}
-    data: dict[str, dict[str, float]] = {}
+    raw: dict[str, dict[str, float]] = {}
     for row in qs:
-        m = row["month"]
-        mk = m.strftime("%Y-%m")
+        mk = row["month"].strftime("%Y-%m")
         all_months_set.add(mk)
         ic = str(row["id_contas_str"] or "0")
-        data.setdefault(ic, {})[mk] = float(row["total"])
+        raw.setdefault(ic, {})[mk] = float(row["total"])
 
     sorted_months = sorted(all_months_set)
     month_labels = []
     for mk in sorted_months:
         try:
-            from datetime import date as _d
-            month_labels.append(_d.fromisoformat(mk + "-01").strftime("%b/%y"))
+            month_labels.append(date_cls.fromisoformat(mk + "-01").strftime("%b/%y"))
         except ValueError:
             month_labels.append(mk)
 
-    # Build categories
-    categories = []
-    for ic, monthly_data in sorted(data.items(), key=lambda kv: -sum(kv[1].values())):
+    n = len(sorted_months)
+
+    # --- Categorias (flat) com info de seção DRE ---
+    categories: list[dict[str, Any]] = []
+    for ic, monthly_data in sorted(raw.items(), key=lambda kv: -sum(kv[1].values())):
+        entry = _PLANEJAMENTO.get(ic, {})
+        cod = entry.get("cod", "")
+        section_name, section_order = _get_dre_section(cod)
         amounts = [monthly_data.get(mk, 0.0) for mk in sorted_months]
         total = sum(amounts)
         categories.append({
             "id": ic,
+            "cod": cod,
+            "nome": entry.get("nome", f"Conta #{ic}"),
             "label": _get_planeja_label(ic),
-            "tipo": _PLANEJAMENTO.get(ic, {}).get("tipo", "?"),
+            "tipo": entry.get("tipo", "?"),
+            "section": section_name,
+            "section_order": section_order,
             "monthly": amounts,
             "total": total,
         })
 
-    # Revenue series
-    revenue_series = compute_mrr_series(organization, months=months)
+    # --- Agrupamento por seção DRE ---
+    sections_map: dict[str, dict[str, Any]] = {}
+    for cat in categories:
+        sname = cat["section"]
+        if sname not in sections_map:
+            sections_map[sname] = {
+                "section": sname,
+                "order": cat["section_order"],
+                "monthly": [0.0] * n,
+                "total": 0.0,
+                "accounts": [],
+            }
+        for i, amt in enumerate(cat["monthly"]):
+            sections_map[sname]["monthly"][i] += amt
+        sections_map[sname]["total"] += cat["total"]
+        sections_map[sname]["accounts"].append(cat)
 
-    total_expenses = sum(sum(v.values()) for v in data.values())
-    total_revenue = sum(r["mrr"] for r in revenue_series)
-    ebitda = total_revenue - total_expenses
+    sections = sorted(sections_map.values(), key=lambda s: s["order"])
+
+    # --- Receita (MRR) alinhada ao intervalo ---
+    rev_full = compute_mrr_series(organization, months=months_back_for_mrr)
+    rev_by_month: dict[str, float] = {r["month"]: float(r["mrr"]) for r in rev_full}
+    revenue_monthly = [rev_by_month.get(mk, 0.0) for mk in sorted_months]
+    revenue_total = sum(revenue_monthly)
+
+    # --- Linhas DRE estruturadas (P&L) ---
+    _COST_SECTIONS = {"Custos dos Serviços"}
+    _OPEX_SECTIONS = {"Despesas Comerciais", "Despesas Operacionais"}
+
+    def _sub(a: list[float], b: list[float]) -> list[float]:
+        return [x - y for x, y in zip(a, b)]
+
+    dre_rows: list[dict[str, Any]] = []
+    dre_rows.append({
+        "type": "header",
+        "label": "(+) Receita Bruta (MRR)",
+        "monthly": list(revenue_monthly),
+        "total": revenue_total,
+    })
+
+    # Custos → Resultado Bruto
+    resultado_bruto = list(revenue_monthly)
+    for sec in sections:
+        if sec["section"] in _COST_SECTIONS:
+            dre_rows.append({
+                "type": "section", "sign": "(-)",
+                "label": sec["section"],
+                "monthly": sec["monthly"], "total": sec["total"],
+                "accounts": sec["accounts"],
+            })
+            resultado_bruto = _sub(resultado_bruto, sec["monthly"])
+    dre_rows.append({
+        "type": "subtotal", "label": "Resultado Bruto",
+        "monthly": resultado_bruto, "total": sum(resultado_bruto),
+    })
+
+    # Opex → EBITDA Operacional
+    ebitda_monthly = list(resultado_bruto)
+    for sec in sections:
+        if sec["section"] in _OPEX_SECTIONS:
+            dre_rows.append({
+                "type": "section", "sign": "(-)",
+                "label": sec["section"],
+                "monthly": sec["monthly"], "total": sec["total"],
+                "accounts": sec["accounts"],
+            })
+            ebitda_monthly = _sub(ebitda_monthly, sec["monthly"])
+    dre_rows.append({
+        "type": "subtotal", "label": "EBITDA Operacional",
+        "monthly": ebitda_monthly, "total": sum(ebitda_monthly),
+    })
+
+    # Demais seções → Resultado Líquido
+    resultado_liq = list(ebitda_monthly)
+    for sec in sections:
+        if sec["section"] not in _COST_SECTIONS and sec["section"] not in _OPEX_SECTIONS:
+            dre_rows.append({
+                "type": "section", "sign": "(-)",
+                "label": sec["section"],
+                "monthly": sec["monthly"], "total": sec["total"],
+                "accounts": sec["accounts"],
+            })
+            resultado_liq = _sub(resultado_liq, sec["monthly"])
+    dre_rows.append({
+        "type": "total", "label": "Resultado Líquido",
+        "monthly": resultado_liq, "total": sum(resultado_liq),
+    })
+
+    total_expenses = sum(s["total"] for s in sections)
+    ebitda = revenue_total - total_expenses
 
     return {
         "months": sorted_months,
         "month_labels": month_labels,
         "categories": categories,
-        "revenue_series": revenue_series,
+        "sections": sections,
+        "dre_rows": dre_rows,
+        "revenue_series": [
+            {"month": mk, "label": ml, "mrr": rv}
+            for mk, ml, rv in zip(sorted_months, month_labels, revenue_monthly)
+        ],
         "summary": {
             "total_expenses": total_expenses,
-            "total_revenue": total_revenue,
+            "total_revenue": revenue_total,
             "ebitda": ebitda,
         },
     }

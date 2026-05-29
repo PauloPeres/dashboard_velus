@@ -502,37 +502,76 @@ def pessoas(request: HttpRequest) -> HttpResponse:
 @login_required
 @never_cache
 def dre_detalhe(request: HttpRequest) -> HttpResponse:
+    import calendar
+    import re
+    from datetime import date as _d
+
     org_or_redirect = _require_org(request)
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
 
-    data = compute_dre_by_account(org, months=12)
+    # --- Período via GET params (?from=YYYY-MM&to=YYYY-MM) ---
+    _ym_re = re.compile(r"^\d{4}-\d{2}$")
+    raw_from = request.GET.get("from", "")
+    raw_to = request.GET.get("to", "")
+    from_ym = raw_from if _ym_re.match(raw_from) else ""
+    to_ym = raw_to if _ym_re.match(raw_to) else ""
+
+    today = _d.today()
+
+    # Defaults para o seletor de data
+    def _default_from() -> str:
+        y, m = today.year, today.month - 11
+        if m <= 0:
+            m += 12
+            y -= 1
+        return f"{y:04d}-{m:02d}"
+
+    selected_from = from_ym or _default_from()
+    selected_to = to_ym or today.strftime("%Y-%m")
+
+    # --- Dados ---
+    data = compute_dre_by_account(
+        org,
+        from_ym=from_ym or None,
+        to_ym=to_ym or None,
+        months=12,
+    )
     anomalies = compute_expense_anomalies(org, months=12)
 
     summary = data.get("summary", {})
-    categories = data.get("categories", [])
+    dre_rows = data.get("dre_rows", [])
+    month_labels = data.get("month_labels", [])
 
     total_exp = summary.get("total_expenses", 0.0)
     total_rev = summary.get("total_revenue", 0.0)
     ebitda = summary.get("ebitda", 0.0)
     margin_pct = (ebitda / total_rev * 100) if total_rev > 0 else 0.0
 
-    categories_enriched = [
-        {
-            **cat,
-            "total_str": _fmt_brl(cat["total"]),
-            "pct": round(cat["total"] / total_exp * 100, 1) if total_exp > 0 else 0.0,
-        }
-        for cat in categories
-    ]
+    # Enriquecer dre_rows com monthly_labeled (para template sem zip)
+    for row in dre_rows:
+        row["monthly_labeled"] = list(zip(month_labels, row["monthly"]))
+        if "accounts" in row:
+            for acc in row["accounts"]:
+                acc["monthly_labeled"] = list(zip(month_labels, acc["monthly"]))
+
+    # Opções do seletor — últimos 3 anos, mais recente primeiro
+    month_options: list[dict[str, str]] = []
+    y, m = today.year, today.month
+    for _ in range(37):
+        month_options.append({"value": f"{y:04d}-{m:02d}", "label": _d(y, m, 1).strftime("%b/%Y")})
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+    month_options.reverse()  # cronológico no <select>
 
     return render(
         request,
         "dashboards/dre_detalhe.html",
         {
             "data": data,
-            "categories": categories_enriched,
+            "dre_rows": dre_rows,
             "summary": summary,
             "total_expenses_str": _fmt_brl(total_exp),
             "total_revenue_str": _fmt_brl(total_rev),
@@ -540,6 +579,10 @@ def dre_detalhe(request: HttpRequest) -> HttpResponse:
             "ebitda_positive": ebitda >= 0,
             "margin_pct_str": f"{margin_pct:.1f}%",
             "anomalies": anomalies[:15],
+            "month_labels": month_labels,
+            "month_options": month_options,
+            "selected_from": selected_from,
+            "selected_to": selected_to,
             "dre_account_chart_json": charts.dre_by_account_stacked_bar(data),
         },
     )
