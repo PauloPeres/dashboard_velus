@@ -659,6 +659,111 @@ def churn_logo_line(series: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+def people_expenses_stacked_bar(data: dict[str, Any]) -> str:
+    """Barras empilhadas — despesas por pessoa por mês (prestadores PJ + coletivo)."""
+    labels = data.get("month_labels", [])
+    people = data.get("people", [])
+    mao = data.get("mao_de_obra", {})
+
+    COLORS = [
+        "#2563eb", "#dc2626", "#d97706", "#16a34a", "#7c3aed",
+        "#db2777", "#0891b2", "#65a30d", "#ea580c", "#0f766e",
+    ]
+
+    traces: list[Any] = []
+    for i, person in enumerate(people):
+        name_display = person["name"].title()
+        traces.append(
+            go.Bar(
+                name=name_display,
+                x=labels,
+                y=person["monthly"],
+                marker_color=COLORS[i % len(COLORS)],
+                hovertemplate=f"<b>%{{x}}</b><br>{name_display}<br>R$ %{{y:,.0f}}<extra></extra>",
+            )
+        )
+
+    mao_amounts = mao.get("monthly", [])
+    if mao_amounts and any(v > 0 for v in mao_amounts):
+        traces.append(
+            go.Bar(
+                name="Mão de Obra (coletivo)",
+                x=labels,
+                y=mao_amounts,
+                marker_color="#9ca3af",
+                hovertemplate="<b>%{x}</b><br>Mão de Obra<br>R$ %{y:,.0f}<extra></extra>",
+            )
+        )
+
+    fig = go.Figure(
+        data=traces,
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "legend": {"orientation": "h", "y": -0.3, "font": {"size": 10}},
+            "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f"},
+            "margin": {"l": 60, "r": 20, "t": 30, "b": 110},
+        },
+    )
+    return _to_json(fig)
+
+
+def dre_by_account_stacked_bar(data: dict[str, Any]) -> str:
+    """Barras empilhadas — despesas por conta do planejamento IXC + linha de receita."""
+    labels = data.get("month_labels", [])
+    categories = data.get("categories", [])
+    revenue_series = data.get("revenue_series", [])
+    months_keys = data.get("months", [])  # "YYYY-MM" — para alinhar receita
+
+    # Build month → mrr lookup
+    rev_by_month: dict[str, float] = {r["month"]: float(r["mrr"]) for r in revenue_series}
+    rev_values = [rev_by_month.get(mk, 0.0) for mk in months_keys]
+
+    COLORS = [
+        "#ef4444", "#f97316", "#d97706", "#16a34a", "#0891b2",
+        "#2563eb", "#7c3aed", "#db2777", "#64748b", "#0f766e",
+    ]
+
+    traces: list[Any] = []
+    for i, cat in enumerate(categories):
+        traces.append(
+            go.Bar(
+                name=cat["label"],
+                x=labels,
+                y=cat["monthly"],
+                marker_color=COLORS[i % len(COLORS)],
+                hovertemplate=f"<b>%{{x}}</b><br>{cat['label']}<br>R$ %{{y:,.0f}}<extra></extra>",
+            )
+        )
+
+    if rev_values and any(v > 0 for v in rev_values):
+        traces.append(
+            go.Scatter(
+                name="Receita (MRR)",
+                x=labels,
+                y=rev_values,
+                mode="lines+markers",
+                line={"color": "#10b981", "width": 2, "dash": "dot"},
+                marker={"size": 7},
+                hovertemplate="<b>%{x}</b><br>Receita: R$ %{y:,.0f}<extra></extra>",
+            )
+        )
+
+    fig = go.Figure(
+        data=traces,
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "legend": {"orientation": "h", "y": -0.35, "font": {"size": 10}},
+            "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f"},
+            "margin": {"l": 60, "r": 20, "t": 30, "b": 120},
+        },
+    )
+    return _to_json(fig)
+
+
 def forecast_area(
     historical: list[dict[str, Any]], forecast: list[dict[str, Any]]
 ) -> str:

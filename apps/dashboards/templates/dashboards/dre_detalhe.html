@@ -1,0 +1,151 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}DRE por Conta IXC · Velus{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-2">DRE por Conta IXC</h1>
+<p class="text-sm text-gray-500 mb-6">
+    Despesas pagas agrupadas pelo plano de contas do IXC (campo <code>id_contas</code>) — últimos 12 meses.
+</p>
+
+<!-- KPI Cards -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+    {% include "dashboards/_kpi_card.html" with label="Total Despesas (12 m)" value=total_expenses_str %}
+    {% include "dashboards/_kpi_card.html" with label="Receita Bruta (12 m)" value=total_revenue_str %}
+    {% include "dashboards/_kpi_card.html" with label="EBITDA Acumulado" value=ebitda_str %}
+    {% include "dashboards/_kpi_card.html" with label="Margem EBITDA" value=margin_pct_str %}
+</div>
+
+<!-- Gráfico empilhado por conta -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
+    <h2 class="text-lg font-semibold mb-4">Despesas por Categoria — Mês a Mês</h2>
+    <p class="text-xs text-gray-400 mb-3">Linha pontilhada verde = Receita (MRR). Barras empilhadas = despesas por conta do planejamento IXC.</p>
+    <div id="dre-account-chart" class="animate-pulse bg-gray-50 rounded-lg" style="height:450px;"></div>
+</div>
+
+<!-- Tabela de categorias -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
+    <h2 class="text-lg font-semibold mb-4">Distribuição por Conta</h2>
+    {% if categories %}
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-gray-200 text-left text-gray-500 text-xs uppercase tracking-wide">
+                    <th class="pb-2 pr-4">Conta (Planejamento IXC)</th>
+                    <th class="pb-2 pr-4">Tipo</th>
+                    <th class="pb-2 pr-4 text-right">% do Total</th>
+                    <th class="pb-2 text-right">Total 12 m</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for cat in categories %}
+                <tr class="border-b border-gray-100 hover:bg-gray-50">
+                    <td class="py-2 pr-4 font-medium">{{ cat.label }}</td>
+                    <td class="py-2 pr-4">
+                        {% if cat.tipo == "D" %}
+                            <span class="inline-block px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded">Despesa</span>
+                        {% elif cat.tipo == "P" %}
+                            <span class="inline-block px-2 py-0.5 text-xs bg-orange-100 text-orange-700 rounded">Passivo</span>
+                        {% elif cat.tipo == "R" %}
+                            <span class="inline-block px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded">Receita</span>
+                        {% else %}
+                            <span class="inline-block px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">{{ cat.tipo }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2 pr-4 text-right">
+                        <div class="flex items-center justify-end gap-2">
+                            <div class="w-20 bg-gray-100 rounded-full h-1.5">
+                                <div class="bg-blue-500 h-1.5 rounded-full" style="width: {{ cat.pct|floatformat:0 }}%"></div>
+                            </div>
+                            <span class="text-gray-600 w-10 text-right">{{ cat.pct|floatformat:1 }}%</span>
+                        </div>
+                    </td>
+                    <td class="py-2 text-right font-semibold">{{ cat.total_str }}</td>
+                </tr>
+                {% endfor %}
+                <!-- Total row -->
+                <tr class="border-t-2 border-gray-300 bg-gray-50">
+                    <td class="py-2 pr-4 font-bold" colspan="3">Total Despesas</td>
+                    <td class="py-2 text-right font-bold text-red-700">{{ total_expenses_str }}</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="text-sm text-gray-400 py-8 text-center">Sem dados de despesas com id_contas no período.</p>
+    {% endif %}
+</div>
+
+<!-- Resumo DRE -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
+    <h2 class="text-lg font-semibold mb-4">Resumo do Período (12 meses)</h2>
+    <dl class="space-y-3 max-w-sm">
+        <div class="flex justify-between py-2 border-b border-gray-100">
+            <dt class="text-gray-600">Receita Bruta (MRR acumulado)</dt>
+            <dd class="font-semibold text-green-700">{{ total_revenue_str }}</dd>
+        </div>
+        <div class="flex justify-between py-2 border-b border-gray-100">
+            <dt class="text-gray-600">(-) Total Despesas</dt>
+            <dd class="font-semibold text-red-600">{{ total_expenses_str }}</dd>
+        </div>
+        <div class="flex justify-between py-2 border-t-2 border-gray-300">
+            <dt class="font-bold">EBITDA</dt>
+            <dd class="font-bold {% if ebitda_positive %}text-blue-700{% else %}text-red-700{% endif %}">
+                {{ ebitda_str }}
+            </dd>
+        </div>
+        <div class="flex justify-between py-1">
+            <dt class="text-gray-500 text-sm">Margem EBITDA</dt>
+            <dd class="text-sm font-medium {% if ebitda_positive %}text-blue-600{% else %}text-red-600{% endif %}">
+                {{ margin_pct_str }}
+            </dd>
+        </div>
+    </dl>
+</div>
+
+<!-- Anomalias de despesas -->
+{% if anomalies %}
+<div class="bg-white rounded-lg shadow-sm border border-orange-200 p-5 mb-6">
+    <h2 class="text-lg font-semibold mb-1 text-orange-700">⚠ Anomalias de Gasto por Fornecedor</h2>
+    <p class="text-xs text-gray-500 mb-4">
+        Meses em que o gasto com um fornecedor superou a média + 1,5σ (e &gt;20% acima da média histórica).
+        Ordenado por excesso absoluto.
+    </p>
+    <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+            <thead>
+                <tr class="border-b border-gray-200 text-left text-gray-500 uppercase tracking-wide">
+                    <th class="pb-2 pr-3">Fornecedor</th>
+                    <th class="pb-2 pr-3">Mês</th>
+                    <th class="pb-2 pr-3 text-right">Valor</th>
+                    <th class="pb-2 pr-3 text-right">Média Hist.</th>
+                    <th class="pb-2 pr-3 text-right">Threshold</th>
+                    <th class="pb-2 text-right">% Acima</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for a in anomalies %}
+                <tr class="border-b border-gray-100 hover:bg-orange-50">
+                    <td class="py-1.5 pr-3 font-medium max-w-xs truncate">{{ a.supplier }}</td>
+                    <td class="py-1.5 pr-3 text-gray-600">{{ a.month_label }}</td>
+                    <td class="py-1.5 pr-3 text-right text-red-700 font-medium">R$ {{ a.amount|floatformat:0|intcomma }}</td>
+                    <td class="py-1.5 pr-3 text-right text-gray-500">R$ {{ a.mean|floatformat:0|intcomma }}</td>
+                    <td class="py-1.5 pr-3 text-right text-gray-400">R$ {{ a.threshold|floatformat:0|intcomma }}</td>
+                    <td class="py-1.5 text-right font-semibold text-orange-700">+{{ a.excess_pct|floatformat:0 }}%</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{{ dre_account_chart_json|json_script:"dre-account-data" }}
+<script>
+  renderChart("dre-account-chart", "dre-account-data");
+</script>
+{% endblock %}

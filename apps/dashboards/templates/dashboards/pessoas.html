@@ -1,0 +1,122 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Pessoas &amp; Prestadores · Velus{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-2">Pessoas &amp; Prestadores</h1>
+<p class="text-sm text-gray-500 mb-6">
+    Despesas pagas com prestadores PJ, sócios e mão de obra terceirizada — últimos 12 meses.
+</p>
+
+<!-- KPI Cards -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+    {% include "dashboards/_kpi_card.html" with label="Total Gasto (12 m)" value=grand_total_str %}
+    {% include "dashboards/_kpi_card.html" with label="Pessoas mapeadas" value=num_people %}
+    {% include "dashboards/_kpi_card.html" with label="Mão de Obra" value=mao_total_str %}
+    {% include "dashboards/_kpi_card.html" with label="Meses analisados" value=month_labels|length %}
+</div>
+
+<!-- Gráfico empilhado -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
+    <h2 class="text-lg font-semibold mb-4">Gasto por Pessoa — Mês a Mês</h2>
+    <div id="people-chart" class="animate-pulse bg-gray-50 rounded-lg" style="height:420px;"></div>
+</div>
+
+<!-- Tabela de pessoas -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
+    <h2 class="text-lg font-semibold mb-4">Detalhamento por Pessoa</h2>
+    {% if people %}
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-gray-200 text-left text-gray-500 text-xs uppercase tracking-wide">
+                    <th class="pb-2 pr-4">Nome</th>
+                    <th class="pb-2 pr-4">Tipo</th>
+                    <th class="pb-2 pr-4 text-right">Média/mês</th>
+                    <th class="pb-2 text-right">Total 12 m</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for person in people %}
+                <tr class="border-b border-gray-100 hover:bg-gray-50">
+                    <td class="py-2 pr-4 font-medium">{{ person.name|title }}</td>
+                    <td class="py-2 pr-4">
+                        {% if person.tipo == "PJ" %}
+                            <span class="inline-block px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-800 rounded">PJ</span>
+                        {% elif person.tipo == "SÓCIO" %}
+                            <span class="inline-block px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-800 rounded">Sócio</span>
+                        {% elif person.tipo == "CLT" %}
+                            <span class="inline-block px-2 py-0.5 text-xs font-medium bg-green-100 text-green-800 rounded">CLT</span>
+                        {% else %}
+                            <span class="inline-block px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 rounded">{{ person.tipo }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2 pr-4 text-right text-gray-600">{{ person.avg_str }}</td>
+                    <td class="py-2 text-right font-semibold">{{ person.total_str }}</td>
+                </tr>
+                {% endfor %}
+                <!-- MÃO DE OBRA row -->
+                {% if mao_de_obra.total > 0 %}
+                <tr class="border-b border-gray-100 hover:bg-gray-50 bg-gray-50">
+                    <td class="py-2 pr-4 font-medium text-gray-600">{{ mao_de_obra.name|title }}</td>
+                    <td class="py-2 pr-4">
+                        <span class="inline-block px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 rounded">Coletivo</span>
+                    </td>
+                    <td class="py-2 pr-4 text-right text-gray-500">—</td>
+                    <td class="py-2 text-right font-semibold text-gray-700">{{ mao_total_str }}</td>
+                </tr>
+                {% endif %}
+                <!-- Total row -->
+                <tr class="border-t-2 border-gray-300 bg-gray-50">
+                    <td class="py-2 pr-4 font-bold" colspan="3">Total</td>
+                    <td class="py-2 text-right font-bold text-blue-700">{{ grand_total_str }}</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="text-sm text-gray-400 py-8 text-center">Sem dados de pessoas no período.</p>
+    {% endif %}
+</div>
+
+<!-- Anomalias de pessoas (se houver) -->
+{% if anomalies %}
+<div class="bg-white rounded-lg shadow-sm border border-orange-200 p-5 mb-6">
+    <h2 class="text-lg font-semibold mb-1 text-orange-700">⚠ Meses Anômalos</h2>
+    <p class="text-xs text-gray-500 mb-4">Meses em que o gasto com a pessoa superou a média + 1,5σ (e &gt;20% acima da média).</p>
+    <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+            <thead>
+                <tr class="border-b border-gray-200 text-left text-gray-500 uppercase tracking-wide">
+                    <th class="pb-2 pr-3">Fornecedor</th>
+                    <th class="pb-2 pr-3">Mês</th>
+                    <th class="pb-2 pr-3 text-right">Valor</th>
+                    <th class="pb-2 pr-3 text-right">Média</th>
+                    <th class="pb-2 text-right">% Acima</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for a in anomalies %}
+                <tr class="border-b border-gray-100 hover:bg-orange-50">
+                    <td class="py-1.5 pr-3 font-medium">{{ a.supplier|title }}</td>
+                    <td class="py-1.5 pr-3 text-gray-600">{{ a.month_label }}</td>
+                    <td class="py-1.5 pr-3 text-right text-red-700">R$ {{ a.amount|floatformat:0|intcomma }}</td>
+                    <td class="py-1.5 pr-3 text-right text-gray-500">R$ {{ a.mean|floatformat:0|intcomma }}</td>
+                    <td class="py-1.5 text-right font-semibold text-orange-700">+{{ a.excess_pct|floatformat:0 }}%</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{{ people_chart_json|json_script:"people-chart-data" }}
+<script>
+  renderChart("people-chart", "people-chart-data");
+</script>
+{% endblock %}

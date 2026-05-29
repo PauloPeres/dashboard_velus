@@ -15,6 +15,7 @@ from decimal import Decimal
 from typing import Any
 
 from django.db.models import Count, DecimalField, Max, OuterRef, Q, Subquery, Sum
+from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
 
@@ -1354,6 +1355,397 @@ def compute_churn_summary(organization: Organization) -> dict[str, Any]:
         "avg_ticket_active": avg_ticket_active,
         "ticket_alert": avg_ticket_canceled > avg_ticket_active,  # True = perdendo planos mais caros
     }
+
+
+# ---------------------------------------------------------------------------
+# Planejamento (plano de contas IXC) — mapa estático atualizado via API
+# ---------------------------------------------------------------------------
+_PLANEJAMENTO: dict[str, dict[str, str]] = {
+    "1":  {"cod": "1.1.01.001",       "nome": "Caixa Geral",                         "tipo": "A"},
+    "2":  {"cod": "1.1.02.001",       "nome": "Bancos Geral",                         "tipo": "A"},
+    "3":  {"cod": "2.1.02.001",       "nome": "Fornecedores",                         "tipo": "P"},
+    "4":  {"cod": "1.1.03.001",       "nome": "Clientes",                             "tipo": "A"},
+    "5":  {"cod": "3.1.01.001",       "nome": "Receitas Vendas Internet",             "tipo": "R"},
+    "6":  {"cod": "3.2.01.001",       "nome": "Receitas Financeiras Descontos",       "tipo": "R"},
+    "7":  {"cod": "1.1.04.001",       "nome": "Estoque Geral",                        "tipo": "A"},
+    "8":  {"cod": "5.2.02.001",       "nome": "Salários e ordenados",                 "tipo": "D"},
+    "9":  {"cod": "5.2.01.002",       "nome": "Despesas Operacionais",                "tipo": "D"},
+    "10": {"cod": "5.3.01.001",       "nome": "Despesas Financeiras",                 "tipo": "D"},
+    "11": {"cod": "1.2.02.004",       "nome": "Veículos",                             "tipo": "A"},
+    "12": {"cod": "5.1.03.0001",      "nome": "Empréstimos e financiamentos",         "tipo": "D"},
+    "13": {"cod": "2.3.01.001",       "nome": "Dividendos",                           "tipo": "P"},
+    "14": {"cod": "5.3.02.001",       "nome": "Outras Despesas Não Operacionais",     "tipo": "D"},
+    "15": {"cod": "1.2.01.002",       "nome": "Aplicações",                           "tipo": "A"},
+    "16": {"cod": "1.1.05.001",       "nome": "Adiantamento a fornecedores",          "tipo": "A"},
+    "17": {"cod": "2.1.02.003",       "nome": "Adiantamento de clientes",             "tipo": "P"},
+    "18": {"cod": "1.1.03.002",       "nome": "Títulos em cartório",                  "tipo": "A"},
+    "56": {"cod": "4",                "nome": "CUSTO",                                "tipo": "C"},
+    "57": {"cod": "4.1",              "nome": "Custos de Vendas",                     "tipo": "C"},
+    "58": {"cod": "4.1.01",           "nome": "Custos dos Produtos Vendidos",         "tipo": "C"},
+    "59": {"cod": "4.1.02",           "nome": "Custos dos Serviços Vendidos",         "tipo": "C"},
+    "60": {"cod": "5.2",              "nome": "Despesas Operacionais (grupo)",        "tipo": "D"},
+    "61": {"cod": "5",                "nome": "DESPESAS",                             "tipo": "D"},
+    "62": {"cod": "5.2.02.002.0001",  "nome": "Aluguéis",                            "tipo": "D"},
+    "63": {"cod": "5.2.02",           "nome": "Folha de Pagamento",                   "tipo": "D"},
+    "64": {"cod": "4.2.01.003",       "nome": "Custo com Impostos",                   "tipo": "C"},
+    "65": {"cod": "5.3",              "nome": "Despesas Não Operacionais",             "tipo": "D"},
+    "66": {"cod": "5.3.01",           "nome": "Despesas Financeiras (grupo)",         "tipo": "D"},
+    "67": {"cod": "5.3.02",           "nome": "Outras Despesas Não Op (grupo)",       "tipo": "D"},
+    "68": {"cod": "3.2.01.002",       "nome": "Receitas Financeiras Juros",           "tipo": "R"},
+    "69": {"cod": "3.2.01.003",       "nome": "Receitas Financeiras Outros",          "tipo": "R"},
+    "70": {"cod": "5.2.01.004",       "nome": "Uso e Consumo",                        "tipo": "D"},
+    "71": {"cod": "5.2.01.005",       "nome": "Cancelamentos",                        "tipo": "D"},
+    "72": {"cod": "4.2.02.002",       "nome": "Custos Sobre Operação",                "tipo": "C"},
+    "73": {"cod": "5.2.01.006",       "nome": "Fretes",                               "tipo": "D"},
+    "74": {"cod": "5.2.01.007",       "nome": "Serviços Terceiros",                   "tipo": "D"},
+    "75": {"cod": "4.1.01.001",       "nome": "Custos das Mercadorias Vendidas",      "tipo": "C"},
+    "76": {"cod": "5.2.01.008",       "nome": "Despesas com Veículos",                "tipo": "D"},
+    "77": {"cod": "5.1",              "nome": "Despesas Comerciais",                  "tipo": "D"},
+    "78": {"cod": "5.1.03.001",       "nome": "Despesas Comissões",                   "tipo": "D"},
+    "79": {"cod": "5.1.03.002",       "nome": "Publicidade",                          "tipo": "D"},
+    "80": {"cod": "4.1.02.001",       "nome": "Custo Links e Transportes",            "tipo": "C"},
+    "82": {"cod": "1.2.02.005",       "nome": "Comodatos",                            "tipo": "A"},
+    "86": {"cod": "5.2.02.003",       "nome": "Férias e Décimos",                     "tipo": "D"},
+    "87": {"cod": "5.2.02.004",       "nome": "Admissões e Rescisões",                "tipo": "D"},
+    "88": {"cod": "5.4",              "nome": "Funcionários (despesas geral)",        "tipo": "D"},
+    "92": {"cod": "5.3.02.002",       "nome": "Honorários Advocatícios",              "tipo": "D"},
+    "93": {"cod": "4.2.",             "nome": "Pro-Labore",                           "tipo": "C"},
+    "95": {"cod": "1.2.01.03",        "nome": "Comissão (investimento)",              "tipo": "A"},
+    "0":  {"cod": "",                 "nome": "(Sem categoria)",                      "tipo": "?"},
+}
+
+# Fornecedores que são pessoas físicas ou PJ individuais (não empresas grandes)
+# Mapeados a partir do endpoint `fornecedor` da API IXC.
+# Formato: supplier_external_id → (nome_display, tipo)
+# tipo: "PJ" = prestador PJ, "PF" = pessoa física, "SOCIO" = sócio
+_PERSON_SUPPLIERS: dict[str, tuple[str, str]] = {
+    "183": ("LUANN CARDOSO MARINS",           "PJ"),
+    "181": ("PAULO SÓCIO",                    "SÓCIO"),
+    "324": ("VINICIUS DALAS CORDEIRO",        "PJ"),
+    "360": ("ANA CAROLINA TRINDADE",          "PJ"),
+    "98":  ("GISLAINE MOREIRA INACIO",        "PJ"),
+    "326": ("MARCO AURÉLIO SCHIAVON",         "PJ"),
+    "383": ("KAINAN MOREIRA SILVA",           "PJ"),
+    "436": ("GUILHERME FERNANDES DE LIMA",    "PJ"),
+    "472": ("GUILHERME AUGUSTO PATRIAN",      "PJ"),
+    "443": ("GIOVANNA CORDEIRO",              "PJ"),
+    "386": ("GIOVANA IMPERATRICE NANNI",      "PJ"),
+    "526": ("GILBERTO CRUZEIRO",              "PJ"),
+    "177": ("JENIFER VITORIA DE SOUZA SANTOS", "PJ"),
+    "207": ("MARIA CAROLINE LOPES",           "PJ"),
+    "208": ("MARCOS ANDRE PROENÇA DE MORAIS", "PJ"),
+    "215": ("GABRIELLA DE MOURA HARDT",       "PJ"),
+    "217": ("BRUNA PRISCILA ANDRADE DA SILVA", "PJ"),
+    "224": ("MARIA CLAUDIA FAUSTINO CALDEIRA", "PJ"),
+    "325": ("MAYARA ARAÚJO ROBERTO",          "PJ"),
+    "480": ("ERICK EDUARDO FERREIRA",         "PJ"),
+    "482": ("RODRIGO RIBEIRO DOBBINS",        "PJ"),
+    "484": ("ALEXANDRE MACHADO NEGRAO",       "PJ"),
+    "485": ("GABRIELA VASARI NUNES",          "PJ"),
+    # Categorias coletivas
+    "205": ("TERCEIROS",                      "COLETIVO"),
+    "85":  ("JOSE WILLIAN",                   "PJ"),
+    "5":   ("ENGENHEIRO",                     "PJ"),
+    "38":  ("ELETRICISTA",                    "PJ"),
+    "39":  ("ELETRICISTA",                    "PJ"),
+}
+
+# IDs de fornecedores de MÃO DE OBRA (buscar por nome pois pode ser supplier_name)
+_MAO_DE_OBRA_NAME = "MÃO DE OBRA TERCERIZADA"
+
+
+def _get_planeja_label(id_contas: str | None) -> str:
+    """Retorna label do planejamento: 'cod — nome' ou fallback."""
+    if id_contas is None or str(id_contas) == "0":
+        return "(Sem categoria)"
+    entry = _PLANEJAMENTO.get(str(id_contas))
+    if entry:
+        return f"{entry['cod']} {entry['nome']}".strip()
+    return f"Conta #{id_contas}"
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_dre_by_account(
+    organization: Organization, months: int = 12
+) -> dict[str, Any]:
+    """DRE usando categorias do plano de contas IXC (planejamento).
+
+    Agrupa despesas PAGAS por mês e por `id_contas` (do campo raw_extras).
+    Retorna:
+      - months: lista de rótulos de mês (ex: ['Jan/25', ...])
+      - categories: lista de {id, label, tipo, monthly: [float], total: float}
+      - revenue_series: lista de {month, label, mrr} (do compute_mrr_series)
+      - summary: {total_expenses, total_revenue, ebitda} para o período
+    """
+    from apps.financial.infrastructure.models import Expense as ExpenseModel
+
+    today = timezone.now().date()
+    cutoff = _first_of_month_n_ago(today, months)
+
+    # Query expenses with id_contas extracted from raw_extras
+    qs = (
+        ExpenseModel.objects.filter(
+            organization=organization,
+            status="PAID",
+            paid_at__isnull=False,
+            paid_at__gte=cutoff,
+        )
+        .annotate(
+            month=TruncMonth("paid_at"),
+            id_contas_str=KeyTextTransform("id_contas", "raw_extras"),
+        )
+        .values("month", "id_contas_str")
+        .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
+        .order_by("month", "id_contas_str")
+    )
+
+    # Build month list
+    all_months_set: set[str] = set()
+    # raw data: {id_contas → {month_key → amount}}
+    data: dict[str, dict[str, float]] = {}
+    for row in qs:
+        m = row["month"]
+        mk = m.strftime("%Y-%m")
+        all_months_set.add(mk)
+        ic = str(row["id_contas_str"] or "0")
+        data.setdefault(ic, {})[mk] = float(row["total"])
+
+    sorted_months = sorted(all_months_set)
+    month_labels = []
+    for mk in sorted_months:
+        try:
+            from datetime import date as _d
+            month_labels.append(_d.fromisoformat(mk + "-01").strftime("%b/%y"))
+        except ValueError:
+            month_labels.append(mk)
+
+    # Build categories
+    categories = []
+    for ic, monthly_data in sorted(data.items(), key=lambda kv: -sum(kv[1].values())):
+        amounts = [monthly_data.get(mk, 0.0) for mk in sorted_months]
+        total = sum(amounts)
+        categories.append({
+            "id": ic,
+            "label": _get_planeja_label(ic),
+            "tipo": _PLANEJAMENTO.get(ic, {}).get("tipo", "?"),
+            "monthly": amounts,
+            "total": total,
+        })
+
+    # Revenue series
+    revenue_series = compute_mrr_series(organization, months=months)
+
+    total_expenses = sum(sum(v.values()) for v in data.values())
+    total_revenue = sum(r["mrr"] for r in revenue_series)
+    ebitda = total_revenue - total_expenses
+
+    return {
+        "months": sorted_months,
+        "month_labels": month_labels,
+        "categories": categories,
+        "revenue_series": revenue_series,
+        "summary": {
+            "total_expenses": total_expenses,
+            "total_revenue": total_revenue,
+            "ebitda": ebitda,
+        },
+    }
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_people_expenses(
+    organization: Organization, months: int = 12
+) -> dict[str, Any]:
+    """Despesas com pessoas: prestadores PJ, sócios e coletivos por mês.
+
+    Inclui:
+    - Fornecedores individuais mapeados em _PERSON_SUPPLIERS
+    - MÃO DE OBRA TERCERIZADA (supplier_name match)
+
+    Retorna:
+      - months: lista de rótulos ['2024-01', ...]
+      - month_labels: ['Jan/24', ...]
+      - people: list[{name, tipo, monthly: [float], total: float}]
+      - mao_de_obra: {monthly: [float], total: float}
+      - grand_total_monthly: [float]
+      - grand_total: float
+    """
+    from apps.financial.infrastructure.models import Expense as ExpenseModel
+
+    today = timezone.now().date()
+    cutoff = _first_of_month_n_ago(today, months)
+
+    # Query person suppliers
+    person_ids = list(_PERSON_SUPPLIERS.keys())
+    qs_people = (
+        ExpenseModel.objects.filter(
+            organization=organization,
+            status="PAID",
+            paid_at__isnull=False,
+            paid_at__gte=cutoff,
+            supplier_external_id__in=person_ids,
+        )
+        .annotate(month=TruncMonth("paid_at"))
+        .values("month", "supplier_external_id", "supplier_name")
+        .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
+        .order_by("month")
+    )
+
+    # Query MÃO DE OBRA TERCERIZADA separately (by name)
+    qs_mao = (
+        ExpenseModel.objects.filter(
+            organization=organization,
+            status="PAID",
+            paid_at__isnull=False,
+            paid_at__gte=cutoff,
+            supplier_name=_MAO_DE_OBRA_NAME,
+        )
+        .annotate(month=TruncMonth("paid_at"))
+        .values("month")
+        .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
+        .order_by("month")
+    )
+
+    # Collect all months
+    all_months_set: set[str] = set()
+    # person_data: {supplier_external_id → {month_key → amount}}
+    person_data: dict[str, dict[str, float]] = {}
+    for row in qs_people:
+        mk = row["month"].strftime("%Y-%m")
+        all_months_set.add(mk)
+        sid = row["supplier_external_id"]
+        person_data.setdefault(sid, {})[mk] = person_data.get(sid, {}).get(mk, 0.0) + float(row["total"])
+
+    mao_data: dict[str, float] = {}
+    for row in qs_mao:
+        mk = row["month"].strftime("%Y-%m")
+        all_months_set.add(mk)
+        mao_data[mk] = float(row["total"])
+
+    sorted_months = sorted(all_months_set)
+    month_labels = []
+    for mk in sorted_months:
+        try:
+            from datetime import date as _d
+            month_labels.append(_d.fromisoformat(mk + "-01").strftime("%b/%y"))
+        except ValueError:
+            month_labels.append(mk)
+
+    # Build people list
+    people = []
+    for sid, meta in _PERSON_SUPPLIERS.items():
+        if sid not in person_data:
+            continue
+        name, tipo = meta
+        monthly_map = person_data[sid]
+        amounts = [monthly_map.get(mk, 0.0) for mk in sorted_months]
+        total = sum(amounts)
+        if total > 0:
+            people.append({
+                "id": sid,
+                "name": name,
+                "tipo": tipo,
+                "monthly": amounts,
+                "total": total,
+            })
+    people.sort(key=lambda p: -p["total"])
+
+    # MÃO DE OBRA
+    mao_amounts = [mao_data.get(mk, 0.0) for mk in sorted_months]
+    mao_total = sum(mao_amounts)
+
+    # Grand total per month
+    grand_monthly = [0.0] * len(sorted_months)
+    for p in people:
+        for i, amt in enumerate(p["monthly"]):
+            grand_monthly[i] += amt
+    for i, amt in enumerate(mao_amounts):
+        grand_monthly[i] += amt
+
+    return {
+        "months": sorted_months,
+        "month_labels": month_labels,
+        "people": people,
+        "mao_de_obra": {
+            "name": _MAO_DE_OBRA_NAME,
+            "tipo": "COLETIVO",
+            "monthly": mao_amounts,
+            "total": mao_total,
+        },
+        "grand_total_monthly": grand_monthly,
+        "grand_total": sum(grand_monthly),
+    }
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_expense_anomalies(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Detecta meses anômalos por fornecedor (> média + 1.5σ).
+
+    Para cada fornecedor com >= 3 meses de histórico, calcula:
+    - Média mensal de despesas pagas
+    - Desvio padrão
+    - Meses onde valor > média + 1.5 × σ
+
+    Retorna lista de anomalias ordenada por excesso (valor - threshold).
+    """
+    import math
+    from apps.financial.infrastructure.models import Expense as ExpenseModel
+
+    today = timezone.now().date()
+    cutoff = _first_of_month_n_ago(today, months)
+
+    qs = (
+        ExpenseModel.objects.filter(
+            organization=organization,
+            status="PAID",
+            paid_at__isnull=False,
+            paid_at__gte=cutoff,
+        )
+        .annotate(month=TruncMonth("paid_at"))
+        .values("month", "supplier_name")
+        .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
+        .order_by("supplier_name", "month")
+    )
+
+    # Group by supplier → {month → amount}
+    supplier_data: dict[str, dict[str, float]] = {}
+    for row in qs:
+        mk = row["month"].strftime("%Y-%m")
+        sn = row["supplier_name"] or "(sem fornecedor)"
+        supplier_data.setdefault(sn, {})[mk] = float(row["total"])
+
+    anomalies = []
+    for supplier, monthly in supplier_data.items():
+        if len(monthly) < 3:
+            continue
+        values = list(monthly.values())
+        mean = sum(values) / len(values)
+        variance = sum((v - mean) ** 2 for v in values) / len(values)
+        std_dev = math.sqrt(variance)
+        threshold = mean + 1.5 * std_dev
+        for month_key, amount in monthly.items():
+            if amount > threshold and amount > mean * 1.2:  # also require 20% above mean
+                try:
+                    from datetime import date as _d
+                    label = _d.fromisoformat(month_key + "-01").strftime("%b/%y")
+                except ValueError:
+                    label = month_key
+                anomalies.append({
+                    "supplier": supplier,
+                    "month": month_key,
+                    "month_label": label,
+                    "amount": amount,
+                    "mean": mean,
+                    "std_dev": std_dev,
+                    "threshold": threshold,
+                    "excess": amount - threshold,
+                    "excess_pct": (amount / mean - 1) * 100 if mean > 0 else 0,
+                })
+
+    anomalies.sort(key=lambda a: -a["excess"])
+    return anomalies
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")

@@ -17,6 +17,8 @@ urlpatterns = [
     path("financial/cashflow/", views.cashflow, name="cashflow"),
     path("financial/forecast/", views.forecast, name="forecast"),
     path("financial/dre/", views.dre, name="dre"),
+    path("financial/dre-contas/", views.dre_detalhe, name="dre_detalhe"),
     path("financial/burn/", views.burn, name="burn"),
+    path("financial/pessoas/", views.pessoas, name="pessoas"),
     path("churn/", views.churn, name="churn"),
 ]

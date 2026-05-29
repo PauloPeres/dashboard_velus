@@ -30,6 +30,8 @@ from apps.analytics.application.aggregations import (
     compute_contract_status_trend,
     compute_delinquency_trend,
     compute_dre,
+    compute_dre_by_account,
+    compute_expense_anomalies,
     compute_expense_by_category,
     compute_expense_by_supplier,
     compute_expense_series,
@@ -37,6 +39,7 @@ from apps.analytics.application.aggregations import (
     compute_ltv_distribution,
     compute_mrr_churn_series,
     compute_mrr_series,
+    compute_people_expenses,
     compute_pipeline_by_status,
     compute_revenue_forecast,
     compute_top_delinquent_invoices,
@@ -448,6 +451,96 @@ def contracts(request: HttpRequest) -> HttpResponse:
             "arpu_chart_json": charts.arpu_bar_chart(arpu_data),
             "churn_plan_json": charts.churn_by_plan_bar(churn_plan),
             "blocked_dist_json": charts.blocked_duration_histogram(blocked_dist),
+        },
+    )
+
+
+@login_required
+@never_cache
+def pessoas(request: HttpRequest) -> HttpResponse:
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    data = compute_people_expenses(org, months=12)
+    anomalies = compute_expense_anomalies(org, months=12)
+
+    people = data.get("people", [])
+    mao_de_obra = data.get("mao_de_obra", {})
+    grand_total = data.get("grand_total", 0.0)
+
+    # Só mostra anomalias de fornecedores rastreados como pessoas
+    person_names = {p["name"] for p in people}
+    person_names.add(mao_de_obra.get("name", ""))
+    people_anomalies = [a for a in anomalies if a["supplier"] in person_names][:10]
+
+    # Pré-formata totais por pessoa para exibição na tabela
+    people_enriched = [
+        {**p, "total_str": _fmt_brl(p["total"]), "avg_str": _fmt_brl(p["total"] / max(len(p["monthly"]), 1))}
+        for p in people
+    ]
+    mao_total_str = _fmt_brl(mao_de_obra.get("total", 0.0))
+
+    return render(
+        request,
+        "dashboards/pessoas.html",
+        {
+            "data": data,
+            "people": people_enriched,
+            "mao_de_obra": mao_de_obra,
+            "mao_total_str": mao_total_str,
+            "month_labels": data.get("month_labels", []),
+            "grand_total_str": _fmt_brl(grand_total),
+            "num_people": len(people),
+            "anomalies": people_anomalies,
+            "people_chart_json": charts.people_expenses_stacked_bar(data),
+        },
+    )
+
+
+@login_required
+@never_cache
+def dre_detalhe(request: HttpRequest) -> HttpResponse:
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    data = compute_dre_by_account(org, months=12)
+    anomalies = compute_expense_anomalies(org, months=12)
+
+    summary = data.get("summary", {})
+    categories = data.get("categories", [])
+
+    total_exp = summary.get("total_expenses", 0.0)
+    total_rev = summary.get("total_revenue", 0.0)
+    ebitda = summary.get("ebitda", 0.0)
+    margin_pct = (ebitda / total_rev * 100) if total_rev > 0 else 0.0
+
+    categories_enriched = [
+        {
+            **cat,
+            "total_str": _fmt_brl(cat["total"]),
+            "pct": round(cat["total"] / total_exp * 100, 1) if total_exp > 0 else 0.0,
+        }
+        for cat in categories
+    ]
+
+    return render(
+        request,
+        "dashboards/dre_detalhe.html",
+        {
+            "data": data,
+            "categories": categories_enriched,
+            "summary": summary,
+            "total_expenses_str": _fmt_brl(total_exp),
+            "total_revenue_str": _fmt_brl(total_rev),
+            "ebitda_str": _fmt_brl(ebitda),
+            "ebitda_positive": ebitda >= 0,
+            "margin_pct_str": f"{margin_pct:.1f}%",
+            "anomalies": anomalies[:15],
+            "dre_account_chart_json": charts.dre_by_account_stacked_bar(data),
         },
     )
 
