@@ -26,7 +26,7 @@ from apps.financial.infrastructure.models import Expense, Invoice, Payment
 from apps.shared.decorators import allow_cross_tenant
 from apps.tenancy.models import Organization
 
-_ACTIVE_STATUSES = {"ACTIVE", "AWAITING_INSTALL"}
+_ACTIVE_STATUSES = {"ACTIVE", "BLOCKED", "AWAITING_INSTALL"}
 
 
 # =============================================================================

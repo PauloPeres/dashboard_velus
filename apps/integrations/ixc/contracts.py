@@ -88,6 +88,11 @@ class IxcContractSource:
         # mas internet está bloqueada, marca como BLOCKED
         if schema.status == "A" and schema.status_internet in ("CM", "FA"):
             status = "BLOCKED"
+        elif not schema.status:
+            # IXC retorna status=null para contratos cancelados ou abandonados
+            # (sem ativação nem cancelamento formal). Tratamos como CANCELED pois
+            # nunca são/foram assinantes ativos gerando receita.
+            status = "CANCELED"
         else:
             status = status_map.get(schema.status.upper(), "UNKNOWN")
 
