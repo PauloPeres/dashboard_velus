@@ -45,37 +45,59 @@
 <!-- Seção Crescimento -->
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Crescimento</h2>
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-  {% include "dashboards/_kpi_card.html" with label="MRR Atual" value=mrr_now_str delta=mrr_delta_str delta_positive=mrr_delta_positive subtitle=mrr_subtitle %}
-  {% include "dashboards/_kpi_card.html" with label="Contratos Ativos" value=kpis.active_contracts|intcomma subtitle="Snapshot hoje" %}
-  {% include "dashboards/_kpi_card.html" with label="Ticket Médio (ARPU)" value=arpu_str subtitle="MRR ÷ contratos ativos" %}
-  {% include "dashboards/_kpi_card.html" with label="Churn Mensal" value=churn_pct_str subtitle=churn_subtitle variant=churn_variant %}
+  {% include "dashboards/_kpi_card.html" with label="MRR Atual" value=mrr_now_str delta=mrr_delta_str delta_positive=mrr_delta_positive subtitle=mrr_subtitle tooltip="Soma do valor mensal de todos os contratos com status Ativo, Bloqueado ou Ag. Instalação hoje. Fonte: fact_contract_status_daily." %}
+  {% include "dashboards/_kpi_card.html" with label="Contratos Ativos" value=kpis.active_contracts|intcomma subtitle=contracts_subtitle tooltip="Total de contratos com is_active=True: Ativos + Bloqueados por inadimplência + Aguardando instalação. Contratos Cancelados e Desconhecidos são excluídos." %}
+  {% include "dashboards/_kpi_card.html" with label="Ticket Médio (ARPU)" value=arpu_str subtitle="MRR ÷ contratos ativos" tooltip="Average Revenue Per User — quanto cada contrato gera em média por mês. Fórmula: MRR atual ÷ total de contratos ativos." %}
+  {% include "dashboards/_kpi_card.html" with label="Churn Mensal" value=churn_pct_str subtitle=churn_subtitle variant=churn_variant tooltip="Contratos cancelados no mês ÷ contratos ativos no início do mês × 100. Meta para provedores saudáveis: abaixo de 1,5% ao mês." %}
 </div>
 
 <!-- Seção Inadimplência -->
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Inadimplência</h2>
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-  {% include "dashboards/_kpi_card.html" with label="Estoque Inadimplente" value=delinquency_amount_str subtitle=delinquency_subtitle variant="border-red-200" %}
-  {% include "dashboards/_kpi_card.html" with label="Crítico (90+ dias)" value=over_90_value subtitle=over_90_subtitle variant="border-red-300" value_color="text-red-700" %}
-  {% include "dashboards/_kpi_card.html" with label="Inadimplência / MRR" value=delinquency_pct_str subtitle="Estoque acumulado vs receita mensal" %}
+  {% include "dashboards/_kpi_card.html" with label="Estoque Inadimplente" value=delinquency_amount_str subtitle=delinquency_subtitle variant="border-red-200" tooltip="Soma de todas as mensalidades vencidas e não pagas (status PENDING ou OVERDUE com days_overdue > 0). Para um provedor, inclui clientes de qualquer período — mesmo os já desconectados que nunca quitaram. É um estoque acumulado, não o mês corrente." %}
+  {% include "dashboards/_kpi_card.html" with label="Crítico (90+ dias)" value=over_90_value subtitle=over_90_subtitle variant="border-red-300" value_color="text-red-700" tooltip="Faturas com mais de 90 dias sem pagamento. Nessa faixa, a probabilidade de recuperação é muito baixa — geralmente indica evasão do cliente. Ação recomendada: negativação no SPC/Serasa ou encaminhamento para cobrança judicial." %}
+  {% include "dashboards/_kpi_card.html" with label="Inadimplência / MRR" value=delinquency_pct_str subtitle="Estoque acumulado ÷ receita mensal" tooltip="Estoque total de inadimplência ÷ MRR atual. Mostra quantos meses de receita estão represados como dívida. Abaixo de 50%: saudável. Entre 50–100%: atenção. Acima de 100%: crítico — o estoque acumulado supera 1 mês de receita." %}
 </div>
 
-<!-- Gráficos -->
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+<!-- Gráficos — linha 1: MRR + Aging snapshot -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
 
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-4">
       <h2 class="text-sm font-semibold text-gray-700">MRR — últimos 12 meses</h2>
       <a href="{% url 'dashboards:revenue' %}" class="text-xs text-blue-600 hover:underline">Ver receita →</a>
     </div>
-    <div id="mrr-chart" style="height:320px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+    <div id="mrr-chart" style="height:280px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
   </div>
 
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-4">
-      <h2 class="text-sm font-semibold text-gray-700">Aging de inadimplência</h2>
+      <h2 class="text-sm font-semibold text-gray-700">Aging de inadimplência — snapshot atual</h2>
       <a href="{% url 'dashboards:financial' %}" class="text-xs text-blue-600 hover:underline">Ver detalhe →</a>
     </div>
-    <div id="aging-chart" style="height:320px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+    <div id="aging-chart" style="height:280px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+
+</div>
+
+<!-- Gráficos — linha 2: Tendência inadimplência + Status contratos -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Inadimplência — por mês de vencimento</h2>
+      <a href="{% url 'dashboards:financial' %}" class="text-xs text-blue-600 hover:underline">Ver detalhe →</a>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Valor não recuperado por coorte de vencimento — barras altas à direita = novos inadimplentes crescendo</p>
+    <div id="delinquency-trend-chart" style="height:260px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Contratos por status — últimos 12 meses</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Verde = ativos · Laranja = bloqueados por inadimplência · Roxo = ag. instalação</p>
+    <div id="contract-status-chart" style="height:260px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
   </div>
 
 </div>
@@ -84,8 +106,12 @@
 {% block scripts %}
 {{ mrr_chart_json|json_script:"mrr-data" }}
 {{ aging_chart_json|json_script:"aging-data" }}
+{{ delinquency_trend_json|json_script:"delinquency-trend-data" }}
+{{ contract_status_json|json_script:"contract-status-data" }}
 <script>
   renderChart("mrr-chart", "mrr-data");
   renderChart("aging-chart", "aging-data");
+  renderChart("delinquency-trend-chart", "delinquency-trend-data");
+  renderChart("contract-status-chart", "contract-status-data");
 </script>
 {% endblock %}

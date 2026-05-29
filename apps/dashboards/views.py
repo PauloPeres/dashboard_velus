@@ -20,6 +20,8 @@ from apps.analytics.application.aggregations import (
     compute_burn_rate,
     compute_cash_received_series,
     compute_cashflow_series,
+    compute_contract_status_trend,
+    compute_delinquency_trend,
     compute_dre,
     compute_expense_by_category,
     compute_expense_by_supplier,
@@ -66,6 +68,8 @@ def executive(request: HttpRequest) -> HttpResponse:
     kpis = compute_kpis(org)
     mrr_series = compute_mrr_series(org, months=12)
     aging = compute_aging_distribution(org)
+    delinquency_trend = compute_delinquency_trend(org, months=12)
+    contract_status_trend = compute_contract_status_trend(org, months=12)
 
     # ARPU = MRR ÷ contratos ativos
     arpu = (
@@ -95,13 +99,29 @@ def executive(request: HttpRequest) -> HttpResponse:
     last_sync = last_sync_job.finished_at if last_sync_job else None
 
     churn_pct_str = f"{kpis['churn_pct']:.1f}%"
-    churn_subtitle = f"{kpis['canceled_this_month']} cancelados · {kpis['new_this_month']} novos"
+    churn_subtitle = f"{kpis['canceled_this_month']} cancelados · {kpis['new_this_month']} novos neste mês"
     mrr_delta_str = f"{kpis['mrr_delta_pct']:.1f}% vs mês anterior"
-    mrr_subtitle = f"{_fmt_brl(kpis['mrr_prev'])} mês anterior"
-    delinquency_subtitle = f"{kpis['delinquency_count']:,} faturas em atraso".replace(",", ".")
+    mrr_subtitle = f"{_fmt_brl(kpis['mrr_prev'])} no mês anterior"
+
+    # Contratos: ACTIVE + BLOCKED + AWAITING — mostrar breakdown no subtitle
+    blocked = kpis["blocked_contracts"]
+    awaiting = kpis["awaiting_contracts"]
+    active_only = kpis["active_only"]
+    contracts_subtitle_parts = [f"{active_only:,} ativos".replace(",", ".")]
+    if blocked:
+        contracts_subtitle_parts.append(f"{blocked:,} bloqueados".replace(",", "."))
+    if awaiting:
+        contracts_subtitle_parts.append(f"{awaiting:,} ag. instalação".replace(",", "."))
+    contracts_subtitle = " · ".join(contracts_subtitle_parts)
+
+    delinquency_subtitle = (
+        f"{kpis['delinquency_count']:,} faturas vencidas — mensalidades acumuladas não pagas".replace(",", ".")
+    )
     delinquency_pct_str = f"{kpis['delinquency_pct_of_mrr']:.1f}%"
     over_90_value = _fmt_brl(over_90.get("amount", 0))
-    over_90_subtitle = f"{over_90.get('count', 0):,} contratos — requer ação de cobrança".replace(",", ".")
+    over_90_subtitle = (
+        f"{over_90.get('count', 0):,} contratos — provável evasão, requer ação de cobrança".replace(",", ".")
+    )
 
     return render(
         request,
@@ -114,6 +134,7 @@ def executive(request: HttpRequest) -> HttpResponse:
             "mrr_delta_str": mrr_delta_str,
             "mrr_delta_positive": kpis["mrr_delta_pct"] >= 0,
             "arpu_str": _fmt_brl(arpu),
+            "contracts_subtitle": contracts_subtitle,
             "churn_pct_str": churn_pct_str,
             "churn_subtitle": churn_subtitle,
             "churn_variant": "border-orange-300" if kpis["churn_pct"] > 1.5 else "border-gray-200",
@@ -128,6 +149,8 @@ def executive(request: HttpRequest) -> HttpResponse:
             "last_sync": last_sync,
             "mrr_chart_json": charts.mrr_line_chart(mrr_series),
             "aging_chart_json": charts.aging_bar_chart(aging),
+            "delinquency_trend_json": charts.delinquency_trend_chart(delinquency_trend),
+            "contract_status_json": charts.contract_status_stacked_chart(contract_status_trend),
         },
     )
 

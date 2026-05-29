@@ -13,7 +13,7 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
-from django.db.models import Count, DecimalField, Sum
+from django.db.models import Count, DecimalField, Max, Sum
 from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
 
@@ -94,10 +94,16 @@ def compute_kpis(organization: Organization) -> dict[str, Any]:
         float((mrr_now - mrr_prev) / mrr_prev * 100) if mrr_prev > 0 else 0.0
     )
 
-    # Contratos ativos
-    active_count = FactContractStatusDaily.objects.filter(
-        organization=organization, date=today, is_active=True
-    ).count()
+    # Contratos ativos — is_active = status in (ACTIVE, BLOCKED, AWAITING_INSTALL)
+    status_breakdown = (
+        FactContractStatusDaily.objects.filter(
+            organization=organization, date=today, is_active=True
+        )
+        .values("status")
+        .annotate(n=Count("id"))
+    )
+    breakdown = {row["status"]: row["n"] for row in status_breakdown}
+    active_count = sum(breakdown.values())
 
     # Novos no mês (ativos hoje mas não tinham status no início do mês anterior)
     # Aproximação: contratos com activated_at no mês corrente
@@ -139,6 +145,9 @@ def compute_kpis(organization: Organization) -> dict[str, Any]:
         "mrr_prev": float(mrr_prev),
         "mrr_delta_pct": mrr_delta_pct,
         "active_contracts": active_count,
+        "active_only": breakdown.get("ACTIVE", 0),
+        "blocked_contracts": breakdown.get("BLOCKED", 0),
+        "awaiting_contracts": breakdown.get("AWAITING_INSTALL", 0),
         "new_this_month": new_count,
         "canceled_this_month": canceled_count,
         "churn_pct": churn_pct,
@@ -536,6 +545,116 @@ def compute_revenue_forecast(
                 "is_forecast": True,
             }
         )
+    return result
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_delinquency_trend(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Inadimplência por mês de vencimento — quanto de cada coorte mensal ainda está em aberto.
+
+    Para cada mês dos últimos N meses, soma o valor das faturas cujo `due_date` caiu
+    naquele mês e que AINDA estão em aberto (PENDING ou OVERDUE, days_overdue > 0).
+
+    Interpretação para ISP: "das faturas que venceram em Março, quantos reais ainda não
+    foram pagos?" — mostra qual coorte de vencimento tem pior taxa de recuperação.
+    """
+    today = timezone.now().date()
+    cutoff = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
+
+    by_month = (
+        FactInvoice.objects.filter(
+            organization=organization,
+            status__in=("PENDING", "OVERDUE"),
+            days_overdue__gt=0,
+            due_date__gte=cutoff,
+            due_date__lte=today,
+        )
+        .annotate(month=TruncMonth("due_date"))
+        .values("month")
+        .annotate(
+            total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            count=Count("id"),
+        )
+        .order_by("month")
+    )
+
+    return [
+        {
+            "month": row["month"].strftime("%Y-%m"),
+            "label": row["month"].strftime("%b/%y"),
+            "amount": float(row["total"]),
+            "count": row["count"],
+        }
+        for row in by_month
+    ]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_contract_status_trend(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Evolução mensal de contratos por status — snapshot do último dia disponível de cada mês.
+
+    Retorna série de `{month, label, active, blocked, awaiting, total}` para
+    alimentar gráfico de barras empilhadas.
+
+    `is_active = status in (ACTIVE, BLOCKED, AWAITING_INSTALL)` — conforme definição do modelo.
+    Contratos CANCELED e UNKNOWN são excluídos (is_active=False).
+    """
+    today = timezone.now().date()
+    result: list[dict[str, Any]] = []
+
+    for i in range(months - 1, -1, -1):
+        target_first = (today.replace(day=1) - timedelta(days=i * 30)).replace(day=1)
+        if i > 0:
+            next_first = (target_first + timedelta(days=32)).replace(day=1)
+            end_of_month = next_first - timedelta(days=1)
+        else:
+            end_of_month = today
+
+        month_key = target_first.strftime("%Y-%m")
+        label = target_first.strftime("%b/%y")
+
+        # Usa o último dia disponível no mês (robusto caso sync não rodou no último dia)
+        latest_date = FactContractStatusDaily.objects.filter(
+            organization=organization,
+            date__gte=target_first,
+            date__lte=end_of_month,
+            is_active=True,
+        ).aggregate(latest=Max("date"))["latest"]
+
+        if not latest_date:
+            result.append({
+                "month": month_key, "label": label,
+                "active": 0, "blocked": 0, "awaiting": 0, "total": 0,
+            })
+            continue
+
+        by_status = (
+            FactContractStatusDaily.objects.filter(
+                organization=organization,
+                date=latest_date,
+                is_active=True,
+            )
+            .values("status")
+            .annotate(count=Count("id"))
+        )
+        counts = {row["status"]: row["count"] for row in by_status}
+        active = counts.get("ACTIVE", 0)
+        blocked = counts.get("BLOCKED", 0)
+        awaiting = counts.get("AWAITING_INSTALL", 0)
+
+        result.append({
+            "month": month_key,
+            "label": label,
+            "active": active,
+            "blocked": blocked,
+            "awaiting": awaiting,
+            "total": active + blocked + awaiting,
+        })
+
     return result
 
 

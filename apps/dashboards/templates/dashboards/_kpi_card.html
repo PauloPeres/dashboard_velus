@@ -1,6 +1,17 @@
 {% load humanize %}
 <div class="bg-white rounded-lg shadow-sm border {% if variant %}{{ variant }}{% else %}border-gray-200{% endif %} p-5">
-    <p class="text-sm text-gray-500 mb-1">{{ label }}</p>
+    <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
+        {{ label }}
+        {% if tooltip %}
+        <span class="relative inline-block group/tip shrink-0">
+            <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
+            <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
+                {{ tooltip }}
+                <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+            </span>
+        </span>
+        {% endif %}
+    </p>
     <p class="text-2xl font-bold {% if value_color %}{{ value_color }}{% else %}text-gray-900{% endif %}">{{ value }}</p>
     {% if delta %}
         <p class="text-xs mt-2 font-medium {% if delta_positive %}text-green-600{% else %}text-red-600{% endif %}">
@@ -8,6 +19,6 @@
         </p>
     {% endif %}
     {% if subtitle %}
-        <p class="text-xs text-gray-500 mt-1">{{ subtitle }}</p>
+        <p class="text-xs text-gray-500 mt-1 leading-snug">{{ subtitle }}</p>
     {% endif %}
 </div>

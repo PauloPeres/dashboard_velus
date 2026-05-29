@@ -260,6 +260,81 @@ def dre_grouped_bar(mrr_series: list[dict[str, Any]], expense_series: list[dict[
     return _to_json(fig)
 
 
+def delinquency_trend_chart(series: list[dict[str, Any]]) -> str:
+    """Barras — inadimplência não-recuperada por mês de vencimento (últimos 12 meses).
+
+    Cada barra = valor ainda em aberto das faturas que venceram naquele mês.
+    Barras mais altas à direita = crescimento recente de novos inadimplentes.
+    """
+    labels = [s["label"] for s in series]
+    values = [s["amount"] for s in series]
+    counts = [s["count"] for s in series]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=labels, y=values,
+                marker_color="#ef4444",
+                customdata=counts,
+                hovertemplate=(
+                    "<b>Venc. %{x}</b><br>"
+                    "Em aberto: R$ %{y:,.2f}<br>"
+                    "Faturas: %{customdata}<extra></extra>"
+                ),
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f"},
+            "margin": {"l": 60, "r": 20, "t": 10, "b": 50},
+        },
+    )
+    return _to_json(fig)
+
+
+def contract_status_stacked_chart(series: list[dict[str, Any]]) -> str:
+    """Barras empilhadas — ACTIVE + BLOCKED + AWAITING_INSTALL ao longo do tempo.
+
+    Permite visualizar a composição da base de clientes mês a mês:
+    - Verde = Ativos (internet funcionando)
+    - Laranja = Bloqueados por inadimplência (cobrados mas sem internet)
+    - Roxo = Aguardando instalação (pipeline de novos clientes)
+    """
+    labels = [s["label"] for s in series]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                name="Ativos",
+                x=labels,
+                y=[s["active"] for s in series],
+                marker_color="#10b981",
+                hovertemplate="<b>%{x}</b><br>Ativos: %{y:,d}<extra></extra>",
+            ),
+            go.Bar(
+                name="Bloqueados",
+                x=labels,
+                y=[s["blocked"] for s in series],
+                marker_color="#f97316",
+                hovertemplate="<b>%{x}</b><br>Bloqueados: %{y:,d}<extra></extra>",
+            ),
+            go.Bar(
+                name="Ag. Instalação",
+                x=labels,
+                y=[s["awaiting"] for s in series],
+                marker_color="#8b5cf6",
+                hovertemplate="<b>%{x}</b><br>Ag. Instalação: %{y:,d}<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "margin": {"l": 50, "r": 20, "t": 10, "b": 50},
+            "legend": {"orientation": "h", "y": -0.2},
+        },
+    )
+    return _to_json(fig)
+
+
 def forecast_area(
     historical: list[dict[str, Any]], forecast: list[dict[str, Any]]
 ) -> str:
