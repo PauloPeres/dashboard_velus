@@ -247,28 +247,68 @@ def compute_pipeline_by_status(organization: Organization) -> list[dict[str, Any
 def compute_cash_received_series(
     organization: Organization, months: int = 12
 ) -> list[dict[str, Any]]:
-    """Recebimentos por mês — entrada de caixa real."""
+    """Recebimentos por mês — entrada de caixa real.
+
+    Usa FactInvoice com status='PAID' e paid_date preenchida (pagamento_data do IXC).
+    Fallback para FactPayment se houver dados (futura integração de pagamentos direta).
+    """
     today = timezone.now().date()
-    cutoff = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
+    cutoff = _first_of_month_n_ago(today, months)
+
+    # Prefere FactInvoice.paid_date — populado pelo IXC pagamento_data
     by_month = (
-        FactPayment.objects.filter(organization=organization, paid_date__gte=cutoff)
+        FactInvoice.objects.filter(
+            organization=organization,
+            status="PAID",
+            paid_date__gte=cutoff,
+            paid_date__isnull=False,
+        )
         .annotate(month=TruncMonth("paid_date"))
         .values("month")
         .annotate(
-            total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            total=Coalesce(Sum("paid_amount"), Sum("amount"), _ZERO, output_field=DecimalField()),
             count=Count("id"),
         )
         .order_by("month")
     )
-    return [
-        {
-            "month": row["month"].strftime("%Y-%m"),
+    invoice_rows = list(by_month)
+
+    # Adiciona FactPayment se existir (integração futura de pagamentos direta)
+    fp_by_month: dict[str, float] = {}
+    fp_qs = (
+        FactPayment.objects.filter(organization=organization, paid_date__gte=cutoff)
+        .annotate(month=TruncMonth("paid_date"))
+        .values("month")
+        .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
+    )
+    for row in fp_qs:
+        key = row["month"].strftime("%Y-%m")
+        fp_by_month[key] = float(row["total"])
+
+    result = []
+    for row in invoice_rows:
+        key = row["month"].strftime("%Y-%m")
+        invoice_total = float(row["total"])
+        # Merge: se FactPayment tem dados para esse mês, usa o maior (evita dupla contagem)
+        payment_total = fp_by_month.pop(key, 0.0)
+        total = max(invoice_total, payment_total)
+        result.append({
+            "month": key,
             "label": row["month"].strftime("%b/%y"),
-            "amount": float(row["total"]),
+            "amount": total,
             "count": row["count"],
-        }
-        for row in by_month
-    ]
+        })
+
+    # Meses só em FactPayment (sem FactInvoice nesse período)
+    for key, total in sorted(fp_by_month.items()):
+        try:
+            d = date_cls.fromisoformat(key + "-01")
+            label = d.strftime("%b/%y")
+        except ValueError:
+            label = key
+        result.append({"month": key, "label": label, "amount": total, "count": 0})
+
+    return sorted(result, key=lambda x: x["month"])
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
@@ -470,9 +510,10 @@ def compute_dre(
         float(current_ebitda / current_mrr * 100) if current_mrr > 0 else 0.0
     )
 
-    # YTD: sum all months
-    ytd_revenue = sum(m["mrr"] for m in mrr_series)
-    ytd_expenses = sum(e["expenses"] for e in expense_series)
+    # YTD: sum only months in the current year
+    current_year = str(timezone.now().year)
+    ytd_revenue = sum(m["mrr"] for m in mrr_series if m["month"].startswith(current_year))
+    ytd_expenses = sum(e["expenses"] for e in expense_series if e["month"].startswith(current_year))
     ytd_ebitda = ytd_revenue - ytd_expenses
 
     return {
@@ -497,9 +538,11 @@ def compute_dre(
 def compute_revenue_forecast(
     organization: Organization, months_ahead: int = 12
 ) -> list[dict[str, Any]]:
-    """Previsão 12m baseada em tendência de MRR.
+    """Previsão 12m baseada em tendência de MRR ajustada pela taxa de recebimento.
 
     Usa média de crescimento dos últimos 3 meses de MRR para projetar forward.
+    Aplica taxa de recebimento histórica (caixa recebido / MRR) para refletir
+    o impacto real da inadimplência na receita efetiva.
     Também projeta despesas com base na média dos últimos 3 meses.
     """
     from datetime import date as date_cls
@@ -507,6 +550,7 @@ def compute_revenue_forecast(
     # Historical base: last 6 months
     hist_mrr = compute_mrr_series(organization, months=6)
     hist_exp = compute_expense_series(organization, months=6)
+    hist_cash = compute_cash_received_series(organization, months=6)
 
     # Compute avg MRR growth from last 3 months
     mrr_values = [m["mrr"] for m in hist_mrr]
@@ -521,6 +565,15 @@ def compute_revenue_forecast(
     # Cap growth between -20% and +20% per month
     growth = max(-0.20, min(0.20, growth))
 
+    # Compute collection rate: avg(cash_received / mrr) for months with both values
+    mrr_by_month = {m["month"]: m["mrr"] for m in hist_mrr if m["mrr"] > 0}
+    cash_by_month = {c["month"]: c["amount"] for c in hist_cash if c["amount"] > 0}
+    common_months = sorted(set(mrr_by_month) & set(cash_by_month))
+    rates = [cash_by_month[m] / mrr_by_month[m] for m in common_months if mrr_by_month[m] > 0]
+    collection_rate = sum(rates[-3:]) / len(rates[-3:]) if rates else 1.0
+    # Cap: min 50%, max 105% (small overpayments happen)
+    collection_rate = max(0.50, min(1.05, collection_rate))
+
     # Avg monthly expenses (last 3 paid months)
     exp_values = [e["expenses"] for e in hist_exp if e["expenses"] > 0]
     avg_exp = sum(exp_values[-3:]) / len(exp_values[-3:]) if exp_values else 0.0
@@ -530,10 +583,8 @@ def compute_revenue_forecast(
 
     today = timezone.now().date()
     # Start forecast from next month
-    next_month_first = (today.replace(day=1))
-    # Advance to first forecast month
-    nm = next_month_first.month + 1
-    ny = next_month_first.year
+    nm = today.replace(day=1).month + 1
+    ny = today.replace(day=1).year
     if nm > 12:
         nm = 1
         ny += 1
@@ -548,14 +599,18 @@ def compute_revenue_forecast(
         month_key = d.strftime("%Y-%m")
         label = d.strftime("%b/%y")
         forecast_mrr = base_mrr * ((1 + growth) ** (i + 1))
-        forecast_net = forecast_mrr - avg_exp
+        # Receita efetiva = MRR × taxa de recebimento (ajuste de inadimplência)
+        forecast_cash = forecast_mrr * collection_rate
+        forecast_net = forecast_cash - avg_exp
         result.append(
             {
                 "month": month_key,
                 "label": label,
                 "forecast_mrr": round(forecast_mrr, 2),
+                "forecast_cash": round(forecast_cash, 2),   # receita ajustada por inadimplência
                 "forecast_expenses": round(avg_exp, 2),
                 "forecast_net": round(forecast_net, 2),
+                "collection_rate_pct": round(collection_rate * 100, 1),
                 "is_forecast": True,
             }
         )

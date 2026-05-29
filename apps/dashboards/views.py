@@ -236,20 +236,26 @@ def forecast(request: HttpRequest) -> HttpResponse:
     org = org_or_redirect
 
     historical = compute_mrr_series(org, months=12)
+    cash_series = compute_cash_received_series(org, months=12)
     forecast_data = compute_revenue_forecast(org, months_ahead=12)
     dre_data = compute_dre(org, months=12)
 
     cur = dre_data["current_month"]
     ytd = dre_data["ytd"]
 
+    # Taxa de recebimento — extraída do primeiro mês do forecast (é a mesma para todos)
+    collection_rate_pct = forecast_data[0]["collection_rate_pct"] if forecast_data else None
+
     return render(
         request,
         "dashboards/forecast.html",
         {
             "historical": historical,
+            "cash_series": cash_series,
             "forecast_data": forecast_data,
             "dre_summary": cur,
             "ytd": ytd,
+            "collection_rate_pct": collection_rate_pct,
             # Pré-formatados — evita bug de |add: string+Decimal no template
             "cur_receita_str": _fmt_brl(cur["receita_bruta"]),
             "cur_despesas_str": _fmt_brl(cur["despesas"]),

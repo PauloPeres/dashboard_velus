@@ -173,7 +173,12 @@ class IxcInvoiceSchema(BaseModel):
     valor: str = Field(default="0")
     data_vencimento: str = Field(default="")  # YYYY-MM-DD
     data_emissao: datetime | None = Field(default=None)
-    data_pgto: datetime | None = Field(default=None)
+    # IXC usa pagamento_data/pagamento_valor para data e valor efetivos de pagamento.
+    # O campo data_pgto (legado) existe na API mas geralmente vem null — preferir pagamento_data.
+    pagamento_data: str | None = Field(default=None)  # "YYYY-MM-DD" quando pago
+    pagamento_valor: str | None = Field(default=None)  # valor recebido
+    valor_recebido: str | None = Field(default=None)   # alias de pagamento_valor (alguns endpoints)
+    data_pgto: datetime | None = Field(default=None)   # legado — geralmente null no IXC
     valor_pago: str | None = Field(default=None)
     status: str = Field(default="A")
 
@@ -182,12 +187,19 @@ class IxcInvoiceSchema(BaseModel):
     def _coerce_str(cls, v: Any) -> str:
         return _to_str(v)
 
-    @field_validator("valor", "valor_pago", mode="before")
+    @field_validator("valor", "valor_pago", "pagamento_valor", "valor_recebido", mode="before")
     @classmethod
     def _coerce_amount(cls, v: Any) -> str | None:
         if v in (None, "", "0.00"):
             return "0"
         return str(v).replace(",", ".")
+
+    @field_validator("pagamento_data", mode="before")
+    @classmethod
+    def _coerce_pagamento_data(cls, v: Any) -> str | None:
+        if v in (None, "", "0000-00-00"):
+            return None
+        return str(v)[:10]  # keep only YYYY-MM-DD portion
 
     @field_validator("data_emissao", "data_pgto", mode="before")
     @classmethod

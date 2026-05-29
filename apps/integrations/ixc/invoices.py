@@ -67,7 +67,20 @@ class IxcInvoiceSource:
             # Sem data válida, default pra epoch — sync registra mas dashboard ignora
             due_date = date(1970, 1, 1)
 
-        paid_amount = Decimal(schema.valor_pago) if schema.valor_pago else None
+        # IXC usa pagamento_data/pagamento_valor para data e valor efetivos do recebimento.
+        # data_pgto (legado) geralmente vem null.
+        paid_at = None
+        if schema.pagamento_data:
+            try:
+                paid_at = datetime.fromisoformat(schema.pagamento_data)
+            except ValueError:
+                pass
+        elif schema.data_pgto:
+            paid_at = schema.data_pgto
+
+        # Prefere pagamento_valor; fallback para valor_recebido ou valor_pago
+        raw_paid = schema.pagamento_valor or schema.valor_recebido or schema.valor_pago
+        paid_amount = Decimal(raw_paid) if raw_paid and raw_paid != "0" else None
 
         return InvoiceDTO(
             external_id=schema.id,
@@ -76,7 +89,7 @@ class IxcInvoiceSource:
             due_date=due_date,
             status=status,
             issued_at=schema.data_emissao,
-            paid_at=schema.data_pgto,
+            paid_at=paid_at,
             paid_amount=paid_amount,
             raw_extras=schema.get_extras(),
         )
