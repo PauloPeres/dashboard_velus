@@ -1853,6 +1853,99 @@ def compute_people_expenses(
     }
 
 
+def _normalize_mao_label(description: str) -> str:
+    """Extrai rótulo legível da primeira linha da descrição de Mão de Obra."""
+    import re as _re
+    if not description:
+        return "(Sem descrição)"
+    first = description.split("\r\n")[0].split("\n")[0].strip()
+    # colapsa espaços duplos
+    first = _re.sub(r"\s{2,}", " ", first).strip()
+    if not first:
+        return "(Sem descrição)"
+    return first[:80]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_mao_de_obra_detail(
+    organization: Organization, months: int = 12
+) -> dict[str, Any]:
+    """Detalhamento de pagamentos de MÃO DE OBRA TERCERIZADA no período.
+
+    Retorna:
+      - transactions: list[{paid_at_str, amount, amount_str, label}]
+        — todos os registros do período, mais recentes primeiro
+      - by_category: list[{label, count, total, total_str, pct}]
+        — agrupado por primeira linha da descrição, ordenado por total desc
+      - total: float
+      - count: int
+    """
+    from apps.financial.infrastructure.models import Expense as ExpenseModel
+    from decimal import Decimal
+
+    today = timezone.now().date()
+    cutoff = _first_of_month_n_ago(today, months)
+
+    qs = (
+        ExpenseModel.objects.filter(
+            organization=organization,
+            supplier_name=_MAO_DE_OBRA_NAME,
+            status="PAID",
+            paid_at__isnull=False,
+            paid_at__gte=cutoff,
+        )
+        .order_by("-paid_at")
+        .values("paid_at", "amount", "description")
+    )
+
+    transactions = []
+    category_totals: dict[str, dict[str, Any]] = {}
+
+    for row in qs:
+        amt = float(row["amount"])
+        label = _normalize_mao_label(row["description"] or "")
+        paid_str = row["paid_at"].strftime("%d/%m/%Y") if row["paid_at"] else "—"
+
+        transactions.append({
+            "paid_at_str": paid_str,
+            "amount": amt,
+            "amount_str": f"R$ {amt:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            "label": label,
+        })
+
+        if label not in category_totals:
+            category_totals[label] = {"count": 0, "total": 0.0}
+        category_totals[label]["count"] += 1
+        category_totals[label]["total"] += amt
+
+    grand = sum(v["total"] for v in category_totals.values())
+
+    def _fmt(v: float) -> str:
+        return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    by_category = sorted(
+        [
+            {
+                "label": lbl,
+                "count": data["count"],
+                "total": data["total"],
+                "total_str": _fmt(data["total"]),
+                "pct": round(data["total"] / grand * 100, 1) if grand > 0 else 0.0,
+            }
+            for lbl, data in category_totals.items()
+        ],
+        key=lambda x: -x["total"],
+    )
+
+    return {
+        "transactions": transactions,
+        "by_category": by_category,
+        "total": grand,
+        "total_str": _fmt(grand),
+        "count": len(transactions),
+    }
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_expense_anomalies(
     organization: Organization, months: int = 12

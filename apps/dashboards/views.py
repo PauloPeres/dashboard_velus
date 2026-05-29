@@ -39,6 +39,7 @@ from apps.analytics.application.aggregations import (
     compute_ltv_distribution,
     compute_mrr_churn_series,
     compute_mrr_series,
+    compute_mao_de_obra_detail,
     compute_people_expenses,
     compute_pipeline_by_status,
     compute_revenue_forecast,
@@ -483,6 +484,7 @@ def pessoas(request: HttpRequest) -> HttpResponse:
 
     data = compute_people_expenses(org, months=months)
     anomalies = compute_expense_anomalies(org, months=months)
+    mao_detail = compute_mao_de_obra_detail(org, months=months)
 
     people = data.get("people", [])
     mao_de_obra = data.get("mao_de_obra", {})
@@ -507,6 +509,7 @@ def pessoas(request: HttpRequest) -> HttpResponse:
             "data": data,
             "people": people_enriched,
             "mao_de_obra": mao_de_obra,
+            "mao_detail": mao_detail,
             "mao_total_str": mao_total_str,
             "month_labels": data.get("month_labels", []),
             "grand_total_str": _fmt_brl(grand_total),
