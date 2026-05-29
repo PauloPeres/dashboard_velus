@@ -103,6 +103,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "apps.shared.context_processors.tenant",
+                "apps.dashboards.context_processors.period_context",
             ],
         },
     },

@@ -47,6 +47,17 @@
                     <a href="{% url 'sync:status' %}" class="hover:text-blue-600">Sync</a>
                 </nav>
             </div>
+            <!-- Seletor de período global -->
+            <div class="flex items-center gap-1 border border-gray-200 rounded px-1 py-0.5">
+                <span class="text-xs text-gray-400 pr-1">Período:</span>
+                {% for p in period_options %}
+                <button
+                    type="button"
+                    onclick="setPeriodMonths({{ p.value }})"
+                    class="px-2 py-0.5 rounded text-xs font-medium transition-colors {% if p.value == selected_months %}bg-blue-600 text-white{% else %}text-gray-500 hover:bg-gray-100{% endif %}"
+                >{{ p.label }}</button>
+                {% endfor %}
+            </div>
             <div class="flex items-center gap-4 text-sm">
                 {% if current_organization %}
                     <span class="text-gray-600">{{ current_organization.name }}</span>
@@ -126,6 +137,12 @@
         el.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-red-400">Erro ao carregar gráfico</div>';
         el.classList.remove("animate-pulse", "bg-gray-50");
       }
+    }
+
+    function setPeriodMonths(months) {
+        var url = new URL(window.location.href);
+        url.searchParams.set('months', months);
+        window.location.href = url.toString();
     }
     </script>
     {% block scripts %}{% endblock %}
