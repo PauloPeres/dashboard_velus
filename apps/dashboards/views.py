@@ -69,6 +69,15 @@ def _fmt_brl(value: float) -> str:
     return f"R$ {formatted}"
 
 
+def _get_months(request: HttpRequest) -> int:
+    """Lê seletor de período ?months=N. Válidos: 3, 6, 12, 24. Default: 12."""
+    try:
+        v = int(request.GET.get("months", 12))
+        return v if v in (3, 6, 12, 24) else 12
+    except (ValueError, TypeError):
+        return 12
+
+
 @login_required
 @never_cache
 def executive(request: HttpRequest) -> HttpResponse:
@@ -76,12 +85,13 @@ def executive(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
+    months = _get_months(request)
 
     kpis = compute_kpis(org)
-    mrr_series = compute_mrr_series(org, months=12)
+    mrr_series = compute_mrr_series(org, months=months)
     aging = compute_aging_distribution(org)
-    delinquency_trend = compute_delinquency_trend(org, months=12)
-    contract_status_trend = compute_contract_status_trend(org, months=12)
+    delinquency_trend = compute_delinquency_trend(org, months=months)
+    contract_status_trend = compute_contract_status_trend(org, months=months)
 
     # ARPU = MRR ÷ contratos ativos
     arpu = (
@@ -162,12 +172,13 @@ def revenue(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
+    months = _get_months(request)
 
     kpis = compute_kpis(org)
-    mrr_series = compute_mrr_series(org, months=12)
+    mrr_series = compute_mrr_series(org, months=months)
     arpu_data = compute_arpu_by_plan(org)
-    status_trend = compute_contract_status_trend(org, months=12)
-    churn_plan = compute_churn_by_plan(org, months=3)
+    status_trend = compute_contract_status_trend(org, months=months)
+    churn_plan = compute_churn_by_plan(org, months=months)
 
     arpu = (
         kpis["mrr_now"] / kpis["active_contracts"]
@@ -211,10 +222,11 @@ def cashflow(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
+    months = _get_months(request)
 
-    cashflow_data = compute_cashflow_series(org, months=12)
-    supplier_data = compute_expense_by_supplier(org, months=3)
-    category_data = compute_expense_by_category(org, months=3)
+    cashflow_data = compute_cashflow_series(org, months=months)
+    supplier_data = compute_expense_by_supplier(org, months=months)
+    category_data = compute_expense_by_category(org, months=months)
 
     # Pré-formatados — evita bug de |add: string+float no template
     last = cashflow_data[-1] if cashflow_data else {}
@@ -248,11 +260,12 @@ def forecast(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
+    months = _get_months(request)
 
-    historical = compute_mrr_series(org, months=12)
-    cash_series = compute_cash_received_series(org, months=12)
+    historical = compute_mrr_series(org, months=months)
+    cash_series = compute_cash_received_series(org, months=months)
     forecast_data = compute_revenue_forecast(org, months_ahead=12)
-    dre_data = compute_dre(org, months=12)
+    dre_data = compute_dre(org, months=months)
 
     cur = dre_data["current_month"]
     ytd = dre_data["ytd"]
@@ -290,8 +303,9 @@ def dre(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
+    months = _get_months(request)
 
-    dre_data = compute_dre(org, months=12)
+    dre_data = compute_dre(org, months=months)
 
     cur = dre_data["current_month"]
 
@@ -319,9 +333,10 @@ def burn(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
+    months = _get_months(request)
 
-    burn_data = compute_burn_rate(org, months=6)
-    expense_series = compute_expense_series(org, months=12)
+    burn_data = compute_burn_rate(org, months=min(months, 6))
+    expense_series = compute_expense_series(org, months=months)
 
     # Pré-formatados — evita bug de |add: string+float no template
     burn_rate_str = _fmt_brl(burn_data.get("burn_rate", 0))
@@ -352,13 +367,14 @@ def financial(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
+    months = _get_months(request)
 
     kpis = compute_kpis(org)
     aging = compute_aging_distribution(org)
     top_delinquent = compute_top_delinquent_invoices(org, limit=50)
-    cash_series = compute_cash_received_series(org, months=12)
-    delinquency_trend = compute_delinquency_trend(org, months=12)
-    status_trend = compute_contract_status_trend(org, months=12)
+    cash_series = compute_cash_received_series(org, months=months)
+    delinquency_trend = compute_delinquency_trend(org, months=months)
+    status_trend = compute_contract_status_trend(org, months=months)
 
     # KPI cards extras
     over_90 = next((b for b in aging if b["key"] == "OVER_90"), {})
@@ -403,11 +419,12 @@ def contracts(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
+    months = _get_months(request)
 
     kpis = compute_kpis(org)
-    status_trend = compute_contract_status_trend(org, months=12)
+    status_trend = compute_contract_status_trend(org, months=months)
     arpu_data = compute_arpu_by_plan(org)
-    churn_plan = compute_churn_by_plan(org, months=3)
+    churn_plan = compute_churn_by_plan(org, months=months)
     blocked_dist = compute_blocked_duration_distribution(org)
     at_risk_summary = compute_blocked_at_risk_summary(org, min_days=30)
     at_risk_list = compute_at_risk_contracts(org, min_days=30, limit=50)
