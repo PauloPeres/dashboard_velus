@@ -33,6 +33,14 @@ SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365  # 1 ano
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 
+# Probes do K8s batem em /health/ via HTTP interno (sem X-Forwarded-Proto);
+# isenta do redirect 301->https pra devolver 200 limpo.
+SECURE_REDIRECT_EXEMPT = [r"^health/?$"]
+
+# CSRF atrás do proxy TLS: POSTs (admin/login) precisam da origin https confiável.
+# Deriva de ALLOWED_HOSTS pra não duplicar o domínio.
+CSRF_TRUSTED_ORIGINS = [f"https://{host}" for host in ALLOWED_HOSTS]
+
 # =============================================================================
 # Cookies — secure-only, sem leak entre subdomains
 # =============================================================================
