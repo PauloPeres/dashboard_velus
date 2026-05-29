@@ -8,10 +8,10 @@
 <p class="text-sm text-gray-500 mb-6">Demonstração de Resultado simplificada — últimos 12 meses.</p>
 
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-    {% include "dashboards/_kpi_card.html" with label="Receita (mês atual)" value="R$ "|add:dre.current_month.receita_bruta|floatformat:0|intcomma %}
-    {% include "dashboards/_kpi_card.html" with label="Despesas (mês atual)" value="R$ "|add:dre.current_month.despesas|floatformat:0|intcomma %}
-    {% include "dashboards/_kpi_card.html" with label="EBITDA (mês atual)" value="R$ "|add:dre.current_month.ebitda|floatformat:0|intcomma %}
-    {% include "dashboards/_kpi_card.html" with label="Margem EBITDA" value=dre.current_month.ebitda_margin_pct|floatformat:1|add:"%" %}
+    {% include "dashboards/_kpi_card.html" with label="Receita (mês atual)" value=cur_receita_str %}
+    {% include "dashboards/_kpi_card.html" with label="Despesas (mês atual)" value=cur_despesas_str %}
+    {% include "dashboards/_kpi_card.html" with label="EBITDA (mês atual)" value=cur_ebitda_str %}
+    {% include "dashboards/_kpi_card.html" with label="Margem EBITDA" value=cur_margin_str %}
 </div>
 
 <div class="grid grid-cols-1 gap-6 mb-8">
@@ -81,6 +81,6 @@
 {% block scripts %}
 {{ dre_chart_json|json_script:"dre-data" }}
 <script>
-    Plotly.newPlot("dre-chart", JSON.parse(document.getElementById("dre-data").textContent), {responsive: true});
+  renderChart("dre-chart", "dre-data");
 </script>
 {% endblock %}

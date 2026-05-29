@@ -73,6 +73,39 @@
         {% block content %}{% endblock %}
     </main>
 
+    <script>
+    /**
+     * renderChart — carrega dados Plotly do json_script e renderiza no div.
+     * Resolve double-encoding: fig.to_json() → string → json_script → string novamente.
+     * Suporta line/bar (x) e pie (labels). Remove animate-pulse após renderizar.
+     */
+    function renderChart(divId, dataId) {
+      var el = document.getElementById(divId);
+      if (!el) return;
+      try {
+        var raw = JSON.parse(document.getElementById(dataId).textContent);
+        var parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
+        var traces = parsed.data || [];
+        var layout = Object.assign({}, parsed.layout || {}, { responsive: true });
+        var hasData = traces.length > 0 && (
+          (traces[0].x && traces[0].x.length > 0) ||
+          (traces[0].labels && traces[0].labels.length > 0) ||
+          (traces[0].y && traces[0].y.length > 0)
+        );
+        if (!hasData) {
+          el.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-gray-400">Sem dados disponíveis</div>';
+          el.classList.remove("animate-pulse", "bg-gray-50");
+          return;
+        }
+        Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false })
+          .then(function () { el.classList.remove("animate-pulse", "bg-gray-50", "rounded-lg"); });
+      } catch (e) {
+        console.error("renderChart error [" + divId + "]", e);
+        el.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-red-400">Erro ao carregar gráfico</div>';
+        el.classList.remove("animate-pulse", "bg-gray-50");
+      }
+    }
+    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

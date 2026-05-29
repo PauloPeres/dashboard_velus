@@ -85,31 +85,7 @@
 {{ mrr_chart_json|json_script:"mrr-data" }}
 {{ aging_chart_json|json_script:"aging-data" }}
 <script>
-(function () {
-  function renderChart(divId, dataId) {
-    var el = document.getElementById(divId);
-    // json_script re-serializa strings — se o valor já é JSON string, parse duas vezes
-    var raw = JSON.parse(document.getElementById(dataId).textContent);
-    var parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
-    // fig.to_json() retorna {data:[...], layout:{...}} — extrair separadamente
-    var traces = parsed.data || [];
-    var layout = Object.assign({}, parsed.layout || {}, { responsive: true });
-    var hasData = traces.length > 0 && traces[0].x && traces[0].x.length > 0;
-
-    if (!hasData) {
-      el.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-gray-400">Sem dados disponíveis</div>';
-      el.classList.remove("animate-pulse", "bg-gray-50");
-      return;
-    }
-
-    Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false })
-      .then(function () {
-        el.classList.remove("animate-pulse", "bg-gray-50", "rounded-lg");
-      });
-  }
-
   renderChart("mrr-chart", "mrr-data");
   renderChart("aging-chart", "aging-data");
-})();
 </script>
 {% endblock %}

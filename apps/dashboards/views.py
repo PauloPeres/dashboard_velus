@@ -195,14 +195,25 @@ def forecast(request: HttpRequest) -> HttpResponse:
     forecast_data = compute_revenue_forecast(org, months_ahead=12)
     dre_data = compute_dre(org, months=12)
 
+    cur = dre_data["current_month"]
+    ytd = dre_data["ytd"]
+
     return render(
         request,
         "dashboards/forecast.html",
         {
             "historical": historical,
             "forecast_data": forecast_data,
-            "dre_summary": dre_data["current_month"],
-            "ytd": dre_data["ytd"],
+            "dre_summary": cur,
+            "ytd": ytd,
+            # Pré-formatados — evita bug de |add: string+Decimal no template
+            "cur_receita_str": _fmt_brl(cur["receita_bruta"]),
+            "cur_despesas_str": _fmt_brl(cur["despesas"]),
+            "cur_ebitda_str": _fmt_brl(cur["ebitda"]),
+            "cur_margin_str": f"{cur['ebitda_margin_pct']:.1f}%",
+            "ytd_receita_str": _fmt_brl(ytd["receita_bruta"]),
+            "ytd_despesas_str": _fmt_brl(ytd["despesas"]),
+            "ytd_ebitda_str": _fmt_brl(ytd["ebitda"]),
             "forecast_chart_json": charts.forecast_area(historical, forecast_data),
         },
     )
@@ -218,11 +229,18 @@ def dre(request: HttpRequest) -> HttpResponse:
 
     dre_data = compute_dre(org, months=12)
 
+    cur = dre_data["current_month"]
+
     return render(
         request,
         "dashboards/dre.html",
         {
             "dre": dre_data,
+            # Pré-formatados — evita bug de |add: string+Decimal no template
+            "cur_receita_str": _fmt_brl(cur["receita_bruta"]),
+            "cur_despesas_str": _fmt_brl(cur["despesas"]),
+            "cur_ebitda_str": _fmt_brl(cur["ebitda"]),
+            "cur_margin_str": f"{cur['ebitda_margin_pct']:.1f}%",
             "dre_chart_json": charts.dre_grouped_bar(
                 dre_data["mrr_series"], dre_data["expense_series"]
             ),

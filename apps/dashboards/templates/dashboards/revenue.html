@@ -4,22 +4,22 @@
 {% block title %}Receita · Velus{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-bold mb-6">Receita & Crescimento</h1>
+<h1 class="text-2xl font-bold text-gray-900 mb-6">Receita & Crescimento</h1>
 
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-        <h2 class="text-lg font-semibold mb-4">MRR — últimos 12 meses</h2>
-        <div id="mrr-chart" style="height:340px;"></div>
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+        <h2 class="text-sm font-semibold text-gray-700 mb-4">MRR — últimos 12 meses</h2>
+        <div id="mrr-chart" style="height:320px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
     </div>
-    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-        <h2 class="text-lg font-semibold mb-4">Pipeline (status dos contratos)</h2>
-        <div id="pipeline-chart" style="height:340px;"></div>
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+        <h2 class="text-sm font-semibold text-gray-700 mb-4">Pipeline (status dos contratos)</h2>
+        <div id="pipeline-chart" style="height:320px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
     </div>
 </div>
 
-<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
-    <h2 class="text-lg font-semibold mb-4">Receita por plano</h2>
-    <div id="arpu-chart" style="height:340px;"></div>
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+    <h2 class="text-sm font-semibold text-gray-700 mb-4">Receita por plano</h2>
+    <div id="arpu-chart" style="height:320px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
 </div>
 
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
@@ -52,8 +52,8 @@
 {{ pipeline_chart_json|json_script:"pipeline-data" }}
 {{ arpu_chart_json|json_script:"arpu-data" }}
 <script>
-    Plotly.newPlot("mrr-chart", JSON.parse(document.getElementById("mrr-data").textContent), {responsive: true});
-    Plotly.newPlot("pipeline-chart", JSON.parse(document.getElementById("pipeline-data").textContent), {responsive: true});
-    Plotly.newPlot("arpu-chart", JSON.parse(document.getElementById("arpu-data").textContent), {responsive: true});
+  renderChart("mrr-chart", "mrr-data");
+  renderChart("pipeline-chart", "pipeline-data");
+  renderChart("arpu-chart", "arpu-data");
 </script>
 {% endblock %}

@@ -8,10 +8,10 @@
 <p class="text-sm text-gray-500 mb-6">Projeção baseada na tendência de crescimento do MRR dos últimos 3 meses.</p>
 
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-    {% include "dashboards/_kpi_card.html" with label="Receita Bruta (mês atual)" value="R$ "|add:dre_summary.receita_bruta|floatformat:0|intcomma %}
-    {% include "dashboards/_kpi_card.html" with label="Despesas (mês atual)" value="R$ "|add:dre_summary.despesas|floatformat:0|intcomma %}
-    {% include "dashboards/_kpi_card.html" with label="EBITDA (mês atual)" value="R$ "|add:dre_summary.ebitda|floatformat:0|intcomma %}
-    {% include "dashboards/_kpi_card.html" with label="Margem EBITDA" value=dre_summary.ebitda_margin_pct|floatformat:1|add:"%" %}
+    {% include "dashboards/_kpi_card.html" with label="Receita Bruta (mês atual)" value=cur_receita_str %}
+    {% include "dashboards/_kpi_card.html" with label="Despesas (mês atual)" value=cur_despesas_str %}
+    {% include "dashboards/_kpi_card.html" with label="EBITDA (mês atual)" value=cur_ebitda_str %}
+    {% include "dashboards/_kpi_card.html" with label="Margem EBITDA" value=cur_margin_str %}
 </div>
 
 <div class="grid grid-cols-1 gap-6 mb-8">
@@ -23,9 +23,9 @@
 </div>
 
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-    {% include "dashboards/_kpi_card.html" with label="Receita Bruta YTD" value="R$ "|add:ytd.receita_bruta|floatformat:0|intcomma %}
-    {% include "dashboards/_kpi_card.html" with label="Despesas YTD" value="R$ "|add:ytd.despesas|floatformat:0|intcomma %}
-    {% include "dashboards/_kpi_card.html" with label="EBITDA YTD" value="R$ "|add:ytd.ebitda|floatformat:0|intcomma %}
+    {% include "dashboards/_kpi_card.html" with label="Receita Bruta YTD" value=ytd_receita_str %}
+    {% include "dashboards/_kpi_card.html" with label="Despesas YTD" value=ytd_despesas_str %}
+    {% include "dashboards/_kpi_card.html" with label="EBITDA YTD" value=ytd_ebitda_str %}
 </div>
 
 {% if forecast_data %}
@@ -68,6 +68,6 @@
 {% block scripts %}
 {{ forecast_chart_json|json_script:"forecast-data" }}
 <script>
-    Plotly.newPlot("forecast-chart", JSON.parse(document.getElementById("forecast-data").textContent), {responsive: true});
+  renderChart("forecast-chart", "forecast-data");
 </script>
 {% endblock %}
