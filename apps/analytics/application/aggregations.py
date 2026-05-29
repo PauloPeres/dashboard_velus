@@ -398,15 +398,26 @@ def compute_cashflow_series(
 def compute_expense_by_supplier(
     organization: Organization, months: int = 3
 ) -> list[dict[str, Any]]:
-    """Top fornecedores por despesa paga nos últimos N meses."""
+    """Top fornecedores por despesa paga nos últimos N meses.
+
+    Lê `Expense.supplier_name` diretamente (não a cópia desnormalizada em
+    FactExpense) para garantir que backfills e sincronizações recentes já
+    estejam refletidos. Exclui nomes no formato 'Fornecedor #XXX' que
+    indicam fornecedores ainda não resolvidos pela API IXC.
+    """
+    from apps.financial.infrastructure.models import Expense as ExpenseModel
+
     today = timezone.now().date()
-    cutoff = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
-    by_supplier = (
-        FactExpense.objects.filter(
+    cutoff = _first_of_month_n_ago(today, months)
+    qs = (
+        ExpenseModel.objects.filter(
             organization=organization,
             status="PAID",
-            expense_date__gte=cutoff,
+            paid_at__isnull=False,
+            paid_at__gte=cutoff,
         )
+        .exclude(supplier_name__startswith="Fornecedor #")
+        .exclude(supplier_name="")
         .values("supplier_name")
         .annotate(
             total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
@@ -416,11 +427,11 @@ def compute_expense_by_supplier(
     )
     return [
         {
-            "supplier": row["supplier_name"] or "Sem fornecedor",
+            "supplier": row["supplier_name"],
             "amount": float(row["total"]),
             "count": row["count"],
         }
-        for row in by_supplier
+        for row in qs
     ]
 
 
@@ -428,16 +439,25 @@ def compute_expense_by_supplier(
 def compute_expense_by_category(
     organization: Organization, months: int = 3
 ) -> list[dict[str, Any]]:
-    """Distribuição de despesas pagas por categoria nos últimos N meses."""
+    """Distribuição de despesas pagas por categoria IXC (planejamento) nos últimos N meses.
+
+    Usa `id_contas` do campo `raw_extras` da tabela Expense — a mesma
+    categoria que o usuário vê no sistema IXC. Não usa a heurística de
+    keyword-matching que gerava categorias genéricas como "Conectividade".
+    """
+    from apps.financial.infrastructure.models import Expense as ExpenseModel
+
     today = timezone.now().date()
-    cutoff = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
-    by_cat = (
-        FactExpense.objects.filter(
+    cutoff = _first_of_month_n_ago(today, months)
+    qs = (
+        ExpenseModel.objects.filter(
             organization=organization,
             status="PAID",
-            expense_date__gte=cutoff,
+            paid_at__isnull=False,
+            paid_at__gte=cutoff,
         )
-        .values("category")
+        .annotate(id_contas_str=KeyTextTransform("id_contas", "raw_extras"))
+        .values("id_contas_str")
         .annotate(
             total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
             count=Count("id"),
@@ -446,11 +466,11 @@ def compute_expense_by_category(
     )
     return [
         {
-            "category": row["category"] or "Sem categoria",
+            "category": _get_planeja_label(row["id_contas_str"]),
             "amount": float(row["total"]),
             "count": row["count"],
         }
-        for row in by_cat
+        for row in qs
     ]
 
 
