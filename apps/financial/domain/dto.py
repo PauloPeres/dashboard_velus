@@ -40,6 +40,38 @@ class InvoiceDTO:
 
 
 @dataclass(frozen=True)
+class ExpenseDTO:
+    """Representação neutra de despesa/conta a pagar.
+
+    `supplier_external_id` pode ser "" se não houver fornecedor vinculado.
+    `supplier_name` é desnormalizado — copiado do cache de fornecedores do adapter.
+    `category` é inferido por keyword matching no campo `description` (obs IXC).
+    """
+
+    external_id: str
+    supplier_external_id: str  # "" se não vinculado
+    supplier_name: str  # desnormalizado para display
+    description: str  # campo obs do IXC
+    amount: Decimal
+    due_date: date
+    status: str = "OPEN"  # OPEN | PAID | CANCELED
+    payment_type: str = ""
+    category: str = ""  # inferido por keyword; "" = sem categoria
+    issued_at: date | None = None
+    paid_at: date | None = None
+    paid_amount: Decimal | None = None
+    raw_extras: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.external_id:
+            raise ValueError("ExpenseDTO.external_id não pode ser vazio")
+        if not isinstance(self.amount, Decimal):
+            object.__setattr__(self, "amount", Decimal(str(self.amount)))
+        if self.paid_amount is not None and not isinstance(self.paid_amount, Decimal):
+            object.__setattr__(self, "paid_amount", Decimal(str(self.paid_amount)))
+
+
+@dataclass(frozen=True)
 class PaymentDTO:
     """Representação neutra de recebimento (movimento de caixa entrante)."""
 

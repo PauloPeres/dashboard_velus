@@ -17,11 +17,12 @@ from apps.analytics.infrastructure.models import (
     DimCustomer,
     DimPlan,
     FactContractStatusDaily,
+    FactExpense,
     FactInvoice,
     FactPayment,
 )
 from apps.customers.infrastructure.models import Contract, Customer
-from apps.financial.infrastructure.models import Invoice, Payment
+from apps.financial.infrastructure.models import Expense, Invoice, Payment
 from apps.shared.decorators import allow_cross_tenant
 from apps.tenancy.models import Organization
 
@@ -210,6 +211,30 @@ def _rebuild_fact_payment(organization: Organization) -> int:
     return count
 
 
+def _rebuild_fact_expense(organization: Organization) -> int:
+    count = 0
+    for exp in Expense.objects.filter(organization=organization).iterator():
+        # expense_date = paid_at se pago, otherwise due_date
+        expense_date = exp.paid_at if exp.paid_at else exp.due_date
+        FactExpense.objects.update_or_create(
+            organization=organization,
+            expense=exp,
+            defaults={
+                "expense_date": expense_date,
+                "due_date": exp.due_date,
+                "paid_date": exp.paid_at,
+                "amount": exp.amount,
+                "paid_amount": exp.paid_amount,
+                "status": exp.status,
+                "category": exp.category,
+                "supplier_name": exp.supplier_name,
+                "description": exp.description,
+            },
+        )
+        count += 1
+    return count
+
+
 # =============================================================================
 # Entrypoints públicos (chamados pelo signal listener)
 # =============================================================================
@@ -239,5 +264,8 @@ def rebuild_for_capability(organization: Organization, capability: str) -> dict[
 
     elif capability == "PAYMENTS":
         summary["fact_payment"] = _rebuild_fact_payment(organization)
+
+    elif capability == "EXPENSES":
+        summary["fact_expense"] = _rebuild_fact_expense(organization)
 
     return summary

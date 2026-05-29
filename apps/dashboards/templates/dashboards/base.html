@@ -28,6 +28,15 @@
                     <a href="{% url 'dashboards:executive' %}" class="hover:text-blue-600">Executivo</a>
                     <a href="{% url 'dashboards:revenue' %}" class="hover:text-blue-600">Receita</a>
                     <a href="{% url 'dashboards:financial' %}" class="hover:text-blue-600">Financeiro</a>
+                    <div class="relative group">
+                        <span class="cursor-default hover:text-blue-600">Despesas &#9662;</span>
+                        <div class="absolute left-0 top-full mt-1 bg-white border border-gray-200 rounded shadow-lg hidden group-hover:block z-10 min-w-max">
+                            <a href="{% url 'dashboards:cashflow' %}" class="block px-4 py-2 text-sm hover:bg-gray-50 hover:text-blue-600">Fluxo de Caixa</a>
+                            <a href="{% url 'dashboards:dre' %}" class="block px-4 py-2 text-sm hover:bg-gray-50 hover:text-blue-600">DRE Gerencial</a>
+                            <a href="{% url 'dashboards:burn' %}" class="block px-4 py-2 text-sm hover:bg-gray-50 hover:text-blue-600">Burn Rate</a>
+                            <a href="{% url 'dashboards:forecast' %}" class="block px-4 py-2 text-sm hover:bg-gray-50 hover:text-blue-600">Previsão 12m</a>
+                        </div>
+                    </div>
                     <a href="{% url 'scenarios:pj_vs_clt' %}" class="hover:text-blue-600">Simuladores</a>
                     <a href="{% url 'sync:status' %}" class="hover:text-blue-600">Sync</a>
                 </nav>

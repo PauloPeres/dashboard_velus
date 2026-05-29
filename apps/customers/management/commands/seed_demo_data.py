@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from apps.analytics.application.rebuild import rebuild_for_capability
 from apps.customers.infrastructure.models import Contract, Customer
-from apps.financial.infrastructure.models import Invoice, Payment
+from apps.financial.infrastructure.models import Expense, Invoice, Payment
 from apps.integrations.shared.enums import SourceType
 from apps.shared.context import set_current_organization
 from apps.shared.decorators import allow_cross_tenant
@@ -45,6 +45,27 @@ _PLANS = [
     ("Fibra 1GB", Decimal("220.00")),
 ]
 _DEMO_SOURCE = SourceType.FAKE.value
+
+# Expense templates: (category, supplier, description, monthly_amount)
+# Realistic ISP costs for ~500 customers
+_EXPENSE_TEMPLATES = [
+    # Conectividade
+    ("Conectividade", "Vivo Empresas", "LINK UPLINK 500MB FIBRA", Decimal("3500.00")),
+    ("Conectividade", "Embratel", "TRÂNSITO IP BACKBONE 1GB", Decimal("2800.00")),
+    ("Conectividade", "NET Serviços", "PONTO FIBRA BACKHAUL", Decimal("1200.00")),
+    # Pessoal
+    ("Pessoal", "Folha Mensal", "SALÁRIO EQUIPE TÉCNICA 3 FUNCIONÁRIOS", Decimal("9000.00")),
+    ("Pessoal", "Escritório Contábil XYZ", "PRÓ-LABOR SÓCIO ADMINISTRADOR", Decimal("4500.00")),
+    # Aluguel
+    ("Aluguel", "Imobiliária Central", "ALUGUEL ESCRITÓRIO E NOC", Decimal("2500.00")),
+    # Utilidades
+    ("Utilidades", "CPFL Energia", "ENERGIA ELÉTRICA NOC + ESCRITÓRIO", Decimal("800.00")),
+    # Impostos
+    ("Impostos", "Receita Federal", "DAS SIMPLES NACIONAL", Decimal("1800.00")),
+    ("Impostos", "Prefeitura Municipal", "ISSQN SERVIÇOS DE TELECOMUNICAÇÃO", Decimal("420.00")),
+    # Equipamentos
+    ("Equipamentos", "Intelbras", "EQUIPAMENTO ONU GPON LOTE", Decimal("1500.00")),
+]
 
 
 class Command(BaseCommand):
@@ -82,10 +103,12 @@ class Command(BaseCommand):
             invoices, payments = self._seed_invoices_and_payments(org, contracts, months)
             self.stdout.write(f"  ✓ {len(invoices)} invoices")
             self.stdout.write(f"  ✓ {len(payments)} payments")
+            expenses = self._seed_expenses(org, months)
+            self.stdout.write(f"  ✓ {len(expenses)} expenses")
 
         # Rebuild fact tables
         self.stdout.write("\nRebuild de fact tables...")
-        for cap in ("CUSTOMERS", "CONTRACTS", "INVOICES", "PAYMENTS"):
+        for cap in ("CUSTOMERS", "CONTRACTS", "INVOICES", "PAYMENTS", "EXPENSES"):
             summary = rebuild_for_capability(org, cap)
             self.stdout.write(f"  {cap}: {summary}")
 
@@ -263,3 +286,63 @@ class Command(BaseCommand):
                 month_cursor = date(next_year, next_month, 10)
 
         return invoices, payments
+
+    def _seed_expenses(self, org: Organization, months: int) -> list[Expense]:
+        """Gera despesas mensais para cada template, ao longo de `months` meses."""
+        expenses: list[Expense] = []
+        today = date.today()
+
+        for month_offset in range(months - 1, -1, -1):
+            # Calcular mês alvo
+            target = (today.replace(day=1) - timedelta(days=month_offset * 30)).replace(day=1)
+            is_past = target < today.replace(day=1)
+
+            for exp_idx, (category, supplier, description, base_amount) in enumerate(
+                _EXPENSE_TEMPLATES
+            ):
+                # Adiciona variação aleatória ±5%
+                variation = Decimal(str(round(random.uniform(-0.05, 0.05), 4)))
+                amount = (base_amount * (1 + variation)).quantize(Decimal("0.01"))
+                due_date = target.replace(day=20)  # vencimento dia 20
+
+                # Pagamento: 95% pago no prazo, 5% em atraso
+                paid_at = None
+                paid_amount = None
+                status = "OPEN"
+
+                if is_past:
+                    r = random.random()
+                    if r < 0.95:
+                        paid_offset = random.randint(0, 5)
+                        paid_at = due_date + timedelta(days=paid_offset)
+                        if paid_at > today:
+                            paid_at = today
+                        paid_amount = amount
+                        status = "PAID"
+                    elif r < 0.97:
+                        status = "OPEN"
+                    else:
+                        status = "CANCELED"
+
+                ext_id = f"demo-exp-{month_offset}-{exp_idx}"
+                exp, _ = Expense.objects.update_or_create(
+                    organization=org,
+                    source_type=_DEMO_SOURCE,
+                    external_id=ext_id,
+                    defaults={
+                        "supplier_name": supplier,
+                        "supplier_external_id": f"demo-sup-{exp_idx}",
+                        "description": description,
+                        "category": category,
+                        "amount": amount,
+                        "paid_amount": paid_amount,
+                        "issued_at": target.replace(day=1),
+                        "due_date": due_date,
+                        "paid_at": paid_at,
+                        "status": status,
+                        "payment_type": "TRANSFERÊNCIA",
+                    },
+                )
+                expenses.append(exp)
+
+        return expenses

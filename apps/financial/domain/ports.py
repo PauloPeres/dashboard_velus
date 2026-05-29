@@ -8,7 +8,7 @@ from typing import Protocol, runtime_checkable
 
 from apps.integrations.shared.enums import Capability, SourceType
 
-from .dto import InvoiceDTO, PaymentDTO
+from .dto import ExpenseDTO, InvoiceDTO, PaymentDTO
 
 
 @runtime_checkable
@@ -24,6 +24,22 @@ class InvoiceSourcePort(Protocol):
         since: datetime | None = None,
     ) -> Iterator[InvoiceDTO]:
         """Itera faturas. since=None → bootstrap; senão incremental."""
+        ...
+
+
+@runtime_checkable
+class ExpenseSourcePort(Protocol):
+    """Adapter que sabe ler despesas/contas a pagar de algum sistema externo."""
+
+    source_type: SourceType
+    capabilities: frozenset[Capability]
+
+    def list_expenses(
+        self,
+        *,
+        since: datetime | None = None,
+    ) -> Iterator[ExpenseDTO]:
+        """Itera despesas. since=None → bootstrap; senão incremental."""
         ...
 
 

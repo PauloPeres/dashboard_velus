@@ -20,6 +20,7 @@ from django.utils import timezone
 from apps.analytics.infrastructure.models import (
     DimContract,
     FactContractStatusDaily,
+    FactExpense,
     FactInvoice,
     FactPayment,
 )
@@ -245,6 +246,297 @@ def compute_cash_received_series(
         }
         for row in by_month
     ]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_expense_series(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Despesas pagas por mês (expense_date)."""
+    today = timezone.now().date()
+    cutoff = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
+    by_month = (
+        FactExpense.objects.filter(
+            organization=organization,
+            status="PAID",
+            expense_date__gte=cutoff,
+        )
+        .annotate(month=TruncMonth("expense_date"))
+        .values("month")
+        .annotate(
+            total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            count=Count("id"),
+        )
+        .order_by("month")
+    )
+    return [
+        {
+            "month": row["month"].strftime("%Y-%m"),
+            "label": row["month"].strftime("%b/%y"),
+            "expenses": float(row["total"]),
+            "count": row["count"],
+        }
+        for row in by_month
+    ]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_cashflow_series(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Fluxo de caixa: receita recebida - despesas pagas por mês."""
+    revenue_series = compute_cash_received_series(organization, months=months)
+    expense_series = compute_expense_series(organization, months=months)
+
+    # Build lookup by month key
+    rev_by_month = {r["month"]: r["amount"] for r in revenue_series}
+    exp_by_month = {e["month"]: e["expenses"] for e in expense_series}
+
+    # Union of all months from both series
+    all_months: set[str] = set(rev_by_month) | set(exp_by_month)
+    if not all_months:
+        return []
+
+    # Build sorted series
+    from datetime import date as date_cls
+    sorted_months = sorted(all_months)
+    result = []
+    cumulative = 0.0
+    for month_key in sorted_months:
+        revenue = rev_by_month.get(month_key, 0.0)
+        expenses = exp_by_month.get(month_key, 0.0)
+        net = revenue - expenses
+        cumulative += net
+        # Parse label from month_key YYYY-MM
+        try:
+            d = date_cls.fromisoformat(month_key + "-01")
+            label = d.strftime("%b/%y")
+        except ValueError:
+            label = month_key
+        result.append(
+            {
+                "month": month_key,
+                "label": label,
+                "revenue": revenue,
+                "expenses": expenses,
+                "net": net,
+                "cumulative_net": cumulative,
+            }
+        )
+    return result
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_expense_by_supplier(
+    organization: Organization, months: int = 3
+) -> list[dict[str, Any]]:
+    """Top fornecedores por despesa paga nos últimos N meses."""
+    today = timezone.now().date()
+    cutoff = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
+    by_supplier = (
+        FactExpense.objects.filter(
+            organization=organization,
+            status="PAID",
+            expense_date__gte=cutoff,
+        )
+        .values("supplier_name")
+        .annotate(
+            total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            count=Count("id"),
+        )
+        .order_by("-total")[:20]
+    )
+    return [
+        {
+            "supplier": row["supplier_name"] or "Sem fornecedor",
+            "amount": float(row["total"]),
+            "count": row["count"],
+        }
+        for row in by_supplier
+    ]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_expense_by_category(
+    organization: Organization, months: int = 3
+) -> list[dict[str, Any]]:
+    """Distribuição de despesas pagas por categoria nos últimos N meses."""
+    today = timezone.now().date()
+    cutoff = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
+    by_cat = (
+        FactExpense.objects.filter(
+            organization=organization,
+            status="PAID",
+            expense_date__gte=cutoff,
+        )
+        .values("category")
+        .annotate(
+            total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            count=Count("id"),
+        )
+        .order_by("-total")
+    )
+    return [
+        {
+            "category": row["category"] or "Sem categoria",
+            "amount": float(row["total"]),
+            "count": row["count"],
+        }
+        for row in by_cat
+    ]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_burn_rate(
+    organization: Organization, months: int = 6
+) -> dict[str, Any]:
+    """Burn rate: média mensal de despesas pagas + série histórica.
+
+    burn_rate = média das despesas pagas nos últimos 3 meses.
+    trend_pct = variação % entre o mês mais antigo e o mais recente dos últimos 3m.
+    """
+    series = compute_expense_series(organization, months=months)
+    burn_series = [{"month": s["month"], "label": s["label"], "expenses": s["expenses"]} for s in series]
+
+    # Burn rate = avg of last 3 paid months
+    paid_months = [s["expenses"] for s in series if s["expenses"] > 0]
+    last_3 = paid_months[-3:] if len(paid_months) >= 3 else paid_months
+    burn_rate = sum(last_3) / len(last_3) if last_3 else 0.0
+
+    # Trend %: diff between first and last of the 3 months
+    if len(last_3) >= 2:
+        trend_pct = float((last_3[-1] - last_3[0]) / last_3[0] * 100) if last_3[0] > 0 else 0.0
+    else:
+        trend_pct = 0.0
+
+    return {
+        "burn_rate": burn_rate,
+        "burn_series": burn_series,
+        "trend_pct": trend_pct,
+        "months_sampled": len(last_3),
+    }
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_dre(
+    organization: Organization, months: int = 12
+) -> dict[str, Any]:
+    """DRE Gerencial simplificado.
+
+    Combina MRR (receita contratada) + recebimentos reais + despesas para
+    montar um DRE executivo de alto nível.
+
+    Returns dict with:
+      - mrr_series: list[dict] (month, label, mrr)
+      - expense_series: list[dict] (month, label, expenses)
+      - cashflow_series: list[dict] (month, label, revenue, expenses, net)
+      - current_month: {receita_bruta, despesas, ebitda, ebitda_margin_pct}
+      - ytd: {receita_bruta, despesas, ebitda}
+    """
+    mrr_series = compute_mrr_series(organization, months=months)
+    expense_series = compute_expense_series(organization, months=months)
+    cashflow_series = compute_cashflow_series(organization, months=months)
+
+    # Current month (last entry)
+    current_mrr = mrr_series[-1]["mrr"] if mrr_series else 0.0
+    exp_by_month = {e["month"]: e["expenses"] for e in expense_series}
+    current_month_key = mrr_series[-1]["month"] if mrr_series else ""
+    current_expenses = exp_by_month.get(current_month_key, 0.0)
+    current_ebitda = current_mrr - current_expenses
+    current_margin = (
+        float(current_ebitda / current_mrr * 100) if current_mrr > 0 else 0.0
+    )
+
+    # YTD: sum all months
+    ytd_revenue = sum(m["mrr"] for m in mrr_series)
+    ytd_expenses = sum(e["expenses"] for e in expense_series)
+    ytd_ebitda = ytd_revenue - ytd_expenses
+
+    return {
+        "mrr_series": mrr_series,
+        "expense_series": expense_series,
+        "cashflow_series": cashflow_series,
+        "current_month": {
+            "receita_bruta": current_mrr,
+            "despesas": current_expenses,
+            "ebitda": current_ebitda,
+            "ebitda_margin_pct": current_margin,
+        },
+        "ytd": {
+            "receita_bruta": ytd_revenue,
+            "despesas": ytd_expenses,
+            "ebitda": ytd_ebitda,
+        },
+    }
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_revenue_forecast(
+    organization: Organization, months_ahead: int = 12
+) -> list[dict[str, Any]]:
+    """Previsão 12m baseada em tendência de MRR.
+
+    Usa média de crescimento dos últimos 3 meses de MRR para projetar forward.
+    Também projeta despesas com base na média dos últimos 3 meses.
+    """
+    from datetime import date as date_cls
+
+    # Historical base: last 6 months
+    hist_mrr = compute_mrr_series(organization, months=6)
+    hist_exp = compute_expense_series(organization, months=6)
+
+    # Compute avg MRR growth from last 3 months
+    mrr_values = [m["mrr"] for m in hist_mrr]
+    if len(mrr_values) >= 3:
+        last3 = mrr_values[-3:]
+        growth = (last3[-1] / last3[0]) ** (1 / 2) - 1 if last3[0] > 0 else 0.0  # compound monthly
+    elif len(mrr_values) >= 2:
+        growth = (mrr_values[-1] / mrr_values[0] - 1) if mrr_values[0] > 0 else 0.0
+    else:
+        growth = 0.0
+
+    # Cap growth between -20% and +20% per month
+    growth = max(-0.20, min(0.20, growth))
+
+    # Avg monthly expenses (last 3 paid months)
+    exp_values = [e["expenses"] for e in hist_exp if e["expenses"] > 0]
+    avg_exp = sum(exp_values[-3:]) / len(exp_values[-3:]) if exp_values else 0.0
+
+    # Base MRR = last historical value
+    base_mrr = mrr_values[-1] if mrr_values else 0.0
+
+    today = timezone.now().date()
+    # Start forecast from next month
+    next_month_first = (today.replace(day=1))
+    # Advance to first forecast month
+    nm = next_month_first.month + 1
+    ny = next_month_first.year
+    if nm > 12:
+        nm = 1
+        ny += 1
+    forecast_start = date_cls(ny, nm, 1)
+
+    result = []
+    for i in range(months_ahead):
+        m = forecast_start.month + i
+        y = forecast_start.year + (m - 1) // 12
+        m = ((m - 1) % 12) + 1
+        d = date_cls(y, m, 1)
+        month_key = d.strftime("%Y-%m")
+        label = d.strftime("%b/%y")
+        forecast_mrr = base_mrr * ((1 + growth) ** (i + 1))
+        forecast_net = forecast_mrr - avg_exp
+        result.append(
+            {
+                "month": month_key,
+                "label": label,
+                "forecast_mrr": round(forecast_mrr, 2),
+                "forecast_expenses": round(avg_exp, 2),
+                "forecast_net": round(forecast_net, 2),
+                "is_forecast": True,
+            }
+        )
+    return result
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")

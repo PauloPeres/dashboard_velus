@@ -1,0 +1,86 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}DRE Gerencial · Velus{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-2">DRE Gerencial</h1>
+<p class="text-sm text-gray-500 mb-6">Demonstração de Resultado simplificada — últimos 12 meses.</p>
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+    {% include "dashboards/_kpi_card.html" with label="Receita (mês atual)" value="R$ "|add:dre.current_month.receita_bruta|floatformat:0|intcomma %}
+    {% include "dashboards/_kpi_card.html" with label="Despesas (mês atual)" value="R$ "|add:dre.current_month.despesas|floatformat:0|intcomma %}
+    {% include "dashboards/_kpi_card.html" with label="EBITDA (mês atual)" value="R$ "|add:dre.current_month.ebitda|floatformat:0|intcomma %}
+    {% include "dashboards/_kpi_card.html" with label="Margem EBITDA" value=dre.current_month.ebitda_margin_pct|floatformat:1|add:"%" %}
+</div>
+
+<div class="grid grid-cols-1 gap-6 mb-8">
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-4">Receita × Despesas × EBITDA — 12 meses</h2>
+        <div id="dre-chart" style="height:400px;"></div>
+    </div>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+    <!-- YTD summary -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-4">Acumulado no Período (YTD)</h2>
+        <dl class="space-y-3">
+            <div class="flex justify-between py-2 border-b border-gray-100">
+                <dt class="text-gray-600">Receita Bruta</dt>
+                <dd class="font-semibold text-green-700">R$ {{ dre.ytd.receita_bruta|floatformat:0|intcomma }}</dd>
+            </div>
+            <div class="flex justify-between py-2 border-b border-gray-100">
+                <dt class="text-gray-600">(-) Despesas</dt>
+                <dd class="font-semibold text-red-600">R$ {{ dre.ytd.despesas|floatformat:0|intcomma }}</dd>
+            </div>
+            <div class="flex justify-between py-2 border-t-2 border-gray-300">
+                <dt class="font-bold">EBITDA</dt>
+                <dd class="font-bold {% if dre.ytd.ebitda >= 0 %}text-blue-700{% else %}text-red-700{% endif %}">
+                    R$ {{ dre.ytd.ebitda|floatformat:0|intcomma }}
+                </dd>
+            </div>
+        </dl>
+    </div>
+
+    <!-- Monthly table -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-4">Tabela Mensal</h2>
+        {% if dre.cashflow_series %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-xs">
+                <thead>
+                    <tr class="border-b border-gray-200 text-left text-gray-500">
+                        <th class="pb-2 pr-3">Mês</th>
+                        <th class="pb-2 pr-3 text-right">Receita</th>
+                        <th class="pb-2 pr-3 text-right">Despesas</th>
+                        <th class="pb-2 text-right">Saldo</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in dre.cashflow_series %}
+                    <tr class="border-b border-gray-100 hover:bg-gray-50">
+                        <td class="py-1 pr-3">{{ row.label }}</td>
+                        <td class="py-1 pr-3 text-right text-green-700">{{ row.revenue|floatformat:0|intcomma }}</td>
+                        <td class="py-1 pr-3 text-right text-red-600">{{ row.expenses|floatformat:0|intcomma }}</td>
+                        <td class="py-1 text-right {% if row.net >= 0 %}text-blue-700{% else %}text-red-700{% endif %}">
+                            {{ row.net|floatformat:0|intcomma }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-sm text-gray-400 py-8 text-center">Sem dados suficientes.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ dre_chart_json|json_script:"dre-data" }}
+<script>
+    Plotly.newPlot("dre-chart", JSON.parse(document.getElementById("dre-data").textContent), {responsive: true});
+</script>
+{% endblock %}

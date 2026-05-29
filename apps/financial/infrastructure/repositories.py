@@ -7,11 +7,11 @@ from typing import Any
 from django.db import transaction
 
 from apps.customers.infrastructure.models import Contract
-from apps.financial.domain.dto import InvoiceDTO, PaymentDTO
+from apps.financial.domain.dto import ExpenseDTO, InvoiceDTO, PaymentDTO
 from apps.integrations.shared.enums import SourceType
 from apps.tenancy.models import Organization
 
-from .models import Invoice, Payment
+from .models import Expense, Invoice, Payment
 
 
 class InvoiceRepository:
@@ -125,3 +125,46 @@ class PaymentRepository:
         if raw_upper in Payment.Method.values:
             return raw_upper
         return Payment.Method.UNKNOWN.value
+
+
+class ExpenseRepository:
+    """Upsert idempotente de Expense."""
+
+    def __init__(self, organization: Organization) -> None:
+        self.organization = organization
+
+    @transaction.atomic
+    def upsert_from_dto(
+        self,
+        dto: ExpenseDTO,
+        *,
+        source_type: SourceType,
+    ) -> tuple[Expense, bool]:
+        defaults: dict[str, Any] = {
+            "supplier_name": dto.supplier_name,
+            "supplier_external_id": dto.supplier_external_id,
+            "description": dto.description,
+            "category": dto.category,
+            "amount": dto.amount,
+            "paid_amount": dto.paid_amount,
+            "issued_at": dto.issued_at,
+            "due_date": dto.due_date,
+            "paid_at": dto.paid_at,
+            "status": self._normalize_status(dto.status),
+            "payment_type": dto.payment_type,
+            "raw_extras": dto.raw_extras,
+        }
+        expense, created = Expense.objects.update_or_create(
+            organization=self.organization,
+            source_type=source_type.value,
+            external_id=dto.external_id,
+            defaults=defaults,
+        )
+        return expense, created
+
+    @staticmethod
+    def _normalize_status(raw: str) -> str:
+        raw_upper = (raw or "").upper().strip()
+        if raw_upper in Expense.Status.values:
+            return raw_upper
+        return Expense.Status.UNKNOWN.value

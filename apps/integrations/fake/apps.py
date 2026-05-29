@@ -21,6 +21,7 @@ class FakeAdapterConfig(AppConfig):
 
         from .contracts import FakeContractSource
         from .customers import FakeCustomerSource
+        from .expenses import FakeExpenseSource
         from .invoices import FakeInvoiceSource, FakePaymentSource
 
         # Idempotência: AppConfig.ready() pode rodar 2x em dev reload.
@@ -29,6 +30,7 @@ class FakeAdapterConfig(AppConfig):
             (Capability.CONTRACTS, FakeContractSource),
             (Capability.INVOICES, FakeInvoiceSource),
             (Capability.PAYMENTS, FakePaymentSource),
+            (Capability.EXPENSES, FakeExpenseSource),
         ]:
             if registry.get_factory(SourceType.FAKE, cap) is None:
                 registry.register(SourceType.FAKE, cap, cls)

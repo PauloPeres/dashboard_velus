@@ -20,6 +20,7 @@ class IxcAdapterConfig(AppConfig):
 
         from .contracts import IxcContractSource
         from .customers import IxcCustomerSource
+        from .expenses import IxcExpenseSource
         from .invoices import IxcInvoiceSource
 
         # Idempotência — evita duplicação em reload do dev server
@@ -27,6 +28,7 @@ class IxcAdapterConfig(AppConfig):
             (Capability.CUSTOMERS, IxcCustomerSource),
             (Capability.CONTRACTS, IxcContractSource),
             (Capability.INVOICES, IxcInvoiceSource),
+            (Capability.EXPENSES, IxcExpenseSource),
         ]:
             if registry.get_factory(SourceType.IXC, cap) is None:
                 registry.register(SourceType.IXC, cap, cls)

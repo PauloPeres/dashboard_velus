@@ -132,3 +132,59 @@ class Payment(TenantModel):
 
     def __str__(self) -> str:
         return f"Pagamento {self.source_type}:{self.external_id} R$ {self.amount}"
+
+
+class Expense(TenantModel):
+    """Despesa/conta a pagar — saída de caixa.
+
+    Registra custos operacionais do ISP: links, pessoal, aluguel, impostos, etc.
+    `category` é inferida por keyword matching do adapter; admin pode corrigir.
+    """
+
+    class Status(models.TextChoices):
+        OPEN = "OPEN", _("Em aberto")
+        PAID = "PAID", _("Pago")
+        CANCELED = "CANCELED", _("Cancelado")
+        UNKNOWN = "UNKNOWN", _("Desconhecido")
+
+    source_type = models.CharField(max_length=32, choices=SourceType.choices)
+    external_id = models.CharField(max_length=128)
+
+    supplier_name = models.CharField(max_length=255, blank=True, default="")
+    supplier_external_id = models.CharField(
+        max_length=128, blank=True, default="", db_index=True
+    )
+    description = models.CharField(max_length=512, blank=True, default="")
+    category = models.CharField(max_length=128, blank=True, default="")
+
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    paid_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    issued_at = models.DateField(null=True, blank=True)
+    due_date = models.DateField(db_index=True)
+    paid_at = models.DateField(null=True, blank=True, db_index=True)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.UNKNOWN
+    )
+    payment_type = models.CharField(max_length=64, blank=True, default="")
+    raw_extras = models.JSONField(default=dict, blank=True)
+
+    history = HistoricalRecords()
+
+    class Meta:
+        verbose_name = _("Despesa")
+        verbose_name_plural = _("Despesas")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "source_type", "external_id"],
+                name="unique_expense_per_source",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "status", "due_date"]),
+            models.Index(fields=["organization", "paid_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Despesa {self.source_type}:{self.external_id} R$ {self.amount} ({self.status})"

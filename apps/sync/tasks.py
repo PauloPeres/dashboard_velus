@@ -22,8 +22,9 @@ from apps.customers.infrastructure.repositories import (
     ContractRepository,
     CustomerRepository,
 )
-from apps.financial.domain.dto import InvoiceDTO, PaymentDTO
+from apps.financial.domain.dto import ExpenseDTO, InvoiceDTO, PaymentDTO
 from apps.financial.infrastructure.repositories import (
+    ExpenseRepository,
     InvoiceRepository,
     PaymentRepository,
 )
@@ -110,6 +111,10 @@ def _payment_port_call(source: Any, since: datetime | None) -> Iterator[PaymentD
     return source.list_payments(since=since)
 
 
+def _expense_port_call(source: Any, since: datetime | None) -> Iterator[ExpenseDTO]:
+    return source.list_expenses(since=since)
+
+
 def _repo_upsert(repository: Any, dto: Any, source_type: SourceType) -> None:
     """Genérico: todos os repositories expõem o mesmo upsert_from_dto."""
     repository.upsert_from_dto(dto, source_type=source_type)
@@ -127,6 +132,7 @@ _DISPATCH: dict[
     Capability.CONTRACTS: (_contract_port_call, ContractRepository, _repo_upsert),
     Capability.INVOICES: (_invoice_port_call, InvoiceRepository, _repo_upsert),
     Capability.PAYMENTS: (_payment_port_call, PaymentRepository, _repo_upsert),
+    Capability.EXPENSES: (_expense_port_call, ExpenseRepository, _repo_upsert),
 }
 
 
@@ -236,7 +242,7 @@ def _run_sync(
                     try:
                         repo_upsert(repository, dto, source_type)
                         count += 1
-                    except Exception as record_exc:  # noqa: BLE001
+                    except Exception as record_exc:
                         skipped += 1
                         slog.warning(
                             "sync_record_skipped",

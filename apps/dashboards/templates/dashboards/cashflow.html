@@ -1,0 +1,71 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Fluxo de Caixa · Velus{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Fluxo de Caixa</h1>
+
+{% if cashflow_data %}
+{% with last=cashflow_data|last %}
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+    {% include "dashboards/_kpi_card.html" with label="Receita (último mês)" value="R$ "|add:last.revenue|floatformat:0|intcomma %}
+    {% include "dashboards/_kpi_card.html" with label="Despesas (último mês)" value="R$ "|add:last.expenses|floatformat:0|intcomma %}
+    {% include "dashboards/_kpi_card.html" with label="Saldo (último mês)" value="R$ "|add:last.net|floatformat:0|intcomma %}
+    {% include "dashboards/_kpi_card.html" with label="Saldo Acumulado" value="R$ "|add:last.cumulative_net|floatformat:0|intcomma %}
+</div>
+{% endwith %}
+{% endif %}
+
+<div class="grid grid-cols-1 gap-6 mb-8">
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-4">Receita vs Despesas — últimos 12 meses</h2>
+        <div id="cashflow-chart" style="height:380px;"></div>
+    </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-1">Top Fornecedores</h2>
+        <p class="text-sm text-gray-500 mb-4">Despesas pagas — últimos 3 meses</p>
+        {% if supplier_data %}
+        <div id="supplier-chart" style="height:320px;"></div>
+        {% else %}
+        <p class="text-sm text-gray-400 py-8 text-center">Sem dados de fornecedores.</p>
+        {% endif %}
+    </div>
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-1">Por Categoria</h2>
+        <p class="text-sm text-gray-500 mb-4">Distribuição de despesas pagas — últimos 3 meses</p>
+        {% if category_data %}
+        <div id="category-chart" style="height:320px;"></div>
+        {% else %}
+        <p class="text-sm text-gray-400 py-8 text-center">Sem dados de categorias.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% if not cashflow_data %}
+<div class="mt-8 bg-blue-50 border border-blue-200 rounded-lg p-4">
+    <p class="text-sm text-blue-800">
+        Sem dados de fluxo de caixa. Execute um sync de despesas e pagamentos para popular este dashboard.
+    </p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{{ cashflow_chart_json|json_script:"cashflow-data" }}
+{% if supplier_data %}{{ supplier_chart_json|json_script:"supplier-data" }}{% endif %}
+{% if category_data %}{{ category_chart_json|json_script:"category-data" }}{% endif %}
+<script>
+    const layout = {responsive: true};
+    Plotly.newPlot("cashflow-chart", JSON.parse(document.getElementById("cashflow-data").textContent), layout);
+    {% if supplier_data %}
+    Plotly.newPlot("supplier-chart", JSON.parse(document.getElementById("supplier-data").textContent), layout);
+    {% endif %}
+    {% if category_data %}
+    Plotly.newPlot("category-chart", JSON.parse(document.getElementById("category-data").textContent), layout);
+    {% endif %}
+</script>
+{% endblock %}

@@ -195,3 +195,44 @@ class FactPayment(TenantModel):
         indexes = [
             models.Index(fields=["organization", "paid_date"]),
         ]
+
+
+class FactExpense(TenantModel):
+    """Evento de despesa — usado pra fluxo de caixa real e DRE.
+
+    `expense_date` = paid_at se pago, due_date se em aberto/cancelado.
+    Permite séries temporais de saídas de caixa consistentes.
+    """
+
+    expense = models.ForeignKey(
+        "financial.Expense",
+        on_delete=models.PROTECT,
+        related_name="fact",
+    )
+    expense_date = models.DateField(db_index=True)  # paid_at ou due_date
+    due_date = models.DateField()
+    paid_date = models.DateField(null=True, blank=True)
+
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    paid_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    status = models.CharField(max_length=16)
+    category = models.CharField(max_length=128, blank=True, default="")
+    supplier_name = models.CharField(max_length=255, blank=True, default="")
+    description = models.CharField(max_length=512, blank=True, default="")
+
+    class Meta:
+        verbose_name = _("Fato: despesa")
+        verbose_name_plural = _("Fatos: despesas")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "expense"],
+                name="unique_fact_expense",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "expense_date"]),
+            models.Index(fields=["organization", "status"]),
+            models.Index(fields=["organization", "category"]),
+        ]

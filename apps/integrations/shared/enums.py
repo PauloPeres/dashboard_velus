@@ -37,3 +37,4 @@ class Capability(models.TextChoices):
     CONTRACTS = "CONTRACTS", "Contratos"
     INVOICES = "INVOICES", "Faturas"
     PAYMENTS = "PAYMENTS", "Pagamentos"
+    EXPENSES = "EXPENSES", "Despesas"

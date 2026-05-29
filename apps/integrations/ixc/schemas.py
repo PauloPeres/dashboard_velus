@@ -258,3 +258,70 @@ class IxcPlanSchema(BaseModel):
         if v is None or v == "":
             return "0"
         return str(v).replace(",", ".")
+
+
+# =============================================================================
+# Despesa — endpoint /fn_apagar no IXC (contas a pagar)
+# =============================================================================
+class IxcExpenseSchema(BaseModel):
+    """Schema do registro `fn_apagar` (contas a pagar) na API IXC.
+
+    Status: F=Pago, A=Aberto, C=Cancelado.
+    Datas podem ser "" em vez de null — validadores normalizam pra "".
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    id_fornecedor: str = Field(default="")
+    valor: str = Field(default="0")
+    valor_pago: str = Field(default="0")
+    valor_aberto: str = Field(default="0")
+    data_emissao: str = Field(default="")    # YYYY-MM-DD ou ""
+    data_vencimento: str = Field(default="")  # YYYY-MM-DD
+    data_pagamento: str = Field(default="")   # YYYY-MM-DD ou ""
+    status: str = Field(default="A")          # F=pago, A=aberto, C=cancelado
+    tipo_pagamento: str = Field(default="")
+    obs: str = Field(default="")
+
+    @field_validator("id", "id_fornecedor", "status", "tipo_pagamento", "obs", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("valor", "valor_pago", "valor_aberto", mode="before")
+    @classmethod
+    def _coerce_amount(cls, v: Any) -> str:
+        if v in (None, ""):
+            return "0"
+        return str(v).replace(",", ".")
+
+    @field_validator("data_emissao", "data_vencimento", "data_pagamento", mode="before")
+    @classmethod
+    def _coerce_date_str(cls, v: Any) -> str:
+        if v in (None, "", "0000-00-00", "0000-00-00 00:00:00"):
+            return ""
+        s = str(v)
+        return s[:10]  # YYYY-MM-DD
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})
+
+
+# =============================================================================
+# Fornecedor — endpoint /fornecedor no IXC
+# =============================================================================
+class IxcSupplierSchema(BaseModel):
+    """Schema do registro `fornecedor` na API IXC."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    fantasia: str = Field(default="")
+    cpf_cnpj: str = Field(default="")
+    ativo: str = Field(default="S")
+
+    @field_validator("id", "fantasia", "cpf_cnpj", "ativo", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
