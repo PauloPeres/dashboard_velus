@@ -516,6 +516,7 @@ def pessoas(request: HttpRequest) -> HttpResponse:
             "num_people": len(people),
             "anomalies": people_anomalies,
             "people_chart_json": charts.people_expenses_stacked_bar(data),
+            "mao_chart_json": charts.mao_de_obra_stacked_bar(mao_detail),
         },
     )
 

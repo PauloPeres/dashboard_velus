@@ -1875,13 +1875,14 @@ def compute_mao_de_obra_detail(
     Retorna:
       - transactions: list[{paid_at_str, amount, amount_str, label}]
         — todos os registros do período, mais recentes primeiro
-      - by_category: list[{label, count, total, total_str, pct}]
+      - by_category: list[{label, count, total, total_str, pct, monthly: [float]}]
         — agrupado por primeira linha da descrição, ordenado por total desc
+      - month_labels: list[str]  — para o gráfico
+      - months: list[str]        — YYYY-MM
       - total: float
       - count: int
     """
     from apps.financial.infrastructure.models import Expense as ExpenseModel
-    from decimal import Decimal
 
     today = timezone.now().date()
     cutoff = _first_of_month_n_ago(today, months)
@@ -1899,12 +1900,17 @@ def compute_mao_de_obra_detail(
     )
 
     transactions = []
-    category_totals: dict[str, dict[str, Any]] = {}
+    # {label → {month_key → float}}
+    cat_monthly: dict[str, dict[str, float]] = {}
+    cat_counts: dict[str, int] = {}
+    all_months_set: set[str] = set()
 
     for row in qs:
         amt = float(row["amount"])
         label = _normalize_mao_label(row["description"] or "")
-        paid_str = row["paid_at"].strftime("%d/%m/%Y") if row["paid_at"] else "—"
+        paid_date = row["paid_at"]
+        mk = paid_date.strftime("%Y-%m") if paid_date else ""
+        paid_str = paid_date.strftime("%d/%m/%Y") if paid_date else "—"
 
         transactions.append({
             "paid_at_str": paid_str,
@@ -1913,26 +1919,42 @@ def compute_mao_de_obra_detail(
             "label": label,
         })
 
-        if label not in category_totals:
-            category_totals[label] = {"count": 0, "total": 0.0}
-        category_totals[label]["count"] += 1
-        category_totals[label]["total"] += amt
+        if mk:
+            all_months_set.add(mk)
+        if label not in cat_monthly:
+            cat_monthly[label] = {}
+            cat_counts[label] = 0
+        if mk:
+            cat_monthly[label][mk] = cat_monthly[label].get(mk, 0.0) + amt
+        cat_counts[label] += 1
 
-    grand = sum(v["total"] for v in category_totals.values())
+    sorted_months = sorted(all_months_set)
+    month_labels: list[str] = []
+    for mk in sorted_months:
+        try:
+            from datetime import date as _d
+            month_labels.append(_d.fromisoformat(mk + "-01").strftime("%b/%y"))
+        except ValueError:
+            month_labels.append(mk)
 
     def _fmt(v: float) -> str:
         return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    grand = sum(
+        sum(mv.values()) for mv in cat_monthly.values()
+    )
 
     by_category = sorted(
         [
             {
                 "label": lbl,
-                "count": data["count"],
-                "total": data["total"],
-                "total_str": _fmt(data["total"]),
-                "pct": round(data["total"] / grand * 100, 1) if grand > 0 else 0.0,
+                "count": cat_counts[lbl],
+                "total": sum(mv.values()),
+                "total_str": _fmt(sum(mv.values())),
+                "pct": round(sum(mv.values()) / grand * 100, 1) if grand > 0 else 0.0,
+                "monthly": [mv.get(mk, 0.0) for mk in sorted_months],
             }
-            for lbl, data in category_totals.items()
+            for lbl, mv in cat_monthly.items()
         ],
         key=lambda x: -x["total"],
     )
@@ -1940,6 +1962,8 @@ def compute_mao_de_obra_detail(
     return {
         "transactions": transactions,
         "by_category": by_category,
+        "month_labels": month_labels,
+        "months": sorted_months,
         "total": grand,
         "total_str": _fmt(grand),
         "count": len(transactions),

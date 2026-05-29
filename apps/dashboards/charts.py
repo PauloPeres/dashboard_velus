@@ -709,6 +709,52 @@ def people_expenses_stacked_bar(data: dict[str, Any]) -> str:
     return _to_json(fig)
 
 
+def mao_de_obra_stacked_bar(data: dict[str, Any]) -> str:
+    """Barras empilhadas — Mão de Obra Terceirizada por categoria (descrição) mês a mês."""
+    labels = data.get("month_labels", [])
+    categories = data.get("by_category", [])
+
+    # Paleta diferente do gráfico de pessoas — tons de laranja/âmbar/terra
+    COLORS = [
+        "#ea580c", "#d97706", "#b45309", "#c2410c", "#92400e",
+        "#f97316", "#fb923c", "#fbbf24", "#a16207", "#78350f",
+    ]
+
+    traces: list[Any] = []
+    for i, cat in enumerate(categories):
+        if not any(v > 0 for v in cat["monthly"]):
+            continue
+        # Trunca o label se muito longo para a legenda
+        name = cat["label"]
+        if len(name) > 40:
+            name = name[:37] + "…"
+        traces.append(
+            go.Bar(
+                name=name,
+                x=labels,
+                y=cat["monthly"],
+                marker_color=COLORS[i % len(COLORS)],
+                hovertemplate=f"<b>%{{x}}</b><br>{name}<br>R$ %{{y:,.0f}}<extra></extra>",
+            )
+        )
+
+    if not traces:
+        traces = [go.Bar(x=[], y=[])]
+
+    fig = go.Figure(
+        data=traces,
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "legend": {"orientation": "h", "y": -0.35, "font": {"size": 10}},
+            "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f"},
+            "margin": {"l": 60, "r": 20, "t": 30, "b": 120},
+        },
+    )
+    return _to_json(fig)
+
+
 def dre_by_account_stacked_bar(data: dict[str, Any]) -> str:
     """Barras empilhadas — despesas por conta do planejamento IXC + linha de receita."""
     labels = data.get("month_labels", [])
