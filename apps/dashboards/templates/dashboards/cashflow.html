@@ -7,14 +7,12 @@
 <h1 class="text-2xl font-bold mb-6">Fluxo de Caixa</h1>
 
 {% if cashflow_data %}
-{% with last=cashflow_data|last %}
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-    {% include "dashboards/_kpi_card.html" with label="Receita (último mês)" value="R$ "|add:last.revenue|floatformat:0|intcomma %}
-    {% include "dashboards/_kpi_card.html" with label="Despesas (último mês)" value="R$ "|add:last.expenses|floatformat:0|intcomma %}
-    {% include "dashboards/_kpi_card.html" with label="Saldo (último mês)" value="R$ "|add:last.net|floatformat:0|intcomma %}
-    {% include "dashboards/_kpi_card.html" with label="Saldo Acumulado" value="R$ "|add:last.cumulative_net|floatformat:0|intcomma %}
+    {% include "dashboards/_kpi_card.html" with label="Receita (último mês)" value=last_revenue_str %}
+    {% include "dashboards/_kpi_card.html" with label="Despesas (último mês)" value=last_expenses_str %}
+    {% include "dashboards/_kpi_card.html" with label="Saldo (último mês)" value=last_net_str %}
+    {% include "dashboards/_kpi_card.html" with label="Saldo Acumulado" value=last_cumulative_str %}
 </div>
-{% endwith %}
 {% endif %}
 
 <div class="grid grid-cols-1 gap-6 mb-8">
@@ -59,13 +57,8 @@
 {% if supplier_data %}{{ supplier_chart_json|json_script:"supplier-data" }}{% endif %}
 {% if category_data %}{{ category_chart_json|json_script:"category-data" }}{% endif %}
 <script>
-    const layout = {responsive: true};
-    Plotly.newPlot("cashflow-chart", JSON.parse(document.getElementById("cashflow-data").textContent), layout);
-    {% if supplier_data %}
-    Plotly.newPlot("supplier-chart", JSON.parse(document.getElementById("supplier-data").textContent), layout);
-    {% endif %}
-    {% if category_data %}
-    Plotly.newPlot("category-chart", JSON.parse(document.getElementById("category-data").textContent), layout);
-    {% endif %}
+    renderChart("cashflow-chart", "cashflow-data");
+    {% if supplier_data %}renderChart("supplier-chart", "supplier-data");{% endif %}
+    {% if category_data %}renderChart("category-chart", "category-data");{% endif %}
 </script>
 {% endblock %}

@@ -213,6 +213,13 @@ def cashflow(request: HttpRequest) -> HttpResponse:
     supplier_data = compute_expense_by_supplier(org, months=3)
     category_data = compute_expense_by_category(org, months=3)
 
+    # Pré-formatados — evita bug de |add: string+float no template
+    last = cashflow_data[-1] if cashflow_data else {}
+    last_revenue_str = _fmt_brl(last.get("revenue", 0))
+    last_expenses_str = _fmt_brl(last.get("expenses", 0))
+    last_net_str = _fmt_brl(last.get("net", 0))
+    last_cumulative_str = _fmt_brl(last.get("cumulative_net", 0))
+
     return render(
         request,
         "dashboards/cashflow.html",
@@ -220,6 +227,10 @@ def cashflow(request: HttpRequest) -> HttpResponse:
             "cashflow_data": cashflow_data,
             "supplier_data": supplier_data,
             "category_data": category_data,
+            "last_revenue_str": last_revenue_str,
+            "last_expenses_str": last_expenses_str,
+            "last_net_str": last_net_str,
+            "last_cumulative_str": last_cumulative_str,
             "cashflow_chart_json": charts.cashflow_waterfall(cashflow_data),
             "supplier_chart_json": charts.expense_by_supplier_bar(supplier_data),
             "category_chart_json": charts.expense_by_category_pie(category_data),
@@ -309,12 +320,21 @@ def burn(request: HttpRequest) -> HttpResponse:
     burn_data = compute_burn_rate(org, months=6)
     expense_series = compute_expense_series(org, months=12)
 
+    # Pré-formatados — evita bug de |add: string+float no template
+    burn_rate_str = _fmt_brl(burn_data.get("burn_rate", 0))
+    trend_pct_str = f"{burn_data.get('trend_pct', 0):.1f}%"
+    last_exp = expense_series[-1] if expense_series else {}
+    last_expense_str = _fmt_brl(last_exp.get("expenses", 0))
+
     return render(
         request,
         "dashboards/burn.html",
         {
             "burn": burn_data,
             "expense_series": expense_series,
+            "burn_rate_str": burn_rate_str,
+            "trend_pct_str": trend_pct_str,
+            "last_expense_str": last_expense_str,
             "burn_chart_json": charts.burn_rate_line(
                 burn_data["burn_series"], burn_rate=burn_data["burn_rate"]
             ),

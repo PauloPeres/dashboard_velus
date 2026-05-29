@@ -8,13 +8,11 @@
 <p class="text-sm text-gray-500 mb-6">Média mensal de despesas pagas e tendência de custo operacional.</p>
 
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-    {% include "dashboards/_kpi_card.html" with label="Burn Rate (média 3m)" value="R$ "|add:burn.burn_rate|floatformat:0|intcomma subtitle="Média dos últimos 3 meses pagos" %}
-    {% include "dashboards/_kpi_card.html" with label="Tendência" value=burn.trend_pct|floatformat:1|add:"%" subtitle="Variação últimos 3 meses" delta=burn.trend_pct delta_positive=burn.trend_pct %}
+    {% include "dashboards/_kpi_card.html" with label="Burn Rate (média 3m)" value=burn_rate_str subtitle="Média dos últimos 3 meses pagos" %}
+    {% include "dashboards/_kpi_card.html" with label="Tendência" value=trend_pct_str subtitle="Variação últimos 3 meses" %}
     {% include "dashboards/_kpi_card.html" with label="Meses analisados" value=burn.months_sampled subtitle="Meses com despesas pagas" %}
     {% if expense_series %}
-    {% with last=expense_series|last %}
-    {% include "dashboards/_kpi_card.html" with label="Despesas (último mês)" value="R$ "|add:last.expenses|floatformat:0|intcomma %}
-    {% endwith %}
+    {% include "dashboards/_kpi_card.html" with label="Despesas (último mês)" value=last_expense_str %}
     {% endif %}
 </div>
 
@@ -70,6 +68,6 @@
 {% block scripts %}
 {{ burn_chart_json|json_script:"burn-data" }}
 <script>
-    Plotly.newPlot("burn-chart", JSON.parse(document.getElementById("burn-data").textContent), {responsive: true});
+    renderChart("burn-chart", "burn-data");
 </script>
 {% endblock %}
