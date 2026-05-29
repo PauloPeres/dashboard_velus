@@ -48,19 +48,18 @@ dev = [
     "factory-boy>=3.3",
     "freezegun>=1.5",
     "respx>=0.21",                          # mock httpx em testes
-
     # Lint / format / types
     "ruff>=0.8",
     "mypy>=1.13",
     "django-stubs[compatible-mypy]>=5.1",
     "celery-types>=0.22",
     "types-cryptography>=3.3",
-
     # Developer experience
     "ipython>=8.30",
     "django-debug-toolbar>=4.4",
     "pre-commit>=4.0",
     "django-extensions>=3.2",
+    "pytest-playwright>=0.8.0",
 ]
 
 # -----------------------------------------------------------------------------
@@ -177,6 +176,8 @@ django_settings_module = "config.settings.development"
 DJANGO_SETTINGS_MODULE = "config.settings.test"
 python_files = ["test_*.py", "*_test.py"]
 testpaths = ["tests", "apps"]
+# Exclui testes Playwright do run padrão — rodar separado com --base-url
+norecursedirs = ["tests/playwright", ".venv", "node_modules", ".git"]
 addopts = [
     "--strict-markers",
     "--strict-config",
