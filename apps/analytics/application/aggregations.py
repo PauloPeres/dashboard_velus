@@ -441,9 +441,9 @@ def compute_expense_by_category(
 ) -> list[dict[str, Any]]:
     """Distribuição de despesas pagas por categoria IXC (planejamento) nos últimos N meses.
 
-    Usa `id_contas` do campo `raw_extras` da tabela Expense — a mesma
-    categoria que o usuário vê no sistema IXC. Não usa a heurística de
-    keyword-matching que gerava categorias genéricas como "Conectividade".
+    Usa `id_conta` (singular) do campo `raw_extras` da tabela Expense — a conta
+    analítica (planejamento_analitico.id) que o usuário vê no sistema IXC.
+    NÃO usa `id_contas` (plural) que é a conta bancária de pagamento.
     """
     from apps.financial.infrastructure.models import Expense as ExpenseModel
 
@@ -456,22 +456,26 @@ def compute_expense_by_category(
             paid_at__isnull=False,
             paid_at__gte=cutoff,
         )
-        .annotate(id_contas_str=KeyTextTransform("id_contas", "raw_extras"))
-        .values("id_contas_str")
+        .annotate(id_conta_str=KeyTextTransform("id_conta", "raw_extras"))
+        .values("id_conta_str")
         .annotate(
             total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
             count=Count("id"),
         )
         .order_by("-total")
     )
-    return [
-        {
-            "category": _get_planeja_label(row["id_contas_str"]),
-            "amount": float(row["total"]),
-            "count": row["count"],
-        }
-        for row in qs
-    ]
+    # Agrupa por id_planejamento (conta pai) — múltiplos id_conta podem ter o mesmo pai
+    parent_map: dict[str, dict[str, Any]] = {}
+    for row in qs:
+        id_conta = str(row["id_conta_str"] or "0")
+        id_plan = _CONTA_TO_PLANO.get(id_conta, "0")
+        entry = _PLANEJAMENTO.get(id_plan, {})
+        label = entry.get("nome") or f"Conta #{id_plan}"
+        if label not in parent_map:
+            parent_map[label] = {"category": label, "amount": 0.0, "count": 0}
+        parent_map[label]["amount"] += float(row["total"])
+        parent_map[label]["count"] += row["count"]
+    return sorted(parent_map.values(), key=lambda x: -x["amount"])
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
@@ -1380,6 +1384,133 @@ def compute_churn_summary(organization: Organization) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Planejamento (plano de contas IXC) — mapa estático atualizado via API
 # ---------------------------------------------------------------------------
+# NOTA: O campo correto para classificação contábil em fn_apagar é `id_conta`
+# (singular), que aponta para planejamento_analitico.id. O campo `id_contas`
+# (plural) é a conta bancária (tabela `contas`) — NÃO usar para DRE.
+#
+# _CONTA_TO_PLANO: id_conta (planejamento_analitico.id) → id_planejamento (planejamento.id)
+# Construído a partir do endpoint planejamento_analitico em 2026-05-29.
+_CONTA_TO_PLANO: dict[str, str] = {
+    "0":     "0",
+    "103":   "73",   # Fretes
+    "112":   "78",   # Despesas Comissões
+    "115":   "9",    # Despesas Operacionais
+    "141":   "56",   # CUSTO (Água)
+    "147":   "10",   # Despesas Financeiras
+    "174":   "52",   # Receitas Vendas Serviços
+    "178":   "61",   # DESPESAS (Telefone)
+    "181":   "68",   # Receitas Financeiras Juros
+    "183":   "11",   # Veículos
+    "187":   "10",   # Despesas Financeiras
+    "212":   "94",   # SAÍDAS (INSS)
+    "213":   "94",   # SAÍDAS (FGTS)
+    "214":   "64",   # Custo com Impostos (Simples Nacional)
+    "216":   "14",   # Despesas Não Operacionais
+    "228":   "60",   # Despesas Operacionais (Aluguel Predial)
+    "234":   "74",   # Serviços Terceiros (Honorários)
+    "240":   "10",   # Despesas Financeiras (Taxas)
+    "246":   "9",    # Despesas Operacionais
+    "250":   "80",   # Custo Links e Transportes
+    "263":   "14",   # Despesas Não Operacionais (Segurança)
+    "267":   "88",   # Funcionários (Férias)
+    "268":   "14",   # Despesas Não Operacionais (Viagem)
+    "286":   "69",   # Receitas Financeiras Outros
+    "324":   "9",    # Despesas Operacionais (serviços terceiros)
+    "328":   "3",    # Fornecedores (Salários a pagar)
+    "329":   "71",   # Cancelamentos
+    "336":   "75",   # Custos das Mercadorias Vendidas
+    "339":   "64",   # Custo com Impostos (IPI)
+    "340":   "9",    # Despesas Operacionais (Acréscimos)
+    "342":   "71",   # Cancelamentos (Renegociação)
+    "345":   "61",   # DESPESAS (Energia Elétrica)
+    "347":   "76",   # Despesas com Veículos (Combustível)
+    "348":   "76",   # Despesas com Veículos (Manutenção)
+    "353":   "76",   # Despesas com Veículos (IPVA)
+    "354":   "64",   # Custo com Impostos (IPTU)
+    "358":   "64",   # Custo com Impostos (ICMS)
+    "359":   "10",   # Despesas Financeiras (Tarifas bancárias)
+    "360":   "79",   # Publicidade (Facebook, Google)
+    "367":   "3",    # Fornecedores
+    "368":   "60",   # Despesas Operacionais (Serviços contábeis)
+    "376":   "60",   # Despesas Operacionais (Manutenção e Limpeza)
+    "380":   "32",   # Maquinas e Equipamentos
+    "384":   "66",   # Despesas Financeiras (grupo)
+    "395":   "72",   # Custos Sobre Operação
+    "396":   "72",   # Custos Sobre Operação (Infra Terceiros)
+    "397":   "8",    # Salários e ordenados
+    "416":   "3",    # Fornecedores
+    "417":   "74",   # Serviços Terceiros (Software)
+    "422":   "9",    # Despesas Operacionais (Aluguel Infra)
+    "432":   "64",   # Custo com Impostos
+    "47":    "32",   # Maquinas e Equipamentos
+    "549":   "3",    # Fornecedores (Anuidade Cartão)
+    "551":   "3",    # Fornecedores
+    "554":   "3",    # Fornecedores
+    "565":   "3",    # Fornecedores (Compra HDD)
+    "580":   "3",    # Fornecedores (Servidor)
+    "586":   "3",    # Fornecedores (Limpeza)
+    "602":   "3",    # Fornecedores (Uniformes)
+    "608":   "3",    # Fornecedores (Vale Alimentação)
+    "610":   "72",   # Custos Sobre Operação (Manutenção Contratos)
+    "621":   "3",    # Fornecedores (Material)
+    "637":   "56",   # CUSTO (Fornecedores)
+    "772":   "3",    # Fornecedores (Curso técnico)
+    "807":   "3",    # Fornecedores (Engenheiro)
+    "879":   "3",    # Fornecedores
+    "890":   "3",    # Fornecedores (Marketing Rede Social)
+    "952":   "4",    # Clientes
+    "1201":  "3",    # Fornecedores (ONU)
+    "1875":  "3",    # Fornecedores (Tarifa Registro Cobrança)
+    "2042":  "3",    # Fornecedores (Panfletagem)
+    "2106":  "3",    # Fornecedores (Emprestimo Bradesco)
+    "2507":  "3",    # Fornecedores (Ação de vendas)
+    "2519":  "3",    # Fornecedores
+    "2549":  "20",   # ATIVO CIRCULANTE (Consorcio)
+    "2621":  "3",    # Fornecedores (Marketing diversos)
+    "2669":  "3",    # Fornecedores
+    "2715":  "88",   # Funcionários (Exames médicos)
+    "2745":  "21",   # Caixa (Aporte)
+    "2754":  "3",    # Fornecedores
+    "3044":  "3",    # Fornecedores (Vale Transporte)
+    "3118":  "3",    # Fornecedores
+    "3144":  "3",    # Fornecedores (Limpeza ar cond)
+    "3146":  "3",    # Fornecedores (IRPJ)
+    "3148":  "3",    # Fornecedores (CSLL)
+    "3291":  "59",   # Custos dos Serviços Vendidos
+    "4050":  "12",   # Empréstimos e financiamentos (Bancário)
+    "4064":  "59",   # Custos dos Serviços Vendidos (Materiais Instalação)
+    "4407":  "3",    # Fornecedores (Correios)
+    "4408":  "3",    # Fornecedores
+    "5895":  "94",   # SAÍDAS (Vale Transporte)
+    "5927":  "56",   # CUSTO (Vale Alimentação)
+    "6055":  "60",   # Despesas Operacionais (Móveis)
+    "6056":  "60",   # Despesas Operacionais (Supermercado)
+    "6058":  "60",   # Despesas Operacionais (Limpeza e Higiene)
+    "6059":  "63",   # Folha de Pagamento (Holerite)
+    "6087":  "59",   # Custos dos Serviços Vendidos (TV)
+    "6584":  "33",   # Participações Societárias (Retirada Lucro)
+    "6608":  "60",   # Despesas Operacionais (Construção)
+    "6632":  "93",   # Pro-Labore
+    "6638":  "92",   # Honorários Advocatícios
+    "6643":  "60",   # Despesas Operacionais (Materiais Escritório)
+    "6765":  "72",   # Custos Sobre Operação (13º)
+    "6879":  "22",   # Bancos (Anuidade cartão crédito)
+    "6980":  "72",   # Custos Sobre Operação (Locação Infra)
+    "7114":  "51",   # Receitas Vendas Telefonia
+    "7203":  "88",   # Funcionários (Uniformes)
+    "7266":  "79",   # Publicidade (Brindes)
+    "7296":  "66",   # Despesas Financeiras (Rescisórias)
+    "10028": "27",   # INVESTIMENTOS
+    "10168": "12",   # Empréstimos e financiamentos
+    "10459": "76",   # Despesas com Veículos (Seguro)
+    "10703": "59",   # Custos dos Serviços Vendidos (Manutenção)
+    "10912": "61",   # DESPESAS (Manutenção predial)
+    "11196": "61",   # DESPESAS
+    "11244": "27",   # INVESTIMENTOS
+    "11285": "27",   # INVESTIMENTOS (Comissão)
+    "12011": "61",   # DESPESAS (Ferramentas)
+}
+
 _PLANEJAMENTO: dict[str, dict[str, str]] = {
     "1":  {"cod": "1.1.01.001",       "nome": "Caixa Geral",                         "tipo": "A"},
     "2":  {"cod": "1.1.02.001",       "nome": "Bancos Geral",                         "tipo": "A"},
@@ -1392,7 +1523,7 @@ _PLANEJAMENTO: dict[str, dict[str, str]] = {
     "9":  {"cod": "5.2.01.002",       "nome": "Despesas Operacionais",                "tipo": "D"},
     "10": {"cod": "5.3.01.001",       "nome": "Despesas Financeiras",                 "tipo": "D"},
     "11": {"cod": "1.2.02.004",       "nome": "Veículos",                             "tipo": "A"},
-    "12": {"cod": "5.1.03.0001",      "nome": "Empréstimos e financiamentos",         "tipo": "D"},
+    "12": {"cod": "5.3.01.0001",      "nome": "Empréstimos e financiamentos",         "tipo": "D"},  # cod corrigido p/ 5.3 (financeiro)
     "13": {"cod": "2.3.01.001",       "nome": "Dividendos",                           "tipo": "P"},
     "14": {"cod": "5.3.02.001",       "nome": "Outras Despesas Não Operacionais",     "tipo": "D"},
     "15": {"cod": "1.2.01.002",       "nome": "Aplicações",                           "tipo": "A"},
@@ -1424,12 +1555,21 @@ _PLANEJAMENTO: dict[str, dict[str, str]] = {
     "78": {"cod": "5.1.03.001",       "nome": "Despesas Comissões",                   "tipo": "D"},
     "79": {"cod": "5.1.03.002",       "nome": "Publicidade",                          "tipo": "D"},
     "80": {"cod": "4.1.02.001",       "nome": "Custo Links e Transportes",            "tipo": "C"},
+    "20": {"cod": "1.1",              "nome": "Ativo Circulante",                     "tipo": "A"},
+    "21": {"cod": "1.1.01",           "nome": "Caixa",                                "tipo": "A"},
+    "22": {"cod": "1.1.02",           "nome": "Bancos",                               "tipo": "A"},
+    "27": {"cod": "1.2.01",           "nome": "Investimentos",                        "tipo": "A"},
+    "32": {"cod": "1.2.02.003",       "nome": "Máquinas e Equipamentos",              "tipo": "A"},
+    "33": {"cod": "1.2.01.001",       "nome": "Participações Societárias",            "tipo": "A"},
+    "51": {"cod": "3.1.01.002",       "nome": "Receitas Vendas Telefonia",            "tipo": "R"},
+    "52": {"cod": "3.1.01.003",       "nome": "Receitas Vendas Serviços",             "tipo": "R"},
     "82": {"cod": "1.2.02.005",       "nome": "Comodatos",                            "tipo": "A"},
     "86": {"cod": "5.2.02.003",       "nome": "Férias e Décimos",                     "tipo": "D"},
     "87": {"cod": "5.2.02.004",       "nome": "Admissões e Rescisões",                "tipo": "D"},
     "88": {"cod": "5.4",              "nome": "Funcionários (despesas geral)",        "tipo": "D"},
     "92": {"cod": "5.3.02.002",       "nome": "Honorários Advocatícios",              "tipo": "D"},
     "93": {"cod": "4.2.",             "nome": "Pro-Labore",                           "tipo": "C"},
+    "94": {"cod": "5.2.02.001",       "nome": "Encargos Sociais",                     "tipo": "D"},  # INSS/FGTS/VT
     "95": {"cod": "1.2.01.03",        "nome": "Comissão (investimento)",              "tipo": "A"},
     "0":  {"cod": "",                 "nome": "(Sem categoria)",                      "tipo": "?"},
 }
@@ -1446,7 +1586,9 @@ _DRE_SECTION_MAP: dict[str, tuple[str, int]] = {
     "5":   ("Outras Despesas",                  5),
     "2":   ("Despesas Gerais (A Classificar)",  6),
     "3":   ("Outros Lançamentos",               7),
-    "1":   ("Movimentações de Ativo",           8),
+    "1.2": ("Investimentos & Imobilizado",      8),
+    "1.1": ("Movimentações de Caixa",           9),
+    "1":   ("Movimentações de Ativo",           9),
 }
 
 # Fornecedores que são pessoas físicas ou PJ individuais (não empresas grandes)
@@ -1489,14 +1631,23 @@ _PERSON_SUPPLIERS: dict[str, tuple[str, str]] = {
 _MAO_DE_OBRA_NAME = "MÃO DE OBRA TERCERIZADA"
 
 
-def _get_planeja_label(id_contas: str | None) -> str:
-    """Retorna label do planejamento: 'cod — nome' ou fallback."""
-    if id_contas is None or str(id_contas) == "0":
-        return "(Sem categoria)"
-    entry = _PLANEJAMENTO.get(str(id_contas))
-    if entry:
-        return f"{entry['cod']} {entry['nome']}".strip()
-    return f"Conta #{id_contas}"
+def _resolve_conta(id_conta: str | None) -> dict[str, str]:
+    """Dado o id_conta (planejamento_analitico.id), retorna o planejamento pai.
+
+    Fluxo: id_conta → _CONTA_TO_PLANO → id_planejamento → _PLANEJAMENTO → {cod, nome, tipo}
+    """
+    ic = str(id_conta or "0").strip()
+    id_plan = _CONTA_TO_PLANO.get(ic, "0")
+    return _PLANEJAMENTO.get(id_plan) or _PLANEJAMENTO.get("0") or {"cod": "", "nome": f"Conta #{ic}", "tipo": "?"}
+
+
+def _get_planeja_label(id_conta: str | None) -> str:
+    """Retorna label do planejamento pai: 'cod — nome' ou fallback.
+
+    Usa id_conta (planejamento_analitico.id) para resolver via _CONTA_TO_PLANO.
+    """
+    entry = _resolve_conta(id_conta)
+    return f"{entry['cod']} {entry['nome']}".strip() or "(Sem categoria)"
 
 
 def _get_dre_section(cod: str) -> tuple[str, int]:
@@ -1562,7 +1713,9 @@ def compute_dre_by_account(
         (today.year - cutoff.year) * 12 + (today.month - cutoff.month) + 2,
     )
 
-    # --- Query 1: despesas agrupadas por (mês, id_contas) ---
+    # --- Query 1: despesas agrupadas por (mês, id_conta) ---
+    # NOTA: usa id_conta (singular) = planejamento_analitico.id (conta analítica)
+    # NÃO usa id_contas (plural) = contas.id (conta bancária de pagamento)
     _base_filter = dict(
         organization=organization,
         status="PAID",
@@ -1574,40 +1727,50 @@ def compute_dre_by_account(
         ExpenseModel.objects.filter(**_base_filter)
         .annotate(
             month=TruncMonth("paid_at"),
-            id_contas_str=KeyTextTransform("id_contas", "raw_extras"),
+            id_conta_str=KeyTextTransform("id_conta", "raw_extras"),
         )
-        .values("month", "id_contas_str")
+        .values("month", "id_conta_str")
         .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
-        .order_by("month", "id_contas_str")
+        .order_by("month", "id_conta_str")
     )
 
-    # Monta mapa: id_contas → {YYYY-MM → valor}
+    # Monta mapa: id_conta_analitica → {YYYY-MM → valor}
+    # Depois agrupa por id_planejamento (conta pai) via _CONTA_TO_PLANO
     all_months_set: set[str] = set()
-    raw: dict[str, dict[str, float]] = {}
+    raw_analitico: dict[str, dict[str, float]] = {}  # id_conta → {YYYY-MM → valor}
     for row in qs:
         mk = row["month"].strftime("%Y-%m")
         all_months_set.add(mk)
-        ic = str(row["id_contas_str"] or "0")
-        raw.setdefault(ic, {})[mk] = float(row["total"])
+        ic = str(row["id_conta_str"] or "0")
+        raw_analitico.setdefault(ic, {})[mk] = float(row["total"])
+
+    # Agrega por id_planejamento (conta pai)
+    raw: dict[str, dict[str, float]] = {}  # id_planejamento → {YYYY-MM → valor}
+    for ic, monthly_data in raw_analitico.items():
+        id_plan = _CONTA_TO_PLANO.get(ic, "0")
+        for mk, val in monthly_data.items():
+            raw.setdefault(id_plan, {})[mk] = raw.get(id_plan, {}).get(mk, 0.0) + val
 
     # --- Query 2: breakdown por fornecedor dentro de cada conta ---
     qs_sup = (
         ExpenseModel.objects.filter(**_base_filter)
         .annotate(
             month=TruncMonth("paid_at"),
-            id_contas_str=KeyTextTransform("id_contas", "raw_extras"),
+            id_conta_str=KeyTextTransform("id_conta", "raw_extras"),
         )
-        .values("month", "id_contas_str", "supplier_name")
+        .values("month", "id_conta_str", "supplier_name")
         .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
-        .order_by("id_contas_str", "supplier_name", "month")
+        .order_by("id_conta_str", "supplier_name", "month")
     )
-    # {id_contas → {supplier → {YYYY-MM → float}}}
+    # {id_planejamento → {supplier → {YYYY-MM → float}}} — agrega por conta pai
     supplier_raw: dict[str, dict[str, dict[str, float]]] = {}
     for row in qs_sup:
-        ic = str(row["id_contas_str"] or "0")
+        ic = str(row["id_conta_str"] or "0")
+        id_plan = _CONTA_TO_PLANO.get(ic, "0")
         sup = (row["supplier_name"] or "").strip() or "(Sem fornecedor)"
         mk = row["month"].strftime("%Y-%m")
-        supplier_raw.setdefault(ic, {}).setdefault(sup, {})[mk] = float(row["total"])
+        supplier_raw.setdefault(id_plan, {}).setdefault(sup, {})
+        supplier_raw[id_plan][sup][mk] = supplier_raw[id_plan][sup].get(mk, 0.0) + float(row["total"])
 
     sorted_months = sorted(all_months_set)
     month_labels = []
@@ -1620,9 +1783,10 @@ def compute_dre_by_account(
     n = len(sorted_months)
 
     # --- Categorias (flat) com info de seção DRE + breakdown por fornecedor ---
+    # raw agora está keyed por id_planejamento (conta pai)
     categories: list[dict[str, Any]] = []
-    for ic, monthly_data in sorted(raw.items(), key=lambda kv: -sum(kv[1].values())):
-        entry = _PLANEJAMENTO.get(ic, {})
+    for id_plan, monthly_data in sorted(raw.items(), key=lambda kv: -sum(kv[1].values())):
+        entry = _PLANEJAMENTO.get(id_plan, {})
         cod = entry.get("cod", "")
         section_name, section_order = _get_dre_section(cod)
         amounts = [monthly_data.get(mk, 0.0) for mk in sorted_months]
@@ -1631,7 +1795,7 @@ def compute_dre_by_account(
         # Fornecedores dentro desta conta, ordenados por total desc
         suppliers: list[dict[str, Any]] = []
         for sup_name, sup_monthly in sorted(
-            supplier_raw.get(ic, {}).items(),
+            supplier_raw.get(id_plan, {}).items(),
             key=lambda kv: -sum(kv[1].values()),
         ):
             sup_amounts = [sup_monthly.get(mk, 0.0) for mk in sorted_months]
@@ -1644,10 +1808,10 @@ def compute_dre_by_account(
                 })
 
         categories.append({
-            "id": ic,
+            "id": id_plan,
             "cod": cod,
-            "nome": entry.get("nome", f"Conta #{ic}"),
-            "label": _get_planeja_label(ic),
+            "nome": entry.get("nome", f"Conta #{id_plan}"),
+            "label": entry.get("nome", f"Conta #{id_plan}"),
             "tipo": entry.get("tipo", "?"),
             "section": section_name,
             "section_order": section_order,
