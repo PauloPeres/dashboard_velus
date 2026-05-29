@@ -49,6 +49,14 @@ _PII_FIELD_PREFIXES = (
     "rg", "ie", "im", "contato", "observa",
 )
 
+# Prefixos de campos monetários — nunca contêm PII, nunca anonimizar
+_MONETARY_FIELD_PREFIXES = (
+    "valor", "preco", "mensalidade", "comissao", "desconto",
+    "juros", "multa", "saldo", "credito", "debito",
+)
+
+_MONETARY_VALUE_RE = re.compile(r"\d+[.,]\d{2}")
+
 
 def _anonymize_value(value: Any, field_name: str) -> Any:
     """Substitui valores PII por placeholders, mantendo estrutura."""
@@ -58,9 +66,18 @@ def _anonymize_value(value: Any, field_name: str) -> Any:
         return value
 
     s = str(value)
+    field_lower = field_name.lower()
+
+    # Campo monetário → nunca é PII, preserva sem anonimizar
+    for prefix in _MONETARY_FIELD_PREFIXES:
+        if field_lower.startswith(prefix):
+            return s
+
+    # Valor que parece montante monetário → não é PII
+    if _MONETARY_VALUE_RE.fullmatch(s.strip()):
+        return s
 
     # Campo com nome suspeito → substitui inteiro
-    field_lower = field_name.lower()
     for prefix in _PII_FIELD_PREFIXES:
         if field_lower.startswith(prefix):
             return f"[REDACTED-{prefix}]"
