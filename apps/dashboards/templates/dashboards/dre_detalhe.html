@@ -57,13 +57,27 @@
 <!-- DRE Estruturada (P&L mensal) -->
 {% if dre_rows %}
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
-    <h2 class="text-lg font-semibold mb-1">DRE — Demonstração de Resultado</h2>
+    <div class="flex items-start justify-between gap-4 mb-1">
+        <h2 class="text-lg font-semibold">DRE — Demonstração de Resultado</h2>
+        <div class="flex items-center gap-2 flex-shrink-0">
+            <button
+                id="expand-all-btn"
+                onclick="setAllSections(true)"
+                class="text-xs px-3 py-1.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300 transition-colors"
+            >⊕ Expandir tudo</button>
+            <button
+                id="collapse-all-btn"
+                onclick="setAllSections(false)"
+                class="text-xs px-3 py-1.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300 transition-colors"
+            >⊖ Recolher tudo</button>
+        </div>
+    </div>
     <p class="text-xs text-gray-400 mb-4">
         Estrutura contábil baseada nos prefixos do plano de contas:
         <span class="font-mono bg-gray-100 px-1 rounded">4.x</span> Custos ·
         <span class="font-mono bg-gray-100 px-1 rounded">5.2.x</span> Operacionais ·
         <span class="font-mono bg-gray-100 px-1 rounded">5.3.x</span> Financeiras.
-        Seções expansíveis mostram as contas individuais.
+        Clique em uma seção para expandir individualmente ou use os botões acima.
     </p>
     <div class="overflow-x-auto">
         <table class="w-full text-xs border-collapse" style="min-width:600px;">
@@ -202,17 +216,32 @@
 <script>
   renderChart("dre-account-chart", "dre-account-data");
 
-  // Toggle de detalhe de seção
+  // Toggle individual de uma seção
   function toggleSection(headerRow) {
     var arrow = headerRow.querySelector("span");
     var expanded = arrow.textContent.trim() === "▼";
     arrow.textContent = expanded ? "▶" : "▼";
-
     var next = headerRow.nextElementSibling;
     while (next && next.classList.contains("detail-row")) {
       next.classList.toggle("hidden", expanded);
       next = next.nextElementSibling;
     }
+  }
+
+  // Expandir / recolher todas as seções de uma vez
+  function setAllSections(expand) {
+    // Mostra ou oculta todas as linhas de detalhe
+    document.querySelectorAll("tr.detail-row").forEach(function(row) {
+      row.classList.toggle("hidden", !expand);
+    });
+    // Atualiza as setas de todas as linhas de seção
+    document.querySelectorAll("tbody tr").forEach(function(row) {
+      var onclick = row.getAttribute("onclick") || "";
+      if (onclick.indexOf("toggleSection") !== -1) {
+        var arrow = row.querySelector("span");
+        if (arrow) arrow.textContent = expand ? "▼" : "▶";
+      }
+    });
   }
 </script>
 {% endblock %}
