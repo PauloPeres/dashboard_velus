@@ -1562,15 +1562,16 @@ def compute_dre_by_account(
         (today.year - cutoff.year) * 12 + (today.month - cutoff.month) + 2,
     )
 
-    # --- Query de despesas ---
+    # --- Query 1: despesas agrupadas por (mês, id_contas) ---
+    _base_filter = dict(
+        organization=organization,
+        status="PAID",
+        paid_at__isnull=False,
+        paid_at__gte=cutoff,
+        paid_at__lte=end_date,
+    )
     qs = (
-        ExpenseModel.objects.filter(
-            organization=organization,
-            status="PAID",
-            paid_at__isnull=False,
-            paid_at__gte=cutoff,
-            paid_at__lte=end_date,
-        )
+        ExpenseModel.objects.filter(**_base_filter)
         .annotate(
             month=TruncMonth("paid_at"),
             id_contas_str=KeyTextTransform("id_contas", "raw_extras"),
@@ -1589,6 +1590,25 @@ def compute_dre_by_account(
         ic = str(row["id_contas_str"] or "0")
         raw.setdefault(ic, {})[mk] = float(row["total"])
 
+    # --- Query 2: breakdown por fornecedor dentro de cada conta ---
+    qs_sup = (
+        ExpenseModel.objects.filter(**_base_filter)
+        .annotate(
+            month=TruncMonth("paid_at"),
+            id_contas_str=KeyTextTransform("id_contas", "raw_extras"),
+        )
+        .values("month", "id_contas_str", "supplier_name")
+        .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
+        .order_by("id_contas_str", "supplier_name", "month")
+    )
+    # {id_contas → {supplier → {YYYY-MM → float}}}
+    supplier_raw: dict[str, dict[str, dict[str, float]]] = {}
+    for row in qs_sup:
+        ic = str(row["id_contas_str"] or "0")
+        sup = (row["supplier_name"] or "").strip() or "(Sem fornecedor)"
+        mk = row["month"].strftime("%Y-%m")
+        supplier_raw.setdefault(ic, {}).setdefault(sup, {})[mk] = float(row["total"])
+
     sorted_months = sorted(all_months_set)
     month_labels = []
     for mk in sorted_months:
@@ -1599,7 +1619,7 @@ def compute_dre_by_account(
 
     n = len(sorted_months)
 
-    # --- Categorias (flat) com info de seção DRE ---
+    # --- Categorias (flat) com info de seção DRE + breakdown por fornecedor ---
     categories: list[dict[str, Any]] = []
     for ic, monthly_data in sorted(raw.items(), key=lambda kv: -sum(kv[1].values())):
         entry = _PLANEJAMENTO.get(ic, {})
@@ -1607,6 +1627,22 @@ def compute_dre_by_account(
         section_name, section_order = _get_dre_section(cod)
         amounts = [monthly_data.get(mk, 0.0) for mk in sorted_months]
         total = sum(amounts)
+
+        # Fornecedores dentro desta conta, ordenados por total desc
+        suppliers: list[dict[str, Any]] = []
+        for sup_name, sup_monthly in sorted(
+            supplier_raw.get(ic, {}).items(),
+            key=lambda kv: -sum(kv[1].values()),
+        ):
+            sup_amounts = [sup_monthly.get(mk, 0.0) for mk in sorted_months]
+            sup_total = sum(sup_amounts)
+            if sup_total > 0:
+                suppliers.append({
+                    "name": sup_name,
+                    "monthly": sup_amounts,
+                    "total": sup_total,
+                })
+
         categories.append({
             "id": ic,
             "cod": cod,
@@ -1617,6 +1653,7 @@ def compute_dre_by_account(
             "section_order": section_order,
             "monthly": amounts,
             "total": total,
+            "suppliers": suppliers,
         })
 
     # --- Agrupamento por seção DRE ---

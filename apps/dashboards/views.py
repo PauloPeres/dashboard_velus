@@ -579,6 +579,8 @@ def dre_detalhe(request: HttpRequest) -> HttpResponse:
         if "accounts" in row:
             for acc in row["accounts"]:
                 acc["monthly_labeled"] = list(zip(month_labels, acc["monthly"]))
+                for sup in acc.get("suppliers", []):
+                    sup["monthly_labeled"] = list(zip(month_labels, sup["monthly"]))
 
     # Opções do seletor — últimos 3 anos, mais recente primeiro
     month_options: list[dict[str, str]] = []

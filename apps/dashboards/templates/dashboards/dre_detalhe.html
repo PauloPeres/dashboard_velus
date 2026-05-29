@@ -105,10 +105,12 @@
 
             {% elif row.type == "section" %}
             {# ── Linha de seção com detalhe expansível ── #}
+            {% with sec_id=forloop.counter %}
             <tr class="border-b border-gray-200 bg-gray-50 cursor-pointer hover:bg-gray-100"
+                data-section-id="sec{{ sec_id }}"
                 onclick="toggleSection(this)">
                 <td class="py-2 pr-4 font-semibold text-gray-700 sticky left-0 bg-gray-50 hover:bg-gray-100">
-                    <span class="text-gray-400 text-xs mr-1">▶</span>
+                    <span class="section-arrow text-gray-400 text-xs mr-1">▶</span>
                     <span class="text-red-500 font-normal mr-1">{{ row.sign }}</span>{{ row.label }}
                 </td>
                 {% for lbl, val in row.monthly_labeled %}
@@ -116,19 +118,39 @@
                 {% endfor %}
                 <td class="py-2 pl-3 text-right font-bold text-red-700 border-l border-gray-200">{{ row.total|floatformat:0|intcomma }}</td>
             </tr>
-            {# Contas individuais da seção (ocultas por padrão) #}
+            {# ── Contas individuais da seção (nível 2, ocultas por padrão) ── #}
             {% for acc in row.accounts %}
-            <tr class="border-b border-gray-100 detail-row hidden hover:bg-gray-50">
-                <td class="py-1.5 pl-8 pr-4 text-gray-500 sticky left-0 bg-white hover:bg-gray-50">
+            <tr class="border-b border-gray-100 account-row hidden {% if acc.suppliers %}cursor-pointer hover:bg-indigo-50{% else %}hover:bg-gray-50{% endif %}"
+                data-section-ref="sec{{ sec_id }}"
+                data-account-id="acc{{ acc.id }}"
+                {% if acc.suppliers %}onclick="toggleAccount(this)"{% endif %}>
+                <td class="py-1.5 pl-8 pr-4 text-gray-600 sticky left-0 bg-white {% if acc.suppliers %}hover:bg-indigo-50{% else %}hover:bg-gray-50{% endif %}">
+                    {% if acc.suppliers %}<span class="account-arrow text-gray-300 text-xs mr-1">▶</span>{% endif %}
                     {{ acc.nome }}
                     {% if acc.cod %}<span class="text-gray-300 font-mono text-xs ml-1">{{ acc.cod }}</span>{% endif %}
+                    {% if acc.suppliers %}<span class="ml-1 text-indigo-300 text-xs">({{ acc.suppliers|length }})</span>{% endif %}
                 </td>
                 {% for lbl, val in acc.monthly_labeled %}
-                <td class="py-1.5 px-2 text-right text-gray-400">{{ val|floatformat:0|intcomma }}</td>
+                <td class="py-1.5 px-2 text-right text-gray-500">{{ val|floatformat:0|intcomma }}</td>
                 {% endfor %}
-                <td class="py-1.5 pl-3 text-right text-gray-500 border-l border-gray-200">{{ acc.total|floatformat:0|intcomma }}</td>
+                <td class="py-1.5 pl-3 text-right font-medium text-gray-600 border-l border-gray-200">{{ acc.total|floatformat:0|intcomma }}</td>
+            </tr>
+            {# ── Fornecedores dentro da conta (nível 3, ocultos por padrão) ── #}
+            {% for sup in acc.suppliers %}
+            <tr class="border-b border-indigo-50 supplier-row hidden hover:bg-indigo-50"
+                data-section-ref="sec{{ sec_id }}"
+                data-account-ref="acc{{ acc.id }}">
+                <td class="py-1 pl-16 pr-4 text-gray-400 text-xs sticky left-0 bg-indigo-50/40 hover:bg-indigo-50">
+                    {{ sup.name }}
+                </td>
+                {% for lbl, val in sup.monthly_labeled %}
+                <td class="py-1 px-2 text-right text-gray-400 text-xs">{{ val|floatformat:0|intcomma }}</td>
+                {% endfor %}
+                <td class="py-1 pl-3 text-right text-gray-500 text-xs border-l border-indigo-100">{{ sup.total|floatformat:0|intcomma }}</td>
             </tr>
             {% endfor %}
+            {% endfor %}
+            {% endwith %}
 
             {% elif row.type == "subtotal" %}
             {# ── Subtotal intermediário ── #}
@@ -216,31 +238,60 @@
 <script>
   renderChart("dre-account-chart", "dre-account-data");
 
-  // Toggle individual de uma seção
-  function toggleSection(headerRow) {
-    var arrow = headerRow.querySelector("span");
-    var expanded = arrow.textContent.trim() === "▼";
-    arrow.textContent = expanded ? "▶" : "▼";
-    var next = headerRow.nextElementSibling;
-    while (next && next.classList.contains("detail-row")) {
-      next.classList.toggle("hidden", expanded);
-      next = next.nextElementSibling;
+  // Nível 1 — toggle de seção: mostra/oculta contas (account-row)
+  function toggleSection(sectionEl) {
+    var secId = sectionEl.dataset.sectionId;
+    var arrow = sectionEl.querySelector(".section-arrow");
+    var expanded = arrow && arrow.textContent.trim() === "▼";
+    if (arrow) arrow.textContent = expanded ? "▶" : "▼";
+
+    document.querySelectorAll("[data-section-ref='" + secId + "']").forEach(function(row) {
+      if (row.classList.contains("account-row")) {
+        row.classList.toggle("hidden", expanded);
+      }
+      // Ao recolher seção, garante que fornecedores também ficam ocultos
+      if (expanded && row.classList.contains("supplier-row")) {
+        row.classList.add("hidden");
+      }
+    });
+
+    // Reseta setas de conta ao recolher seção
+    if (expanded) {
+      document.querySelectorAll("[data-section-ref='" + secId + "'].account-row").forEach(function(row) {
+        var a = row.querySelector(".account-arrow");
+        if (a) a.textContent = "▶";
+      });
     }
   }
 
-  // Expandir / recolher todas as seções de uma vez
+  // Nível 2 — toggle de conta: mostra/oculta fornecedores (supplier-row)
+  function toggleAccount(accountEl) {
+    var accId = accountEl.dataset.accountId;
+    var arrow = accountEl.querySelector(".account-arrow");
+    var expanded = arrow && arrow.textContent.trim() === "▼";
+    if (arrow) arrow.textContent = expanded ? "▶" : "▼";
+
+    document.querySelectorAll("[data-account-ref='" + accId + "']").forEach(function(row) {
+      row.classList.toggle("hidden", expanded);
+    });
+  }
+
+  // Expandir / recolher TODAS as seções de uma vez (mostra contas, não fornecedores)
   function setAllSections(expand) {
-    // Mostra ou oculta todas as linhas de detalhe
-    document.querySelectorAll("tr.detail-row").forEach(function(row) {
+    document.querySelectorAll("tr.account-row").forEach(function(row) {
       row.classList.toggle("hidden", !expand);
     });
-    // Atualiza as setas de todas as linhas de seção
-    document.querySelectorAll("tbody tr").forEach(function(row) {
-      var onclick = row.getAttribute("onclick") || "";
-      if (onclick.indexOf("toggleSection") !== -1) {
-        var arrow = row.querySelector("span");
-        if (arrow) arrow.textContent = expand ? "▼" : "▶";
-      }
+    // Sempre oculta fornecedores quando se opera em nível de seção
+    document.querySelectorAll("tr.supplier-row").forEach(function(row) {
+      row.classList.add("hidden");
+    });
+    // Atualiza setas de seção
+    document.querySelectorAll(".section-arrow").forEach(function(a) {
+      a.textContent = expand ? "▼" : "▶";
+    });
+    // Reseta setas de conta
+    document.querySelectorAll(".account-arrow").forEach(function(a) {
+      a.textContent = "▶";
     });
   }
 </script>
