@@ -1,4 +1,4 @@
-"""Models analíticos — dim/fact tables.
+"""Models analíticos — dim/fact tables + cache do plano de contas IXC.
 
 Dim tables seguem SCD type 2 (slowly-changing dim com versionamento):
 - `current` flag: True = versão atual; False = histórica
@@ -7,6 +7,9 @@ Dim tables seguem SCD type 2 (slowly-changing dim com versionamento):
 
 Fact tables são append-only quando possível; `fact_contract_status_daily` é
 upsert por (org, contract, date) pra suportar re-execução do rebuild.
+
+PlanoContasCache armazena o mapeamento do plano de contas IXC (planejamento +
+planejamento_analitico) com TTL, substituindo dicts hardcoded no código.
 """
 
 from __future__ import annotations
@@ -236,3 +239,46 @@ class FactExpense(TenantModel):
             models.Index(fields=["organization", "status"]),
             models.Index(fields=["organization", "category"]),
         ]
+
+
+# =============================================================================
+# Plano de Contas IXC — cache sincronizado via `sync_planejamento`
+# =============================================================================
+class PlanoContasCache(models.Model):
+    """Cache do plano de contas IXC para uma organização.
+
+    Armazena dois mapas como JSONField:
+    - plano_map: {id_planejamento → {cod, nome, tipo}}  (≈ 91 entradas)
+    - conta_map: {id_conta → id_planejamento}           (planejamento_analitico, ≈ 11k entradas)
+
+    Atualizado via `python manage.py sync_planejamento <org_slug>`.
+    O aggregation layer lê daqui em vez de dicts hardcoded.
+    """
+
+    organization = models.OneToOneField(
+        "tenancy.Organization",
+        on_delete=models.CASCADE,
+        related_name="plano_contas_cache",
+        verbose_name=_("Organização"),
+    )
+    # {id_planejamento (str) → {cod, nome, tipo}}
+    plano_map = models.JSONField(
+        default=dict,
+        verbose_name=_("Mapa de planejamento"),
+        help_text="id_planejamento → {cod, nome, tipo} — da tabela `planejamento` do IXC",
+    )
+    # {id_conta (str) → id_planejamento (str)}
+    conta_map = models.JSONField(
+        default=dict,
+        verbose_name=_("Mapa de contas analíticas"),
+        help_text="planejamento_analitico.id → id_planejamento — da tabela `planejamento_analitico` do IXC",
+    )
+    synced_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Última sincronização"),
+    )
+
+    class Meta:
+        verbose_name = _("Cache do plano de contas IXC")
+        verbose_name_plural = _("Caches do plano de contas IXC")

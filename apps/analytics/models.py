@@ -9,6 +9,7 @@ from .infrastructure.models import (
     FactContractStatusDaily,
     FactInvoice,
     FactPayment,
+    PlanoContasCache,
 )
 
 __all__ = (
@@ -18,4 +19,5 @@ __all__ = (
     "FactContractStatusDaily",
     "FactInvoice",
     "FactPayment",
+    "PlanoContasCache",
 )

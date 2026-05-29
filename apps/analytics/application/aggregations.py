@@ -464,12 +464,13 @@ def compute_expense_by_category(
         )
         .order_by("-total")
     )
+    conta_map, plano_map = _load_plano_maps(organization)
     # Agrupa por id_planejamento (conta pai) — múltiplos id_conta podem ter o mesmo pai
     parent_map: dict[str, dict[str, Any]] = {}
     for row in qs:
         id_conta = str(row["id_conta_str"] or "0")
-        id_plan = _CONTA_TO_PLANO.get(id_conta, "0")
-        entry = _PLANEJAMENTO.get(id_plan, {})
+        id_plan = conta_map.get(id_conta, "0")
+        entry = plano_map.get(id_plan, {})
         label = entry.get("nome") or f"Conta #{id_plan}"
         if label not in parent_map:
             parent_map[label] = {"category": label, "amount": 0.0, "count": 0}
@@ -1631,22 +1632,52 @@ _PERSON_SUPPLIERS: dict[str, tuple[str, str]] = {
 _MAO_DE_OBRA_NAME = "MÃO DE OBRA TERCERIZADA"
 
 
-def _resolve_conta(id_conta: str | None) -> dict[str, str]:
+def _load_plano_maps(organization: "Organization") -> "tuple[dict, dict]":
+    """Carrega (conta_map, plano_map) do PlanoContasCache do banco.
+
+    conta_map: {id_conta (str) → id_planejamento (str)}
+    plano_map: {id_planejamento (str) → {cod, nome, tipo}}
+
+    Fallback automático para os dicts hardcoded se a org ainda não tiver
+    sido sincronizada via `python manage.py sync_planejamento <slug>`.
+    """
+    try:
+        from apps.analytics.infrastructure.models import PlanoContasCache
+        cache = PlanoContasCache.objects.get(organization=organization)
+        if cache.conta_map and cache.plano_map:
+            return cache.conta_map, cache.plano_map
+    except Exception:
+        pass
+    return _CONTA_TO_PLANO, _PLANEJAMENTO
+
+
+def _resolve_conta(
+    id_conta: str | None,
+    conta_map: dict | None = None,
+    plano_map: dict | None = None,
+) -> dict[str, str]:
     """Dado o id_conta (planejamento_analitico.id), retorna o planejamento pai.
 
-    Fluxo: id_conta → _CONTA_TO_PLANO → id_planejamento → _PLANEJAMENTO → {cod, nome, tipo}
+    Fluxo: id_conta → conta_map → id_planejamento → plano_map → {cod, nome, tipo}
+    Usa dicts hardcoded como fallback se conta_map/plano_map não fornecidos.
     """
+    cm = conta_map if conta_map is not None else _CONTA_TO_PLANO
+    pm = plano_map if plano_map is not None else _PLANEJAMENTO
     ic = str(id_conta or "0").strip()
-    id_plan = _CONTA_TO_PLANO.get(ic, "0")
-    return _PLANEJAMENTO.get(id_plan) or _PLANEJAMENTO.get("0") or {"cod": "", "nome": f"Conta #{ic}", "tipo": "?"}
+    id_plan = cm.get(ic, "0")
+    return pm.get(id_plan) or pm.get("0") or {"cod": "", "nome": f"Conta #{ic}", "tipo": "?"}
 
 
-def _get_planeja_label(id_conta: str | None) -> str:
+def _get_planeja_label(
+    id_conta: str | None,
+    conta_map: dict | None = None,
+    plano_map: dict | None = None,
+) -> str:
     """Retorna label do planejamento pai: 'cod — nome' ou fallback.
 
-    Usa id_conta (planejamento_analitico.id) para resolver via _CONTA_TO_PLANO.
+    Usa id_conta (planejamento_analitico.id) para resolver via conta_map.
     """
-    entry = _resolve_conta(id_conta)
+    entry = _resolve_conta(id_conta, conta_map=conta_map, plano_map=plano_map)
     return f"{entry['cod']} {entry['nome']}".strip() or "(Sem categoria)"
 
 
@@ -1691,6 +1722,7 @@ def compute_dre_by_account(
     import calendar
     from apps.financial.infrastructure.models import Expense as ExpenseModel
 
+    conta_map, plano_map = _load_plano_maps(organization)
     today = timezone.now().date()
 
     # --- Intervalo de datas ---
@@ -1735,7 +1767,7 @@ def compute_dre_by_account(
     )
 
     # Monta mapa: id_conta_analitica → {YYYY-MM → valor}
-    # Depois agrupa por id_planejamento (conta pai) via _CONTA_TO_PLANO
+    # Depois agrupa por id_planejamento (conta pai) via conta_map (do PlanoContasCache)
     all_months_set: set[str] = set()
     raw_analitico: dict[str, dict[str, float]] = {}  # id_conta → {YYYY-MM → valor}
     for row in qs:
@@ -1747,7 +1779,7 @@ def compute_dre_by_account(
     # Agrega por id_planejamento (conta pai)
     raw: dict[str, dict[str, float]] = {}  # id_planejamento → {YYYY-MM → valor}
     for ic, monthly_data in raw_analitico.items():
-        id_plan = _CONTA_TO_PLANO.get(ic, "0")
+        id_plan = conta_map.get(ic, "0")
         for mk, val in monthly_data.items():
             raw.setdefault(id_plan, {})[mk] = raw.get(id_plan, {}).get(mk, 0.0) + val
 
@@ -1766,7 +1798,7 @@ def compute_dre_by_account(
     supplier_raw: dict[str, dict[str, dict[str, float]]] = {}
     for row in qs_sup:
         ic = str(row["id_conta_str"] or "0")
-        id_plan = _CONTA_TO_PLANO.get(ic, "0")
+        id_plan = conta_map.get(ic, "0")
         sup = (row["supplier_name"] or "").strip() or "(Sem fornecedor)"
         mk = row["month"].strftime("%Y-%m")
         supplier_raw.setdefault(id_plan, {}).setdefault(sup, {})
@@ -1786,7 +1818,7 @@ def compute_dre_by_account(
     # raw agora está keyed por id_planejamento (conta pai)
     categories: list[dict[str, Any]] = []
     for id_plan, monthly_data in sorted(raw.items(), key=lambda kv: -sum(kv[1].values())):
-        entry = _PLANEJAMENTO.get(id_plan, {})
+        entry = plano_map.get(id_plan, {})
         cod = entry.get("cod", "")
         section_name, section_order = _get_dre_section(cod)
         amounts = [monthly_data.get(mk, 0.0) for mk in sorted_months]
