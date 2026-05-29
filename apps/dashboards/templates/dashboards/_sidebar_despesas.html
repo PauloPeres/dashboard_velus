@@ -1,0 +1,53 @@
+{% comment %}
+  Partial: submenu Despesas na sidebar.
+  Variáveis esperadas: u (url_name atual), open (True/False).
+{% endcomment %}
+<div class="space-y-0.5">
+    <button
+        onclick="toggleDespesas()"
+        class="w-full flex items-center justify-between px-3 py-2 rounded-md focus:outline-none
+               {% if open %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}"
+    >
+        <span>Despesas</span>
+        <svg id="despesas-arrow"
+             class="w-3.5 h-3.5 flex-shrink-0 transition-transform duration-150"
+             style="{% if open %}transform:rotate(180deg){% endif %}"
+             fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+        </svg>
+    </button>
+
+    <div id="despesas-submenu"
+         class="{% if not open %}hidden{% endif %} ml-1 pl-3 border-l-2 border-gray-100 space-y-0.5">
+        <a href="{% url 'dashboards:cashflow' %}"
+           class="block px-3 py-1.5 rounded-md text-xs
+                  {% if u == 'cashflow' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
+            Fluxo de Caixa
+        </a>
+        <a href="{% url 'dashboards:dre' %}"
+           class="block px-3 py-1.5 rounded-md text-xs
+                  {% if u == 'dre' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
+            DRE Gerencial
+        </a>
+        <a href="{% url 'dashboards:dre_detalhe' %}"
+           class="block px-3 py-1.5 rounded-md text-xs
+                  {% if u == 'dre_detalhe' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
+            DRE por Conta IXC
+        </a>
+        <a href="{% url 'dashboards:burn' %}"
+           class="block px-3 py-1.5 rounded-md text-xs
+                  {% if u == 'burn' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
+            Burn Rate
+        </a>
+        <a href="{% url 'dashboards:forecast' %}"
+           class="block px-3 py-1.5 rounded-md text-xs
+                  {% if u == 'forecast' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
+            Previsão 12m
+        </a>
+        <a href="{% url 'dashboards:pessoas' %}"
+           class="block px-3 py-1.5 rounded-md text-xs
+                  {% if u == 'pessoas' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
+            Pessoas &amp; Prestadores
+        </a>
+    </div>
+</div>

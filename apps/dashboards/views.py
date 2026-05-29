@@ -70,10 +70,10 @@ def _fmt_brl(value: float) -> str:
 
 
 def _get_months(request: HttpRequest) -> int:
-    """Lê seletor de período ?months=N. Válidos: 3, 6, 12, 24. Default: 12."""
+    """Lê seletor de período ?months=N. Válidos: 1, 2, 3, 6, 12, 24. Default: 12."""
     try:
         v = int(request.GET.get("months", 12))
-        return v if v in (3, 6, 12, 24) else 12
+        return v if v in (1, 2, 3, 6, 12, 24) else 12
     except (ValueError, TypeError):
         return 12
 
