@@ -34,7 +34,6 @@ from apps.shared.context import set_current_organization
 from apps.shared.decorators import allow_cross_tenant
 from apps.tenancy.models import Organization, OrganizationDataSource
 
-
 # Patterns que detectam PII a anonimizar (preservando estrutura)
 _PII_PATTERNS = {
     "cpf": re.compile(r"\d{3}[\.\-]?\d{3}[\.\-]?\d{3}[\-]?\d{2}"),
@@ -178,7 +177,7 @@ class Command(BaseCommand):
                     records.append(raw)
                     if len(records) >= limit:
                         break
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 raise CommandError(f"Falha na chamada IXC: {type(exc).__name__}: {exc}") from exc
 
         if not records:

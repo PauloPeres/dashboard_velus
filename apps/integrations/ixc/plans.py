@@ -60,7 +60,7 @@ class IxcPlanCache:
                     name=schema.nome or schema.descricao or f"Plano #{schema.id}",
                     monthly_amount=Decimal(schema.valor_contrato),
                 )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise AdapterContractError(
                 f"Falha ao carregar cache de planos IXC: {type(exc).__name__}: {exc}"
             ) from exc
