@@ -48,6 +48,13 @@ def home(request: HttpRequest) -> HttpResponse:  # noqa: ARG001
     return HttpResponseRedirect(reverse("dashboards:executive"))
 
 
+def _fmt_brl(value: float) -> str:
+    """Formata float como 'R$ 326.802' (separador de milhar BR, sem centavos)."""
+    v = int(round(value))
+    formatted = f"{v:,}".replace(",", ".")
+    return f"R$ {formatted}"
+
+
 @login_required
 @never_cache
 def executive(request: HttpRequest) -> HttpResponse:
@@ -60,11 +67,65 @@ def executive(request: HttpRequest) -> HttpResponse:
     mrr_series = compute_mrr_series(org, months=12)
     aging = compute_aging_distribution(org)
 
+    # ARPU = MRR ÷ contratos ativos
+    arpu = (
+        kpis["mrr_now"] / kpis["active_contracts"]
+        if kpis["active_contracts"] > 0
+        else 0.0
+    )
+
+    # Aging alert: 90+ dias e quanto representa do total inadimplente
+    over_90 = next((b for b in aging if b["key"] == "OVER_90"), {})
+    total_delinquency = sum(b["amount"] for b in aging if b["key"] != "ON_TIME")
+    over_90_pct = (
+        over_90.get("amount", 0) / total_delinquency * 100
+        if total_delinquency > 0
+        else 0.0
+    )
+    aging_alert = over_90.get("amount", 0) > 0 and over_90_pct > 20
+
+    # Última sync bem-sucedida (para timestamp no header)
+    from apps.sync.models import SyncJob, SyncStatus
+    last_sync_job = (
+        SyncJob.objects
+        .filter(organization=org, status=SyncStatus.COMPLETED)
+        .order_by("-finished_at")
+        .first()
+    )
+    last_sync = last_sync_job.finished_at if last_sync_job else None
+
+    churn_pct_str = f"{kpis['churn_pct']:.1f}%"
+    churn_subtitle = f"{kpis['canceled_this_month']} cancelados · {kpis['new_this_month']} novos"
+    mrr_delta_str = f"{kpis['mrr_delta_pct']:.1f}% vs mês anterior"
+    mrr_subtitle = f"{_fmt_brl(kpis['mrr_prev'])} mês anterior"
+    delinquency_subtitle = f"{kpis['delinquency_count']:,} faturas em atraso".replace(",", ".")
+    delinquency_pct_str = f"{kpis['delinquency_pct_of_mrr']:.1f}%"
+    over_90_value = _fmt_brl(over_90.get("amount", 0))
+    over_90_subtitle = f"{over_90.get('count', 0):,} contratos — requer ação de cobrança".replace(",", ".")
+
     return render(
         request,
         "dashboards/executive.html",
         {
             "kpis": kpis,
+            # Valores pré-formatados — evita bug de |add: string+float no template
+            "mrr_now_str": _fmt_brl(kpis["mrr_now"]),
+            "mrr_subtitle": mrr_subtitle,
+            "mrr_delta_str": mrr_delta_str,
+            "mrr_delta_positive": kpis["mrr_delta_pct"] >= 0,
+            "arpu_str": _fmt_brl(arpu),
+            "churn_pct_str": churn_pct_str,
+            "churn_subtitle": churn_subtitle,
+            "churn_variant": "border-orange-300" if kpis["churn_pct"] > 1.5 else "border-gray-200",
+            "delinquency_amount_str": _fmt_brl(kpis["delinquency_amount"]),
+            "delinquency_subtitle": delinquency_subtitle,
+            "delinquency_pct_str": delinquency_pct_str,
+            "over_90": over_90,
+            "over_90_pct": over_90_pct,
+            "over_90_value": over_90_value,
+            "over_90_subtitle": over_90_subtitle,
+            "aging_alert": aging_alert,
+            "last_sync": last_sync,
             "mrr_chart_json": charts.mrr_line_chart(mrr_series),
             "aging_chart_json": charts.aging_bar_chart(aging),
         },
