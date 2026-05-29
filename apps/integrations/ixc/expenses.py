@@ -94,7 +94,7 @@ class IxcSupplierCache:
                         errors=exc.errors()[:1],
                     )
                     continue
-                name = schema.fantasia or f"Fornecedor #{schema.id}"
+                name = schema.display_name
                 self._suppliers[schema.id] = name
         except Exception as exc:
             raise AdapterContractError(

@@ -330,10 +330,16 @@ class IxcSupplierSchema(BaseModel):
 
     id: str = Field(...)
     fantasia: str = Field(default="")
+    razao: str = Field(default="")  # razão social — usado como fallback quando fantasia está vazio
     cpf_cnpj: str = Field(default="")
     ativo: str = Field(default="S")
 
-    @field_validator("id", "fantasia", "cpf_cnpj", "ativo", mode="before")
+    @field_validator("id", "fantasia", "razao", "cpf_cnpj", "ativo", mode="before")
     @classmethod
     def _coerce_str(cls, v: Any) -> str:
         return _to_str(v)
+
+    @property
+    def display_name(self) -> str:
+        """Retorna fantasia se disponível, senão razao social, senão Fornecedor #id."""
+        return self.fantasia or self.razao or f"Fornecedor #{self.id}"
