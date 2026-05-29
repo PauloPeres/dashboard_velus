@@ -479,9 +479,10 @@ def pessoas(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
+    months = _get_months(request)
 
-    data = compute_people_expenses(org, months=12)
-    anomalies = compute_expense_anomalies(org, months=12)
+    data = compute_people_expenses(org, months=months)
+    anomalies = compute_expense_anomalies(org, months=months)
 
     people = data.get("people", [])
     mao_de_obra = data.get("mao_de_obra", {})
@@ -549,13 +550,15 @@ def dre_detalhe(request: HttpRequest) -> HttpResponse:
     selected_to = to_ym or today.strftime("%Y-%m")
 
     # --- Dados ---
+    # dre_detalhe tem seu próprio seletor from/to; o global ?months é fallback
+    months = _get_months(request)
     data = compute_dre_by_account(
         org,
         from_ym=from_ym or None,
         to_ym=to_ym or None,
-        months=12,
+        months=months,
     )
-    anomalies = compute_expense_anomalies(org, months=12)
+    anomalies = compute_expense_anomalies(org, months=months)
 
     summary = data.get("summary", {})
     dre_rows = data.get("dre_rows", [])
@@ -612,12 +615,13 @@ def churn(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
+    months = _get_months(request)
 
     summary = compute_churn_summary(org)
-    mrr_series = compute_mrr_churn_series(org, months=12)
-    reasons = compute_churn_by_reason(org, months=12)
+    mrr_series = compute_mrr_churn_series(org, months=months)
+    reasons = compute_churn_by_reason(org, months=months)
     ltv_dist = compute_ltv_distribution(org)
-    plan_detail = compute_churn_plan_detail(org, months=12)
+    plan_detail = compute_churn_plan_detail(org, months=months)
 
     # Derivados para KPI cards
     net_mrr = summary["net_mrr_this_month"]
