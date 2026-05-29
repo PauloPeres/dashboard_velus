@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block page_title %}Velus Dashboard{% endblock %} · Velus Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .brand-gradient { background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 60%, #1d4ed8 100%); }
+    .input-field:focus { box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
+    .btn-primary { transition: background 0.15s, transform 0.1s, box-shadow 0.15s; }
+    .btn-primary:hover { background-color: #1d4ed8; box-shadow: 0 4px 12px rgba(37,99,235,0.35); }
+    .btn-primary:active { transform: translateY(1px); }
+    .pattern-dots {
+      background-image: radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex">
+
+  <!-- ── Lado esquerdo: brand panel ────────────────────────────── -->
+  <div class="brand-panel hidden lg:flex lg:w-1/2 brand-gradient pattern-dots flex-col justify-between p-12 relative overflow-hidden">
+    <div class="absolute -top-24 -left-24 w-96 h-96 rounded-full bg-blue-500 opacity-10 blur-3xl"></div>
+    <div class="absolute bottom-0 right-0 w-80 h-80 rounded-full bg-blue-400 opacity-10 blur-3xl"></div>
+
+    <!-- Logo -->
+    <div class="relative z-10">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 bg-blue-500 rounded-xl flex items-center justify-center shadow-lg">
+          <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          </svg>
+        </div>
+        <span class="text-white text-2xl font-bold tracking-tight">Velus</span>
+      </div>
+      <p class="mt-2 text-blue-200 text-sm font-medium">Dashboard Gerencial</p>
+    </div>
+
+    <!-- Headline -->
+    <div class="relative z-10">
+      <h1 class="text-4xl font-bold text-white leading-tight">
+        {% block brand_headline %}Visibilidade total<br>do seu ISP.{% endblock %}
+      </h1>
+      <p class="mt-4 text-blue-200 text-lg leading-relaxed max-w-sm">
+        {% block brand_sub %}MRR, inadimplência, churn e fluxo de caixa — tudo em tempo real, integrado com o IXC.{% endblock %}
+      </p>
+    </div>
+
+    <!-- Footer -->
+    <div class="relative z-10">
+      <p class="text-blue-300 text-xs">© 2026 Velus · Bauru / Marília</p>
+    </div>
+  </div>
+
+  <!-- ── Lado direito: conteúdo ─────────────────────────────────── -->
+  <div class="w-full lg:w-1/2 flex flex-col justify-center items-center px-6 py-12 bg-white">
+
+    <!-- Logo mobile -->
+    <div class="lg:hidden mb-8 text-center">
+      <div class="inline-flex items-center gap-2">
+        <div class="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center">
+          <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          </svg>
+        </div>
+        <span class="text-xl font-bold text-gray-900">Velus</span>
+      </div>
+    </div>
+
+    <div class="w-full max-w-sm">
+      {% block form_content %}{% endblock %}
+    </div>
+
+    <!-- Footer -->
+    <p class="mt-12 text-xs text-gray-400">
+      Acesso restrito · Solicite ao administrador do sistema
+    </p>
+  </div>
+
+</body>
+</html>

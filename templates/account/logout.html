@@ -1,0 +1,41 @@
+{% extends "account/_auth_base.html" %}
+{% load account %}
+
+{% block page_title %}Sair{% endblock %}
+
+{% block brand_headline %}Até a<br>próxima!{% endblock %}
+{% block brand_sub %}Seus dados estão seguros. Volte quando quiser para acompanhar seu ISP.{% endblock %}
+
+{% block form_content %}
+  <!-- Ícone -->
+  <div class="text-center mb-8">
+    <div class="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
+      <svg class="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+      </svg>
+    </div>
+    <h2 class="text-2xl font-bold text-gray-900">Sair do dashboard?</h2>
+    <p class="mt-2 text-sm text-gray-500">
+      Você será desconectado desta sessão
+    </p>
+  </div>
+
+  <!-- Botão sair (POST) -->
+  <form method="post" action="{% url 'account_logout' %}">
+    {% csrf_token %}
+    {{ redirect_field }}
+    <button type="submit"
+            class="btn-primary w-full py-2.5 px-4 bg-blue-600 text-white text-sm font-semibold rounded-lg flex items-center justify-center gap-2 mb-3">
+      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+      </svg>
+      Confirmar saída
+    </button>
+  </form>
+
+  <!-- Cancelar -->
+  <a href="{% url 'dashboards:executive' %}"
+     class="block w-full py-2.5 px-4 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg text-center hover:bg-gray-50 transition-colors">
+    Cancelar — voltar ao dashboard
+  </a>
+{% endblock %}
