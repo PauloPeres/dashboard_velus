@@ -925,6 +925,8 @@ def compute_at_risk_contracts(
 #            False = não controlável (mobilidade, titularidade, etc.)
 #            None = neutro/operacional
 _IXC_MOTIVO_MAP: dict[str, tuple[str, bool | None]] = {
+    "0":  ("Sem motivo registrado", None),
+    "3":  ("Troca de titularidade", None),
     "4":  ("Mudança de titularidade", None),
     "5":  ("Mudança de endereço", False),
     "6":  ("Inadimplência acumulada", True),   # sistema cancela após bloqueio prolongado
@@ -975,10 +977,12 @@ def compute_mrr_churn_series(
         label = m_start.strftime("%b/%y")
         month_key = m_start.strftime("%Y-%m")
 
-        # Cancelamentos
+        # Cancelamentos — apenas contratos que foram ativados (MRR real)
+        # Pré-contratos (activated_at=NULL) nunca geraram receita, excluídos aqui
         canceled_agg = Contract.objects.filter(
             organization=organization,
             status="CANCELED",
+            activated_at__isnull=False,
             canceled_at__date__gte=m_start,
             canceled_at__date__lte=m_end,
         ).aggregate(
@@ -1113,11 +1117,21 @@ def compute_ltv_distribution(
 def compute_churn_plan_detail(
     organization: Organization, months: int = 12
 ) -> list[dict[str, Any]]:
-    """Tabela detalhada de churn por plano (últimos N meses).
+    """Tabela detalhada de churn por plano (últimos N meses) com análise estatística.
 
-    Retorna lista com: plano, cancelamentos, MRR perdido, % total,
-    LTV médio, churn_rate (cancelados / ativos no início do período).
-    Ordenado por mrr_lost desc.
+    Métricas por plano:
+      - count: cancelamentos absolutos no período
+      - base: contratos ativos no início do período
+      - churn_rate: count / base × 100  (taxa normalizada — remove viés de tamanho)
+      - expected: base × overall_churn_rate / 100  (quantos esperaríamos cancelar)
+      - excess: count − expected  (positivo = pior que a média, negativo = melhor)
+      - risk_index: churn_rate / overall_rate  (1.0 = média, >1.5 = alto risco)
+      - ltv_avg_months: tempo médio de vida dos contratos cancelados
+      - mrr_lost: receita mensal perdida
+      - pct_of_total: % do MRR churn total
+
+    Retorna lista ordenada por risk_index desc (planos mais problemáticos primeiro)
+    quando base > 0; demais ao final.
     """
     from apps.customers.infrastructure.models import Contract
 
@@ -1142,7 +1156,7 @@ def compute_churn_plan_detail(
         days = (c.canceled_at - c.activated_at).days
         by_plan[plan]["ltv_days"].append(days)
 
-    # Base de ativos no início do período (para churn rate)
+    # Base de ativos no início do período (para churn rate normalizado)
     base_counts = {
         row["contract__plan_name"]: row["n"]
         for row in FactContractStatusDaily.objects.filter(
@@ -1154,22 +1168,45 @@ def compute_churn_plan_detail(
         .annotate(n=Count("id"))
     }
 
+    # Taxa global de churn no período: total cancelados / total base
+    total_base = sum(base_counts.values())
+    total_canceled = sum(v["count"] for v in by_plan.values())
+    overall_rate = (total_canceled / total_base * 100) if total_base > 0 else 0.0
+
     total_mrr = sum(v["mrr_lost"] for v in by_plan.values())
     result = []
     for plan, data in by_plan.items():
         ltv_avg = sum(data["ltv_days"]) / len(data["ltv_days"]) / 30.4 if data["ltv_days"] else 0.0
         base = base_counts.get(plan, 0)
-        churn_rate = round(data["count"] / base * 100, 1) if base > 0 else None
+        if base > 0:
+            churn_rate = round(data["count"] / base * 100, 1)
+            expected = round(base * overall_rate / 100, 1)
+            excess = round(data["count"] - expected, 1)
+            risk_index = round(churn_rate / overall_rate, 2) if overall_rate > 0 else None
+        else:
+            churn_rate = None
+            expected = None
+            excess = None
+            risk_index = None
+
         result.append({
             "plan": plan,
             "count": data["count"],
+            "base": base,
             "mrr_lost": round(data["mrr_lost"], 2),
             "pct_of_total": round(data["mrr_lost"] / total_mrr * 100, 1) if total_mrr > 0 else 0.0,
             "ltv_avg_months": round(ltv_avg, 1),
             "churn_rate": churn_rate,
+            "expected": expected,
+            "excess": excess,
+            "risk_index": risk_index,
         })
 
-    return sorted(result, key=lambda x: -x["mrr_lost"])
+    # Ordena por risk_index (planos com churn acima da média primeiro); sem base ao final
+    return sorted(
+        result,
+        key=lambda x: (-(x["risk_index"] or 0), -(x["count"])),
+    )
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
@@ -1193,7 +1230,10 @@ def compute_churn_summary(organization: Organization) -> dict[str, Any]:
     month_first = today.replace(day=1)
     prev_month_first = _first_of_month_n_ago(today, 1)
 
-    canceled_qs = Contract.objects.filter(organization=organization, status="CANCELED")
+    # Apenas contratos que foram ativados — pré-contratos abandonados não geram MRR
+    canceled_qs = Contract.objects.filter(
+        organization=organization, status="CANCELED", activated_at__isnull=False
+    )
 
     this_month = canceled_qs.filter(
         canceled_at__date__gte=month_first,

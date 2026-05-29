@@ -89,12 +89,12 @@ class IxcContractSource:
         if schema.status == "A" and schema.status_internet in ("CM", "FA"):
             status = "BLOCKED"
         elif not schema.status:
-            # IXC retorna status=null para contratos cancelados ou abandonados
-            # (sem ativação nem cancelamento formal). Tratamos como CANCELED pois
-            # nunca são/foram assinantes ativos gerando receita.
+            # IXC retorna status=null para contratos cancelados/abandonados.
             status = "CANCELED"
         else:
-            status = status_map.get(schema.status.upper(), "UNKNOWN")
+            # Códigos conhecidos mapeados; qualquer outro código (ex: "D" desistência,
+            # "I" inativo) é tratado como CANCELED — nunca são assinantes ativos.
+            status = status_map.get(schema.status.upper(), "CANCELED")
 
         # Lookup do plano pra obter nome e valor mensal
         plan: PlanInfo | None = None
@@ -108,6 +108,20 @@ class IxcContractSource:
         )
         monthly_amount = plan.monthly_amount if plan else Decimal(schema.mensalidade)
 
+        # canceled_at: usa data_cancelamento se disponível, senão data_desistencia
+        # (pré-contratos abandonados têm data_desistencia mas não data_cancelamento)
+        extras = schema.get_extras()
+        canceled_at = schema.data_cancelamento
+        if canceled_at is None and status == "CANCELED":
+            raw_desistencia = extras.get("data_desistencia")
+            if raw_desistencia and raw_desistencia not in ("0000-00-00", "", None):
+                try:
+                    from datetime import datetime as _dt
+                    from django.utils.timezone import make_aware
+                    canceled_at = make_aware(_dt.strptime(raw_desistencia, "%Y-%m-%d"))
+                except (ValueError, TypeError):
+                    pass
+
         return ContractDTO(
             external_id=schema.id,
             customer_external_id=schema.id_cliente,
@@ -115,8 +129,8 @@ class IxcContractSource:
             monthly_amount=monthly_amount,
             status=status,
             activated_at=schema.data_ativacao,
-            canceled_at=schema.data_cancelamento,
+            canceled_at=canceled_at,
             address=schema.endereco,
-            raw_extras=schema.get_extras(),
+            raw_extras=extras,
         )
 

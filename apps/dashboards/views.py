@@ -447,8 +447,15 @@ def churn(request: HttpRequest) -> HttpResponse:
     mrr_recovered_str = _fmt_brl(summary["mrr_recovered_this_month"])
     net_mrr_str = _fmt_brl(abs(net_mrr))
 
-    # Plano mais cancelado por MRR
-    top_plan = plan_detail[0]["plan"] if plan_detail else "—"
+    # Plano com maior risk_index (acima da média)
+    high_risk_plans = [p for p in plan_detail if (p.get("risk_index") or 0) > 1.0]
+    top_risk_plan = high_risk_plans[0] if high_risk_plans else (plan_detail[0] if plan_detail else None)
+    top_plan = top_risk_plan["plan"] if top_risk_plan else "—"
+
+    # Taxa global (soma dos cancelamentos / total de bases) para o scatter
+    total_base = sum(p.get("base", 0) for p in plan_detail)
+    total_canceled_plans = sum(p["count"] for p in plan_detail)
+    overall_rate = round(total_canceled_plans / total_base * 100, 2) if total_base > 0 else 0.0
 
     # Percentuais controláveis
     total_mrr_lost = sum(r["mrr_lost"] for r in reasons)
@@ -458,12 +465,17 @@ def churn(request: HttpRequest) -> HttpResponse:
         if total_mrr_lost > 0 else 0.0
     )
 
+    # Tabela: apenas planos com base >= 10 (bases menores distorcem a taxa)
+    # Scatter: mesma regra — remove ruído de planos minúsculos
+    plan_detail_display = [p for p in plan_detail if p.get("base", 0) >= 10][:30]
+
     return render(
         request,
         "dashboards/churn.html",
         {
             "summary": summary,
-            "plan_detail": plan_detail,
+            "plan_detail": plan_detail_display,
+            "overall_rate": overall_rate,
             "reasons": reasons,
             "ltv_dist": ltv_dist,
             # Formatados para os KPI cards
@@ -484,5 +496,6 @@ def churn(request: HttpRequest) -> HttpResponse:
             "churn_logo_json": charts.churn_logo_line(mrr_series),
             "churn_reason_json": charts.churn_reason_pareto(reasons),
             "ltv_hist_json": charts.ltv_histogram(ltv_dist),
+            "churn_scatter_json": charts.churn_plan_risk_scatter(plan_detail_display, overall_rate),
         },
     )

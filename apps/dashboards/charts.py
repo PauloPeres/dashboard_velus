@@ -554,6 +554,77 @@ def ltv_histogram(data: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+def churn_plan_risk_scatter(data: list[dict[str, Any]], overall_rate: float = 0) -> str:
+    """Scatter plot: eixo X = base do plano, Y = taxa de churn, tamanho = MRR perdido.
+
+    Cada plano é um ponto. A linha horizontal mostra a taxa média geral.
+    Pontos acima da linha = churn acima da média (preocupante).
+    Pontos à direita = planos grandes (maior impacto absoluto).
+    """
+    with_rate = [d for d in data if d.get("churn_rate") is not None and d.get("base", 0) > 0]
+    if not with_rate:
+        return _to_json(go.Figure())
+
+    x = [d["base"] for d in with_rate]
+    y = [d["churn_rate"] for d in with_rate]
+    labels = [d["plan"] for d in with_rate]
+    sizes = [max(8, min(50, d["count"] * 2)) for d in with_rate]
+    risk = [d.get("risk_index") or 1.0 for d in with_rate]
+    colors = [
+        "#ef4444" if r > 1.5 else "#f97316" if r > 1.0 else "#10b981"
+        for r in risk
+    ]
+    custom = [[d["count"], d["mrr_lost"], d.get("risk_index") or 0] for d in with_rate]
+
+    x_max = max(x) * 1.15 if x else 10
+    y_max = max(y) * 1.3 if y else 5
+
+    fig = go.Figure(
+        data=[
+            go.Scatter(
+                x=x, y=y,
+                mode="markers+text",
+                text=[lbl[:15] for lbl in labels],
+                textposition="top center",
+                textfont={"size": 9},
+                marker={
+                    "size": sizes,
+                    "color": colors,
+                    "opacity": 0.75,
+                    "line": {"width": 1, "color": "#ffffff"},
+                },
+                customdata=custom,
+                hovertemplate=(
+                    "<b>%{text}</b><br>"
+                    "Base: %{x:,d} contratos<br>"
+                    "Churn: %{y:.1f}%<br>"
+                    "Cancelamentos: %{customdata[0]}<br>"
+                    "MRR perdido: R$ %{customdata[1]:,.0f}<br>"
+                    "Risco: %{customdata[2]:.2f}×<extra></extra>"
+                ),
+            ),
+            # Linha de benchmark — taxa global
+            go.Scatter(
+                x=[0, x_max],
+                y=[overall_rate, overall_rate],
+                mode="lines",
+                line={"color": "#6b7280", "width": 1.5, "dash": "dash"},
+                name=f"Média geral ({overall_rate:.1f}%)",
+                hovertemplate=f"Taxa média: {overall_rate:.1f}%<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "showlegend": True,
+            "xaxis": {"title": "Contratos na base", "tickformat": ",d"},
+            "yaxis": {"title": "Taxa de churn (%)", "ticksuffix": "%"},
+            "legend": {"orientation": "h", "y": -0.3},
+            "margin": {"l": 60, "r": 20, "t": 30, "b": 70},
+        },
+    )
+    return _to_json(fig)
+
+
 def churn_logo_line(series: list[dict[str, Any]]) -> str:
     """Linha dupla — cancelamentos vs novas ativações por mês."""
     labels = [s["label"] for s in series]
