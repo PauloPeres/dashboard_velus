@@ -169,11 +169,17 @@ ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*", "password2*"]
 ACCOUNT_EMAIL_VERIFICATION = "optional"
 ACCOUNT_SESSION_REMEMBER = False
 ACCOUNT_UNIQUE_EMAIL = True
+# Signup fechado — só admin cria contas. Google OAuth só funciona para
+# emails já cadastrados (SOCIALACCOUNT_EMAIL_AUTHENTICATION vincula
+# automaticamente se o email bater com um usuário existente).
+ACCOUNT_SIGNUP_ENABLED = False
 # Desabilita o "Login by Code" (passwordless via email) introduzido no allauth 0.63+
 # — queremos email+senha clássico, não OTP por email
 ACCOUNT_LOGIN_BY_CODE_ENABLED = False
 ACCOUNT_LOGIN_BY_CODE_REQUIRED = False
-SOCIALACCOUNT_AUTO_SIGNUP = True
+SOCIALACCOUNT_AUTO_SIGNUP = False
+SOCIALACCOUNT_EMAIL_AUTHENTICATION = True
+SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT = True
 SOCIALACCOUNT_LOGIN_ON_GET = True
 SOCIALACCOUNT_PROVIDERS = {
     "google": {
