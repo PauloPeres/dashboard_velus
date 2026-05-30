@@ -39,8 +39,11 @@ class IxcHttpClient(BaseHttpAdapter):
         timeout: float | None = None,
         rate_limit_per_second: int | None = None,
     ) -> None:
+        # base_url nas credenciais é o domínio (https://erp.xxx.com.br);
+        # a API vive em /webservice/v1/.
+        api_base = base_url.rstrip("/") + "/webservice/v1/"
         super().__init__(
-            base_url=base_url,
+            base_url=api_base,
             auth=httpx.BasicAuth(username=str(user_id), password=str(api_token)),
             timeout=timeout,
             rate_limit_per_second=rate_limit_per_second,
