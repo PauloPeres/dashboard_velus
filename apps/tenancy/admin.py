@@ -10,6 +10,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from simple_history.admin import SimpleHistoryAdmin
 
+from .forms import DataSourceCredentialsForm
 from .models import Organization, OrganizationDataSource, OrganizationMembership, User
 
 
@@ -70,13 +71,17 @@ class OrganizationMembershipAdmin(SimpleHistoryAdmin):
 
 @admin.register(OrganizationDataSource)
 class OrganizationDataSourceAdmin(SimpleHistoryAdmin):
-    """Admin com credenciais OCULTAS — view-only para auditoria."""
+    """Admin com form customizado para edição segura de credenciais."""
 
+    form = DataSourceCredentialsForm
     list_display = ("organization", "source_type", "capability", "priority", "is_active", "updated_at")
     list_filter = ("source_type", "capability", "is_active")
     search_fields = ("organization__slug",)
     autocomplete_fields = ("organization",)
-    # `credentials_encrypted` deliberadamente EXCLUÍDO — edição via management
-    # command setup_data_source pra evitar leak acidental em form HTML.
     exclude = ("credentials_encrypted",)
     readonly_fields = ("created_at", "updated_at")
+    fieldsets = (
+        (None, {"fields": ("organization", "source_type", "capability", "priority", "is_active")}),
+        ("Credenciais", {"fields": ("base_url", "user_id", "api_token")}),
+        ("Datas", {"fields": ("created_at", "updated_at")}),
+    )
