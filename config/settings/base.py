@@ -364,7 +364,7 @@ X_FRAME_OPTIONS = "DENY"
 CONTENT_SECURITY_POLICY = {
     "DIRECTIVES": {
         "default-src": ["'self'"],
-        "script-src": ["'self'"],
+        "script-src": ["'self'", "'unsafe-inline'"],
         "style-src": ["'self'", "'unsafe-inline'"],  # Tailwind compilado pode ainda usar inline
         "img-src": ["'self'", "data:"],
         "font-src": ["'self'", "data:"],
