@@ -284,6 +284,11 @@ CELERY_BEAT_SCHEDULE: dict = {
         "schedule": crontab(minute=0, hour="*/3"),
         "options": {"queue": "celery"},
     },
+    "sync-plano-contas-daily": {
+        "task": "apps.analytics.tasks.dispatch_plano_contas_for_all_orgs",
+        "schedule": crontab(minute=30, hour=3),  # 03:30 todo dia
+        "options": {"queue": "celery"},
+    },
 }
 
 # =============================================================================
