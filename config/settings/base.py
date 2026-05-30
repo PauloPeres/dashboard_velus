@@ -161,6 +161,7 @@ LOGOUT_REDIRECT_URL = "/accounts/login/"
 # -----------------------------------------------------------------------------
 # django-allauth — email+senha (+ Google OAuth opcional)
 # -----------------------------------------------------------------------------
+ACCOUNT_USER_MODEL_USERNAME_FIELD = None
 ACCOUNT_LOGIN_METHODS = {"email"}
 # email* + password1* garante que o LoginForm inclui o campo de senha
 # (sem password1 o allauth 65 remove o campo e ativa o fluxo code-based)
@@ -168,11 +169,17 @@ ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*", "password2*"]
 ACCOUNT_EMAIL_VERIFICATION = "optional"
 ACCOUNT_SESSION_REMEMBER = False
 ACCOUNT_UNIQUE_EMAIL = True
+# Signup fechado — só admin cria contas. Google OAuth só funciona para
+# emails já cadastrados (adapter vincula automaticamente).
+ACCOUNT_ADAPTER = "apps.tenancy.adapters.NoSignupAccountAdapter"
+SOCIALACCOUNT_ADAPTER = "apps.tenancy.adapters.AutoConnectSocialAdapter"
 # Desabilita o "Login by Code" (passwordless via email) introduzido no allauth 0.63+
 # — queremos email+senha clássico, não OTP por email
 ACCOUNT_LOGIN_BY_CODE_ENABLED = False
 ACCOUNT_LOGIN_BY_CODE_REQUIRED = False
-SOCIALACCOUNT_AUTO_SIGNUP = True
+SOCIALACCOUNT_AUTO_SIGNUP = False
+SOCIALACCOUNT_EMAIL_AUTHENTICATION = True
+SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT = True
 SOCIALACCOUNT_LOGIN_ON_GET = True
 SOCIALACCOUNT_PROVIDERS = {
     "google": {

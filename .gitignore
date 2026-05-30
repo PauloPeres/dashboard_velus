@@ -8,6 +8,8 @@
 .env
 .env.*
 !.env.example
+*secrets.env
+velus_secrets.env
 secrets/
 *.key
 *.pem
@@ -62,7 +64,6 @@ db.sqlite3
 local_settings.py
 staticfiles/
 media/
-/static/
 
 # Logs
 *.log
@@ -116,6 +117,13 @@ Thumbs.db
 # Claude Code / agentes — config local não vai pro repo
 # -----------------------------------------------------------------------------
 .claude/
+
+# -----------------------------------------------------------------------------
+# Frontend build artifacts (gerados no Docker build)
+# -----------------------------------------------------------------------------
+static/css/tailwind.min.css
+static/vendor/
+node_modules/
 
 # -----------------------------------------------------------------------------
 # Docker / K8s local

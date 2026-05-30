@@ -28,6 +28,9 @@ from apps.integrations.shared.enums import Capability, SourceType
 from apps.integrations.shared.exceptions import AdapterContractError
 
 BASE_URL = "https://erp.test.com.br"
+# O IxcHttpClient adiciona /webservice/v1/ ao base_url, então os mocks
+# devem usar a URL completa que o client efetivamente acessa.
+API_URL = f"{BASE_URL}/webservice/v1"
 
 
 def _sample_ixc_customer(**overrides: Any) -> dict[str, Any]:
@@ -103,7 +106,7 @@ class TestIxcCustomerSourceDeclaration:
 # =============================================================================
 class TestIxcCustomerSourceListCustomers:
     def test_lists_single_page_translates_to_dtos(self, respx_mock: respx.MockRouter) -> None:
-        respx_mock.get(f"{BASE_URL}/cliente").mock(
+        respx_mock.get(f"{API_URL}/cliente").mock(
             return_value=Response(
                 200,
                 json={
@@ -162,7 +165,7 @@ class TestIxcCustomerSourceListCustomers:
             call_count["n"] += 1
             return Response(200, json=page_responses[i])
 
-        respx_mock.get(f"{BASE_URL}/cliente").mock(side_effect=page_handler)
+        respx_mock.get(f"{API_URL}/cliente").mock(side_effect=page_handler)
 
         # Pra simular múltiplas páginas, precisamos override do page_size do client.
         # IxcCustomerSource não expõe, então usamos o client direto pra testar paginação.
@@ -178,7 +181,7 @@ class TestIxcCustomerSourceListCustomers:
         self, respx_mock: respx.MockRouter
     ) -> None:
         """IXC retorna schema corrompido → AdapterContractError."""
-        respx_mock.get(f"{BASE_URL}/cliente").mock(
+        respx_mock.get(f"{API_URL}/cliente").mock(
             return_value=Response(
                 200,
                 json={
@@ -193,7 +196,7 @@ class TestIxcCustomerSourceListCustomers:
             list(source.list_customers())
 
     def test_sends_basic_auth_header(self, respx_mock: respx.MockRouter) -> None:
-        route = respx_mock.get(f"{BASE_URL}/cliente").mock(
+        route = respx_mock.get(f"{API_URL}/cliente").mock(
             return_value=Response(200, json={"page": "1", "total": "0", "registros": []})
         )
         source = IxcCustomerSource(base_url=BASE_URL, user_id="42", api_token="secret-token")
@@ -204,7 +207,7 @@ class TestIxcCustomerSourceListCustomers:
         assert request.headers["Authorization"].startswith("Basic ")
 
     def test_sends_ixcsoft_listar_header(self, respx_mock: respx.MockRouter) -> None:
-        route = respx_mock.get(f"{BASE_URL}/cliente").mock(
+        route = respx_mock.get(f"{API_URL}/cliente").mock(
             return_value=Response(200, json={"page": "1", "total": "0", "registros": []})
         )
         source = IxcCustomerSource(base_url=BASE_URL, user_id="1", api_token="t")
@@ -215,7 +218,7 @@ class TestIxcCustomerSourceListCustomers:
 
     def test_incremental_does_full_scan(self, respx_mock: respx.MockRouter) -> None:
         """IXC não suporta filtro data_alteracao em cliente — incremental faz full scan."""
-        route = respx_mock.get(f"{BASE_URL}/cliente").mock(
+        route = respx_mock.get(f"{API_URL}/cliente").mock(
             return_value=Response(200, json={"page": "1", "total": "0", "registros": []})
         )
         source = IxcCustomerSource(base_url=BASE_URL, user_id="1", api_token="t")

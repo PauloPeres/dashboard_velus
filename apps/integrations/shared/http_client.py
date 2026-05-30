@@ -94,7 +94,7 @@ class BaseHttpAdapter:
             auth=self.auth,
             timeout=self.timeout,
             headers=self._build_headers(),
-            follow_redirects=True,
+            follow_redirects=False,
         )
         return self
 

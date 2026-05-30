@@ -1,0 +1,114 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main, develop]
+
+env:
+  IMAGE: ghcr.io/pauloperes/dashboard_velus
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: velus
+          POSTGRES_PASSWORD: velus
+          POSTGRES_DB: velus_dashboard_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DJANGO_ENV: test
+      DATABASE_URL: postgres://velus:velus@localhost:5432/velus_dashboard_test
+      DJANGO_SECRET_KEY: ci-secret-key-not-for-production
+      # Fernet valida (test-only) — os testes de criptografia exigem chave real
+      FERNET_KEY: lZk_fnrb71BX5WgwOZ3-2uPvMwIGfyiaeqtsWuOIDZU=
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.16"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run tests
+        run: uv run pytest
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-homologa:
+    needs: build-and-push
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to staging cluster
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            # imagePullPolicy: Always + tag develop -> rollout puxa a imagem nova.
+            # O initContainer "migrate" do deployment web roda as migrations.
+            kubectl rollout restart deployment/web -n dashboard-velus
+            kubectl rollout restart deployment/worker -n dashboard-velus
+            kubectl rollout restart deployment/beat -n dashboard-velus
+            kubectl rollout status deployment/web -n dashboard-velus --timeout=180s
+            kubectl rollout status deployment/worker -n dashboard-velus --timeout=120s
+            kubectl rollout status deployment/beat -n dashboard-velus --timeout=120s
