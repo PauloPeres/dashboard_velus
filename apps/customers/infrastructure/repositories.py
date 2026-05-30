@@ -99,6 +99,8 @@ class ContractRepository:
             "customer_external_id": dto.customer_external_id,
             "plan_name": dto.plan_name,
             "monthly_amount": dto.monthly_amount,
+            "monthly_amount_addons": dto.monthly_amount_addons,
+            "monthly_amount_discounts": dto.monthly_amount_discounts,
             "status": self._normalize_status(dto.status),
             "activated_at": dto.activated_at,
             "canceled_at": dto.canceled_at,

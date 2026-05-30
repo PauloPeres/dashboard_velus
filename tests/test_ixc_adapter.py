@@ -229,3 +229,178 @@ class TestIxcCustomerSourceListCustomers:
         body = json.loads(route.calls[0].request.content)
         assert "qtype" not in body, "não deve enviar filtro server-side para cliente"
         assert "oper" not in body
+
+
+# =============================================================================
+# Contract adapter — _to_dto com caches de addon/discount
+# =============================================================================
+from decimal import Decimal
+
+from apps.customers.domain.dto import ContractDTO
+from apps.integrations.ixc.contracts import (
+    IxcAddonCache,
+    IxcContractSource,
+    IxcDiscountSurchargeCache,
+)
+from apps.integrations.ixc.plans import IxcPlanCache, PlanInfo
+from apps.integrations.ixc.schemas import (
+    IxcContractSchema,
+    IxcContractDiscountSchema,
+    IxcContractServiceSchema,
+    IxcContractSurchargeSchema,
+)
+
+
+def _sample_ixc_contract(**overrides: Any) -> dict[str, Any]:
+    """Fixture inline de um registro `cliente_contrato` do IXC."""
+    base = {
+        "id": "100",
+        "id_cliente": "42",
+        "id_vd_contrato": "5",
+        "descricao_plano": "Plano 100MB",
+        "mensalidade": "99.90",
+        "status": "A",
+        "status_internet": None,
+        "data_ativacao": "2025-01-10 00:00:00",
+        "data_cancelamento": None,
+        "endereco": "Rua ABC, 123",
+    }
+    base.update(overrides)
+    return base
+
+
+class _StubPlanCache:
+    """Stub de IxcPlanCache que retorna um plano fixo."""
+
+    def get(self, plan_id: str) -> PlanInfo | None:
+        return PlanInfo(name="Plano Teste", monthly_amount=Decimal("99.90"))
+
+
+class _StubAddonCache:
+    """Stub de IxcAddonCache que retorna 0."""
+
+    def get_total(self, contract_id: str) -> Decimal:
+        return Decimal("0")
+
+
+class _StubDiscountCache:
+    """Stub de IxcDiscountSurchargeCache que retorna 0."""
+
+    def get_total_discounts(self, contract_id: str) -> Decimal:
+        return Decimal("0")
+
+
+class TestIxcContractToDto:
+    def test_basic_mapping(self) -> None:
+        schema = IxcContractSchema.model_validate(_sample_ixc_contract())
+        dto = IxcContractSource._to_dto(
+            schema, _StubPlanCache(), _StubAddonCache(), _StubDiscountCache()
+        )
+        assert isinstance(dto, ContractDTO)
+        assert dto.external_id == "100"
+        assert dto.customer_external_id == "42"
+        assert dto.plan_name == "Plano Teste"
+        assert dto.monthly_amount == Decimal("99.90")
+        assert dto.monthly_amount_addons == Decimal("0")
+        assert dto.monthly_amount_discounts == Decimal("0")
+        assert dto.status == "ACTIVE"
+
+    def test_addon_cache_populates_addons(self) -> None:
+        class AddonWith50:
+            def get_total(self, contract_id: str) -> Decimal:
+                return Decimal("50.00") if contract_id == "100" else Decimal("0")
+
+        schema = IxcContractSchema.model_validate(_sample_ixc_contract())
+        dto = IxcContractSource._to_dto(
+            schema, _StubPlanCache(), AddonWith50(), _StubDiscountCache()
+        )
+        assert dto.monthly_amount_addons == Decimal("50.00")
+
+    def test_discount_cache_populates_discounts(self) -> None:
+        class DiscountWith20:
+            def get_total_discounts(self, contract_id: str) -> Decimal:
+                return Decimal("20.00") if contract_id == "100" else Decimal("0")
+
+        schema = IxcContractSchema.model_validate(_sample_ixc_contract())
+        dto = IxcContractSource._to_dto(
+            schema, _StubPlanCache(), _StubAddonCache(), DiscountWith20()
+        )
+        assert dto.monthly_amount_discounts == Decimal("20.00")
+
+    def test_negative_discount_clamped_to_zero(self) -> None:
+        """When surcharges > discounts, net discount is negative — clamped to 0."""
+
+        class NegativeDiscount:
+            def get_total_discounts(self, contract_id: str) -> Decimal:
+                return Decimal("-15.00")
+
+        schema = IxcContractSchema.model_validate(_sample_ixc_contract())
+        dto = IxcContractSource._to_dto(
+            schema, _StubPlanCache(), _StubAddonCache(), NegativeDiscount()
+        )
+        assert dto.monthly_amount_discounts == Decimal("0")
+
+    def test_canceled_status_mapping(self) -> None:
+        schema = IxcContractSchema.model_validate(_sample_ixc_contract(status="CA"))
+        dto = IxcContractSource._to_dto(
+            schema, _StubPlanCache(), _StubAddonCache(), _StubDiscountCache()
+        )
+        assert dto.status == "CANCELED"
+
+    def test_blocked_status_from_internet(self) -> None:
+        schema = IxcContractSchema.model_validate(
+            _sample_ixc_contract(status="A", status_internet="CM")
+        )
+        dto = IxcContractSource._to_dto(
+            schema, _StubPlanCache(), _StubAddonCache(), _StubDiscountCache()
+        )
+        assert dto.status == "BLOCKED"
+
+
+class TestIxcContractServiceSchema:
+    def test_parses_valid_record(self) -> None:
+        schema = IxcContractServiceSchema.model_validate({
+            "id": "1", "id_contrato": "100", "descricao": "IP Fixo",
+            "valor_total": "30.00", "status": "I", "tipo": "S",
+        })
+        assert schema.id == "1"
+        assert schema.valor_total == "30.00"
+
+    def test_coerces_int_ids(self) -> None:
+        schema = IxcContractServiceSchema.model_validate({
+            "id": 1, "id_contrato": 100, "valor_total": "10",
+        })
+        assert schema.id == "1"
+        assert schema.id_contrato == "100"
+
+    def test_comma_amount(self) -> None:
+        schema = IxcContractServiceSchema.model_validate({
+            "id": "1", "id_contrato": "100", "valor_total": "30,50",
+        })
+        assert schema.valor_total == "30.50"
+
+
+class TestIxcContractDiscountSchema:
+    def test_parses_valid_record(self) -> None:
+        schema = IxcContractDiscountSchema.model_validate({
+            "id": "1", "id_contrato": "100", "descricao": "Fidelidade",
+            "valor": "10.00", "percentual": "0", "data_validade": "2026-12-31",
+        })
+        assert schema.valor == "10.00"
+        assert schema.data_validade == "2026-12-31"
+
+    def test_zero_date_becomes_empty(self) -> None:
+        schema = IxcContractDiscountSchema.model_validate({
+            "id": "1", "id_contrato": "100", "data_validade": "0000-00-00",
+        })
+        assert schema.data_validade == ""
+
+
+class TestIxcContractSurchargeSchema:
+    def test_parses_valid_record(self) -> None:
+        schema = IxcContractSurchargeSchema.model_validate({
+            "id": "1", "id_contrato": "100", "descricao": "Taxa extra",
+            "valor": "15.00", "data_validade": "",
+        })
+        assert schema.valor == "15.00"
+        assert schema.data_validade == ""

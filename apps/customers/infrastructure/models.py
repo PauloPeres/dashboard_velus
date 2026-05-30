@@ -119,7 +119,14 @@ class Contract(TenantModel):
 
     plan_name = models.CharField(max_length=128)
     monthly_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    monthly_amount_addons = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    monthly_amount_discounts = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.UNKNOWN)
+
+    @property
+    def monthly_amount_net(self):
+        from decimal import Decimal
+        return (self.monthly_amount or Decimal("0")) + (self.monthly_amount_addons or Decimal("0")) - (self.monthly_amount_discounts or Decimal("0"))
 
     activated_at = models.DateTimeField(null=True, blank=True)
     canceled_at = models.DateTimeField(null=True, blank=True)

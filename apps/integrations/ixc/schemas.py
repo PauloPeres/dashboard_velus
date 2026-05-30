@@ -343,3 +343,100 @@ class IxcSupplierSchema(BaseModel):
     def display_name(self) -> str:
         """Retorna fantasia se disponível, senão razao social, senão Fornecedor #id."""
         return self.fantasia or self.razao or f"Fornecedor #{self.id}"
+
+
+# =============================================================================
+# Add-ons de contrato — endpoint /cliente_contrato_servicos no IXC
+# =============================================================================
+class IxcContractServiceSchema(BaseModel):
+    """Schema de cliente_contrato_servicos (add-ons de contrato)."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    id_contrato: str = Field(...)
+    descricao: str = Field(default="")
+    valor_total: str = Field(default="0")
+    status: str = Field(default="I")  # I=incluso/ativo, CA=cancelado
+    tipo: str = Field(default="S")  # S=serviço, I=item
+
+    @field_validator("id", "id_contrato", "descricao", "status", "tipo", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("valor_total", mode="before")
+    @classmethod
+    def _coerce_amount(cls, v: Any) -> str:
+        if v in (None, ""):
+            return "0"
+        return str(v).replace(",", ".")
+
+
+# =============================================================================
+# Descontos de contrato — endpoint /cliente_contrato_descontos no IXC
+# =============================================================================
+class IxcContractDiscountSchema(BaseModel):
+    """Schema de cliente_contrato_descontos."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    id_contrato: str = Field(...)
+    descricao: str = Field(default="")
+    valor: str = Field(default="0")
+    percentual: str = Field(default="0")
+    data_validade: str = Field(default="")
+
+    @field_validator("id", "id_contrato", "descricao", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("valor", "percentual", mode="before")
+    @classmethod
+    def _coerce_amount(cls, v: Any) -> str:
+        if v in (None, ""):
+            return "0"
+        return str(v).replace(",", ".")
+
+    @field_validator("data_validade", mode="before")
+    @classmethod
+    def _coerce_date(cls, v: Any) -> str:
+        if v in (None, "", "0000-00-00"):
+            return ""
+        return str(v)[:10]
+
+
+# =============================================================================
+# Acréscimos de contrato — endpoint /cliente_contrato_acrescimos no IXC
+# =============================================================================
+class IxcContractSurchargeSchema(BaseModel):
+    """Schema de cliente_contrato_acrescimos."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    id_contrato: str = Field(...)
+    descricao: str = Field(default="")
+    valor: str = Field(default="0")
+    data_validade: str = Field(default="")
+
+    @field_validator("id", "id_contrato", "descricao", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("valor", mode="before")
+    @classmethod
+    def _coerce_amount(cls, v: Any) -> str:
+        if v in (None, ""):
+            return "0"
+        return str(v).replace(",", ".")
+
+    @field_validator("data_validade", mode="before")
+    @classmethod
+    def _coerce_date(cls, v: Any) -> str:
+        if v in (None, "", "0000-00-00"):
+            return ""
+        return str(v)[:10]

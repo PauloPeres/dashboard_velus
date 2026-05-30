@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import datetime
 from decimal import Decimal
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import structlog
 from pydantic import ValidationError
@@ -19,6 +19,101 @@ from .plans import IxcPlanCache, PlanInfo
 from .schemas import IxcContractSchema
 
 _logger = structlog.get_logger(__name__)
+
+
+class IxcAddonCache:
+    """Cache lazy de add-ons (cliente_contrato_servicos). Agrupa por id_contrato."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+        self._by_contract: dict[str, Decimal] = {}
+        self._loaded = False
+
+    def get_total(self, contract_id: str) -> Decimal:
+        if not self._loaded:
+            self._load()
+        return self._by_contract.get(str(contract_id), Decimal("0"))
+
+    def _load(self) -> None:
+        from .schemas import IxcContractServiceSchema
+
+        try:
+            for raw in self._client.paginate_ixc("cliente_contrato_servicos", page_size=200):
+                try:
+                    schema = IxcContractServiceSchema.model_validate(raw)
+                except ValidationError:
+                    continue
+                # Only count active services (status != CA)
+                if schema.status.upper() == "CA":
+                    continue
+                amount = Decimal(schema.valor_total)
+                cid = schema.id_contrato
+                self._by_contract[cid] = self._by_contract.get(cid, Decimal("0")) + amount
+        except Exception as exc:
+            _logger.warning("ixc_addon_cache_failed", error=str(exc))
+        self._loaded = True
+        _logger.info("ixc_addon_cache_loaded", contracts_with_addons=len(self._by_contract))
+
+
+class IxcDiscountSurchargeCache:
+    """Cache lazy de descontos + acréscimos. Agrupa net por id_contrato.
+
+    Net = sum(acréscimos) - sum(descontos). Positive = net surcharge, negative = net discount.
+    We store discounts as positive (amount to subtract from MRR).
+    """
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+        self._discounts: dict[str, Decimal] = {}
+        self._loaded = False
+
+    def get_total_discounts(self, contract_id: str) -> Decimal:
+        """Returns total discounts (positive value to subtract from MRR)."""
+        if not self._loaded:
+            self._load()
+        return self._discounts.get(str(contract_id), Decimal("0"))
+
+    def _load(self) -> None:
+        from datetime import date
+
+        from .schemas import IxcContractDiscountSchema, IxcContractSurchargeSchema
+
+        today = date.today().isoformat()
+
+        # Load discounts
+        try:
+            for raw in self._client.paginate_ixc("cliente_contrato_descontos", page_size=200):
+                try:
+                    schema = IxcContractDiscountSchema.model_validate(raw)
+                except ValidationError:
+                    continue
+                # Skip expired discounts
+                if schema.data_validade and schema.data_validade < today:
+                    continue
+                amount = Decimal(schema.valor)
+                cid = schema.id_contrato
+                self._discounts[cid] = self._discounts.get(cid, Decimal("0")) + abs(amount)
+        except Exception as exc:
+            _logger.warning("ixc_discount_cache_failed", error=str(exc))
+
+        # Load surcharges (subtract from discounts — they ADD to revenue)
+        try:
+            for raw in self._client.paginate_ixc("cliente_contrato_acrescimos", page_size=200):
+                try:
+                    schema = IxcContractSurchargeSchema.model_validate(raw)
+                except ValidationError:
+                    continue
+                if schema.data_validade and schema.data_validade < today:
+                    continue
+                amount = Decimal(schema.valor)
+                cid = schema.id_contrato
+                # Surcharges reduce the discount total (they're revenue additions)
+                self._discounts[cid] = self._discounts.get(cid, Decimal("0")) - abs(amount)
+        except Exception as exc:
+            _logger.warning("ixc_surcharge_cache_failed", error=str(exc))
+
+        self._loaded = True
+        _logger.info("ixc_discount_cache_loaded", contracts_with_adjustments=len(self._discounts))
 
 
 class IxcContractSource:
@@ -50,6 +145,8 @@ class IxcContractSource:
 
         with self._client_factory() as client:
             plan_cache = IxcPlanCache(client)
+            addon_cache = IxcAddonCache(client)
+            discount_cache = IxcDiscountSurchargeCache(client)
             for raw in client.paginate_ixc("cliente_contrato"):
                 try:
                     schema = IxcContractSchema.model_validate(raw)
@@ -62,12 +159,14 @@ class IxcContractSource:
                     raise AdapterContractError(
                         f"IXC retornou contrato com schema inválido (id={raw.get('id')!r}): {exc}"
                     ) from exc
-                yield self._to_dto(schema, plan_cache)
+                yield self._to_dto(schema, plan_cache, addon_cache, discount_cache)
 
     def get_contract(self, external_id: str) -> ContractDTO | None:
         body_filter = {"qtype": "cliente_contrato.id", "query": str(external_id), "oper": "="}
         with self._client_factory() as client:
             plan_cache = IxcPlanCache(client)
+            addon_cache = IxcAddonCache(client)
+            discount_cache = IxcDiscountSurchargeCache(client)
             for raw in client.paginate_ixc("cliente_contrato", body_filter=body_filter, page_size=1):
                 try:
                     schema = IxcContractSchema.model_validate(raw)
@@ -75,11 +174,16 @@ class IxcContractSource:
                     raise AdapterContractError(
                         f"IXC schema inválido id={external_id}: {exc}"
                     ) from exc
-                return self._to_dto(schema, plan_cache)
+                return self._to_dto(schema, plan_cache, addon_cache, discount_cache)
         return None
 
     @staticmethod
-    def _to_dto(schema: IxcContractSchema, plan_cache: IxcPlanCache) -> ContractDTO:
+    def _to_dto(
+        schema: IxcContractSchema,
+        plan_cache: IxcPlanCache,
+        addon_cache: IxcAddonCache,
+        discount_cache: IxcDiscountSurchargeCache,
+    ) -> ContractDTO:
         status_map = {
             "A": "ACTIVE", "B": "BLOCKED", "CA": "CANCELED",
             "AA": "AWAITING_INSTALL", "FI": "ACTIVE",  # FI = Financeiro em atraso (ainda ativo)
@@ -135,11 +239,16 @@ class IxcContractSource:
                 motivo_cancelamento=motivo_cancelamento,
             )
 
+        monthly_amount_addons = addon_cache.get_total(schema.id)
+        monthly_amount_discounts = discount_cache.get_total_discounts(schema.id)
+
         return ContractDTO(
             external_id=schema.id,
             customer_external_id=schema.id_cliente,
             plan_name=plan_name,
             monthly_amount=monthly_amount,
+            monthly_amount_addons=monthly_amount_addons,
+            monthly_amount_discounts=max(monthly_amount_discounts, Decimal("0")),  # clamp to 0 if surcharges > discounts
             status=status,
             activated_at=schema.data_ativacao,
             canceled_at=canceled_at,

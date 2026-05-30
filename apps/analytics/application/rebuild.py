@@ -73,7 +73,7 @@ def _scd2_upsert_contract(contract: Contract) -> None:
 
     new_data = {
         "plan_name": contract.plan_name,
-        "monthly_amount": contract.monthly_amount,
+        "monthly_amount": contract.monthly_amount_net,
         "status": contract.status,
     }
     if current is not None:
@@ -97,7 +97,7 @@ def _scd2_upsert_contract(contract: Contract) -> None:
     DimPlan.objects.get_or_create(
         organization=contract.organization,
         name=contract.plan_name,
-        defaults={"monthly_amount": contract.monthly_amount},
+        defaults={"monthly_amount": contract.monthly_amount_net},
     )
 
 
@@ -181,7 +181,7 @@ def _rebuild_fact_contract_status_daily(
                     contract=contract,
                     date=d,
                     status=contract.status,
-                    monthly_amount=contract.monthly_amount,
+                    monthly_amount=contract.monthly_amount_net,
                     is_active=is_active,
                 )
             )

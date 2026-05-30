@@ -67,6 +67,8 @@ class ContractDTO:
     customer_external_id: str
     plan_name: str
     monthly_amount: Decimal
+    monthly_amount_addons: Decimal = Decimal("0")
+    monthly_amount_discounts: Decimal = Decimal("0")
     status: str = "ACTIVE"  # ACTIVE | BLOCKED | CANCELED | AWAITING_INSTALL
 
     activated_at: datetime | None = None
