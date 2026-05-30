@@ -60,11 +60,11 @@ COPY . /app
 # em produção. Em dev, runserver com DEBUG=True serve direto (e settings/development.py
 # override do STORAGES dispensa o manifest do Whitenoise).
 # Usamos vars dummy pra Settings carregar mesmo sem env real no build.
-RUN DJANGO_SETTINGS_MODULE=config.settings.development \
+RUN DJANGO_SETTINGS_MODULE=config.settings.base \
     DJANGO_SECRET_KEY="build-time-only" \
     DATABASE_URL="postgres://x:x@localhost/build" \
-    FERNET_KEY="build-time-only-build-time-only-build-time" \
-    python manage.py collectstatic --noinput --clear 2>/dev/null || true
+    FERNET_KEY="change-me-generate-with-fernet" \
+    python manage.py collectstatic --noinput --clear
 
 # User não-root pra segurança em produção
 RUN useradd --create-home --shell /bin/bash velus \
