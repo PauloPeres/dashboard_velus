@@ -170,9 +170,9 @@ ACCOUNT_EMAIL_VERIFICATION = "optional"
 ACCOUNT_SESSION_REMEMBER = False
 ACCOUNT_UNIQUE_EMAIL = True
 # Signup fechado — só admin cria contas. Google OAuth só funciona para
-# emails já cadastrados (SOCIALACCOUNT_EMAIL_AUTHENTICATION vincula
-# automaticamente se o email bater com um usuário existente).
-ACCOUNT_SIGNUP_ENABLED = False
+# emails já cadastrados (adapter vincula automaticamente).
+ACCOUNT_ADAPTER = "apps.tenancy.adapters.NoSignupAccountAdapter"
+SOCIALACCOUNT_ADAPTER = "apps.tenancy.adapters.AutoConnectSocialAdapter"
 # Desabilita o "Login by Code" (passwordless via email) introduzido no allauth 0.63+
 # — queremos email+senha clássico, não OTP por email
 ACCOUNT_LOGIN_BY_CODE_ENABLED = False
