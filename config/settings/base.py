@@ -161,6 +161,7 @@ LOGOUT_REDIRECT_URL = "/accounts/login/"
 # -----------------------------------------------------------------------------
 # django-allauth — email+senha (+ Google OAuth opcional)
 # -----------------------------------------------------------------------------
+ACCOUNT_USER_MODEL_USERNAME_FIELD = None
 ACCOUNT_LOGIN_METHODS = {"email"}
 # email* + password1* garante que o LoginForm inclui o campo de senha
 # (sem password1 o allauth 65 remove o campo e ativa o fluxo code-based)
