@@ -19,6 +19,7 @@ class DataSourceCredentialsForm(forms.ModelForm):
     base_url = forms.URLField(
         label="URL base do ERP",
         required=False,
+        assume_scheme="https",
         widget=forms.URLInput(attrs={"placeholder": "https://erp.cliente.com.br", "size": 60}),
     )
     user_id = forms.CharField(
