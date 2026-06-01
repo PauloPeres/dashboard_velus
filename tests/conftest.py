@@ -17,11 +17,13 @@ import pytest
 from apps.customers.domain.dto import ContractDTO, CustomerDTO
 from apps.financial.domain.dto import InvoiceDTO, PaymentDTO
 from apps.helpdesk.domain.dto import TicketDTO
+from apps.integrations.fake.connections import FakeConnectionSource
 from apps.integrations.fake.contracts import FakeContractSource
 from apps.integrations.fake.customers import FakeCustomerSource
 from apps.integrations.fake.invoices import FakeInvoiceSource, FakePaymentSource
 from apps.integrations.fake.tickets import FakeTicketSource
 from apps.integrations.shared.enums import Capability, SourceType
+from apps.network.domain.dto import ConnectionDTO
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import (
     Organization,
@@ -43,6 +45,7 @@ def _clean_state_around_test() -> Iterator[None]:
     FakeInvoiceSource.reset_seed()
     FakePaymentSource.reset_seed()
     FakeTicketSource.reset_seed()
+    FakeConnectionSource.reset_seed()
     try:
         yield
     finally:
@@ -52,6 +55,7 @@ def _clean_state_around_test() -> Iterator[None]:
         FakeInvoiceSource.reset_seed()
         FakePaymentSource.reset_seed()
         FakeTicketSource.reset_seed()
+        FakeConnectionSource.reset_seed()
 
 
 # =============================================================================
@@ -242,6 +246,36 @@ def sample_ticket_dtos() -> list[TicketDTO]:
     ]
 
 
+@pytest.fixture
+def sample_connection_dtos() -> list[ConnectionDTO]:
+    return [
+        ConnectionDTO(
+            external_id="conn-1",
+            customer_external_id="ext-1",
+            contract_external_id="ctr-1",
+            login="cliente1",
+            status="ONLINE",
+            ip="10.0.0.1",
+            nas_ip="192.168.1.10",
+            rx_bytes=1_073_741_824,
+            tx_bytes=536_870_912,
+            last_connection_at=datetime(2025, 5, 20, 8, 0, tzinfo=UTC),
+        ),
+        ConnectionDTO(
+            external_id="conn-2",
+            customer_external_id="ext-2",
+            contract_external_id="ctr-2",
+            login="cliente2",
+            status="BLOCKED",
+            ip="",
+            nas_ip="192.168.1.10",
+            rx_bytes=0,
+            tx_bytes=0,
+            last_connection_at=datetime(2025, 5, 18, 12, 0, tzinfo=UTC),
+        ),
+    ]
+
+
 def _make_datasource_factory(capability: Capability) -> Any:
     """Helper pra criar fixture de OrganizationDataSource FAKE pra qualquer capability."""
     @pytest.fixture
@@ -263,3 +297,4 @@ datasource_fake_contracts_a = _make_datasource_factory(Capability.CONTRACTS)
 datasource_fake_invoices_a = _make_datasource_factory(Capability.INVOICES)
 datasource_fake_payments_a = _make_datasource_factory(Capability.PAYMENTS)
 datasource_fake_tickets_a = _make_datasource_factory(Capability.TICKETS)
+datasource_fake_connections_a = _make_datasource_factory(Capability.CONNECTIONS)

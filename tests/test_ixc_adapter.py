@@ -581,3 +581,167 @@ class TestIxcTicketToDto:
         dtos = list(source.list_tickets())
         assert len(dtos) == 1
         assert dtos[0].external_id == "2"
+
+
+# =============================================================================
+# Connection — schema radusuarios + _to_dto
+# =============================================================================
+from apps.integrations.ixc.connections import IxcConnectionSource
+from apps.integrations.ixc.schemas import IxcRadUserSchema
+from apps.network.domain.dto import ConnectionDTO
+
+
+def _sample_ixc_raduser(**overrides: Any) -> dict[str, Any]:
+    """Fixture inline de um registro `radusuarios` do IXC."""
+    base = {
+        "id": "700",
+        "id_cliente": "42",
+        "id_contrato": "88",
+        "login": "cliente42",
+        "ativo": "S",
+        "online": "S",
+        "ip": "10.0.0.5",
+        "nas_ip": "192.168.1.10",
+        "download": "500M",
+        "upload": "250M",
+        "bytes_recebidos": "1073741824",
+        "bytes_enviados": "536870912",
+        "ultima_conexao": "2025-05-20 08:00:00",
+        # Campo extra desconhecido — deve ir pra raw_extras
+        "mac": "AA:BB:CC:DD:EE:FF",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestIxcRadUserSchema:
+    def test_parses_canonical_response(self) -> None:
+        schema = IxcRadUserSchema.model_validate(_sample_ixc_raduser())
+        assert schema.id == "700"
+        assert schema.id_cliente == "42"
+        assert schema.login == "cliente42"
+        assert schema.is_active is True
+        assert schema.is_online is True
+        assert schema.ultima_conexao is not None
+        assert schema.ultima_conexao.tzinfo is not None  # tz-aware
+
+    def test_coerces_int_id_to_string(self) -> None:
+        schema = IxcRadUserSchema.model_validate(
+            _sample_ixc_raduser(id=700, id_cliente=42)
+        )
+        assert schema.id == "700"
+        assert schema.id_cliente == "42"
+
+    def test_coerces_bytes_to_int(self) -> None:
+        schema = IxcRadUserSchema.model_validate(_sample_ixc_raduser())
+        assert schema.bytes_recebidos == 1073741824
+        assert schema.bytes_enviados == 536870912
+
+    def test_empty_bytes_becomes_zero(self) -> None:
+        schema = IxcRadUserSchema.model_validate(
+            _sample_ixc_raduser(bytes_recebidos="", bytes_enviados=None)
+        )
+        assert schema.bytes_recebidos == 0
+        assert schema.bytes_enviados == 0
+
+    def test_zero_date_becomes_none(self) -> None:
+        schema = IxcRadUserSchema.model_validate(
+            _sample_ixc_raduser(ultima_conexao="0000-00-00 00:00:00")
+        )
+        assert schema.ultima_conexao is None
+
+    def test_defaults_when_flags_missing(self) -> None:
+        raw = _sample_ixc_raduser()
+        del raw["ativo"]
+        del raw["online"]
+        schema = IxcRadUserSchema.model_validate(raw)
+        assert schema.ativo == "N"
+        assert schema.online == "N"
+
+    def test_extras_captured(self) -> None:
+        schema = IxcRadUserSchema.model_validate(_sample_ixc_raduser())
+        extras = schema.get_extras()
+        assert extras.get("mac") == "AA:BB:CC:DD:EE:FF"
+
+    def test_rejects_missing_id(self) -> None:
+        raw = _sample_ixc_raduser()
+        del raw["id"]
+        with pytest.raises(Exception):  # noqa: B017 — ValidationError
+            IxcRadUserSchema.model_validate(raw)
+
+
+class TestIxcConnectionSourceDeclaration:
+    def test_implements_port_contract(self) -> None:
+        assert IxcConnectionSource.source_type == SourceType.IXC
+        assert IxcConnectionSource.capabilities == frozenset({Capability.CONNECTIONS})
+
+
+class TestIxcConnectionToDto:
+    def test_basic_mapping(self) -> None:
+        schema = IxcRadUserSchema.model_validate(_sample_ixc_raduser())
+        dto = IxcConnectionSource._to_dto(schema)
+        assert isinstance(dto, ConnectionDTO)
+        assert dto.external_id == "700"
+        assert dto.customer_external_id == "42"
+        assert dto.contract_external_id == "88"
+        assert dto.login == "cliente42"
+        assert dto.rx_bytes == 1073741824
+        assert dto.tx_bytes == 536870912
+
+    @pytest.mark.parametrize(
+        ("ativo", "online", "expected"),
+        [
+            ("S", "S", "ONLINE"),
+            ("S", "N", "OFFLINE"),
+            ("N", "S", "BLOCKED"),  # inativo prevalece
+            ("N", "N", "BLOCKED"),
+        ],
+    )
+    def test_status_derivation(self, ativo: str, online: str, expected: str) -> None:
+        schema = IxcRadUserSchema.model_validate(
+            _sample_ixc_raduser(ativo=ativo, online=online)
+        )
+        dto = IxcConnectionSource._to_dto(schema)
+        assert dto.status == expected
+
+    def test_lists_single_page_translates_to_dtos(self, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get(f"{API_URL}/radusuarios").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        _sample_ixc_raduser(id="1", ativo="S", online="S"),
+                        _sample_ixc_raduser(id="2", ativo="N", online="N"),
+                    ],
+                },
+            )
+        )
+        source = IxcConnectionSource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_connections())
+
+        assert len(dtos) == 2
+        assert all(isinstance(d, ConnectionDTO) for d in dtos)
+        assert dtos[0].status == "ONLINE"
+        assert dtos[1].status == "BLOCKED"
+
+    def test_invalid_record_skipped_not_raised(self, respx_mock: respx.MockRouter) -> None:
+        """Registro inválido (sem id) é pulado, não derruba o sync inteiro."""
+        respx_mock.get(f"{API_URL}/radusuarios").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        {"id_cliente": "42"},  # falta id → pulado
+                        _sample_ixc_raduser(id="2"),
+                    ],
+                },
+            )
+        )
+        source = IxcConnectionSource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_connections())
+        assert len(dtos) == 1
+        assert dtos[0].external_id == "2"
