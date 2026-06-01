@@ -404,3 +404,180 @@ class TestIxcContractSurchargeSchema:
         })
         assert schema.valor == "15.00"
         assert schema.data_validade == ""
+
+
+# =============================================================================
+# Ticket — schema su_oss_chamado + _to_dto
+# =============================================================================
+from apps.helpdesk.domain.dto import TicketDTO
+from apps.integrations.ixc.schemas import IxcTicketSchema
+from apps.integrations.ixc.tickets import IxcTicketSource
+
+
+def _sample_ixc_ticket(**overrides: Any) -> dict[str, Any]:
+    """Fixture inline de um registro `su_oss_chamado` do IXC."""
+    base = {
+        "id": "500",
+        "id_cliente": "42",
+        "id_assunto": "10",
+        "setor": "Suporte",
+        "id_tecnico": "3",
+        "status": "A",
+        "prioridade": "N",
+        "mensagem": "Cliente sem conexão",
+        "protocolo": "2025050001",
+        "data_abertura": "2025-05-10 09:00:00",
+        "data_agenda": None,
+        "data_fechamento": None,
+        "ultima_atualizacao": "2025-05-10 09:30:00",
+        # Campo extra desconhecido — deve ir pra raw_extras
+        "origem_endereco": "App",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestIxcTicketSchema:
+    def test_parses_canonical_response(self) -> None:
+        schema = IxcTicketSchema.model_validate(_sample_ixc_ticket())
+        assert schema.id == "500"
+        assert schema.id_cliente == "42"
+        assert schema.status == "A"
+        assert schema.prioridade == "N"
+        assert schema.data_abertura is not None
+        assert schema.data_abertura.tzinfo is not None  # tz-aware
+
+    def test_coerces_int_id_to_string(self) -> None:
+        schema = IxcTicketSchema.model_validate(_sample_ixc_ticket(id=500, id_cliente=42))
+        assert schema.id == "500"
+        assert schema.id_cliente == "42"
+
+    def test_zero_date_becomes_none(self) -> None:
+        schema = IxcTicketSchema.model_validate(
+            _sample_ixc_ticket(data_fechamento="0000-00-00 00:00:00")
+        )
+        assert schema.data_fechamento is None
+
+    def test_null_message_becomes_empty(self) -> None:
+        schema = IxcTicketSchema.model_validate(_sample_ixc_ticket(mensagem="null"))
+        assert schema.mensagem == ""
+
+    def test_defaults_when_status_priority_missing(self) -> None:
+        raw = _sample_ixc_ticket()
+        del raw["status"]
+        del raw["prioridade"]
+        schema = IxcTicketSchema.model_validate(raw)
+        assert schema.status == "A"
+        assert schema.prioridade == "N"
+
+    def test_extras_captured(self) -> None:
+        schema = IxcTicketSchema.model_validate(_sample_ixc_ticket())
+        extras = schema.get_extras()
+        assert extras.get("origem_endereco") == "App"
+
+    def test_rejects_missing_id(self) -> None:
+        raw = _sample_ixc_ticket()
+        del raw["id"]
+        with pytest.raises(Exception):  # noqa: B017 — ValidationError
+            IxcTicketSchema.model_validate(raw)
+
+
+class TestIxcTicketSourceDeclaration:
+    def test_implements_port_contract(self) -> None:
+        assert IxcTicketSource.source_type == SourceType.IXC
+        assert IxcTicketSource.capabilities == frozenset({Capability.TICKETS})
+
+
+class TestIxcTicketToDto:
+    def test_basic_mapping(self) -> None:
+        schema = IxcTicketSchema.model_validate(_sample_ixc_ticket())
+        dto = IxcTicketSource._to_dto(schema)
+        assert isinstance(dto, TicketDTO)
+        assert dto.external_id == "500"
+        assert dto.customer_external_id == "42"
+        assert dto.subject_id == "10"
+        assert dto.sector == "Suporte"
+        assert dto.technician_id == "3"
+        assert dto.protocol == "2025050001"
+        assert dto.message == "Cliente sem conexão"
+
+    @pytest.mark.parametrize(
+        ("ixc_status", "expected"),
+        [
+            ("AG", "SCHEDULED"),
+            ("A", "OPEN"),
+            ("EX", "IN_PROGRESS"),
+            ("F", "CLOSED"),
+            ("EN", "FORWARDED"),
+            ("ZZ", "OPEN"),  # desconhecido → fallback OPEN
+        ],
+    )
+    def test_status_mapping(self, ixc_status: str, expected: str) -> None:
+        schema = IxcTicketSchema.model_validate(_sample_ixc_ticket(status=ixc_status))
+        dto = IxcTicketSource._to_dto(schema)
+        assert dto.status == expected
+
+    @pytest.mark.parametrize(
+        ("ixc_priority", "expected"),
+        [
+            ("N", "NORMAL"),
+            ("A", "HIGH"),
+            ("B", "LOW"),
+            ("U", "URGENT"),
+            ("ZZ", "NORMAL"),  # desconhecido → fallback NORMAL
+        ],
+    )
+    def test_priority_mapping(self, ixc_priority: str, expected: str) -> None:
+        schema = IxcTicketSchema.model_validate(_sample_ixc_ticket(prioridade=ixc_priority))
+        dto = IxcTicketSource._to_dto(schema)
+        assert dto.priority == expected
+
+    def test_closed_ticket_has_closed_at(self) -> None:
+        schema = IxcTicketSchema.model_validate(
+            _sample_ixc_ticket(status="F", data_fechamento="2025-05-11 10:00:00")
+        )
+        dto = IxcTicketSource._to_dto(schema)
+        assert dto.status == "CLOSED"
+        assert dto.closed_at is not None
+
+    def test_lists_single_page_translates_to_dtos(self, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get(f"{API_URL}/su_oss_chamado").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        _sample_ixc_ticket(id="1", status="A"),
+                        _sample_ixc_ticket(id="2", status="F"),
+                    ],
+                },
+            )
+        )
+        source = IxcTicketSource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_tickets())
+
+        assert len(dtos) == 2
+        assert all(isinstance(d, TicketDTO) for d in dtos)
+        assert dtos[0].status == "OPEN"
+        assert dtos[1].status == "CLOSED"
+
+    def test_invalid_record_skipped_not_raised(self, respx_mock: respx.MockRouter) -> None:
+        """Registro inválido (sem id) é pulado, não derruba o sync inteiro."""
+        respx_mock.get(f"{API_URL}/su_oss_chamado").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        {"id_cliente": "42"},  # falta id → pulado
+                        _sample_ixc_ticket(id="2"),
+                    ],
+                },
+            )
+        )
+        source = IxcTicketSource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_tickets())
+        assert len(dtos) == 1
+        assert dtos[0].external_id == "2"

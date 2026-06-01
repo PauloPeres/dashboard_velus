@@ -16,9 +16,11 @@ import pytest
 
 from apps.customers.domain.dto import ContractDTO, CustomerDTO
 from apps.financial.domain.dto import InvoiceDTO, PaymentDTO
+from apps.helpdesk.domain.dto import TicketDTO
 from apps.integrations.fake.contracts import FakeContractSource
 from apps.integrations.fake.customers import FakeCustomerSource
 from apps.integrations.fake.invoices import FakeInvoiceSource, FakePaymentSource
+from apps.integrations.fake.tickets import FakeTicketSource
 from apps.integrations.shared.enums import Capability, SourceType
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import (
@@ -40,6 +42,7 @@ def _clean_state_around_test() -> Iterator[None]:
     FakeContractSource.reset_seed()
     FakeInvoiceSource.reset_seed()
     FakePaymentSource.reset_seed()
+    FakeTicketSource.reset_seed()
     try:
         yield
     finally:
@@ -48,6 +51,7 @@ def _clean_state_around_test() -> Iterator[None]:
         FakeContractSource.reset_seed()
         FakeInvoiceSource.reset_seed()
         FakePaymentSource.reset_seed()
+        FakeTicketSource.reset_seed()
 
 
 # =============================================================================
@@ -207,6 +211,37 @@ def sample_payment_dtos() -> list[PaymentDTO]:
     ]
 
 
+@pytest.fixture
+def sample_ticket_dtos() -> list[TicketDTO]:
+    return [
+        TicketDTO(
+            external_id="tk-1",
+            customer_external_id="ext-1",
+            subject_id="10",
+            sector="Suporte",
+            technician_id="3",
+            status="OPEN",
+            priority="HIGH",
+            message="Sem conexão",
+            protocol="2025001",
+            opened_at=datetime(2025, 5, 10, 9, 0, tzinfo=UTC),
+        ),
+        TicketDTO(
+            external_id="tk-2",
+            customer_external_id="ext-2",
+            subject_id="11",
+            sector="Financeiro",
+            technician_id="",
+            status="CLOSED",
+            priority="NORMAL",
+            message="Dúvida de fatura",
+            protocol="2025002",
+            opened_at=datetime(2025, 5, 12, 14, 0, tzinfo=UTC),
+            closed_at=datetime(2025, 5, 12, 16, 0, tzinfo=UTC),
+        ),
+    ]
+
+
 def _make_datasource_factory(capability: Capability) -> Any:
     """Helper pra criar fixture de OrganizationDataSource FAKE pra qualquer capability."""
     @pytest.fixture
@@ -227,3 +262,4 @@ def _make_datasource_factory(capability: Capability) -> Any:
 datasource_fake_contracts_a = _make_datasource_factory(Capability.CONTRACTS)
 datasource_fake_invoices_a = _make_datasource_factory(Capability.INVOICES)
 datasource_fake_payments_a = _make_datasource_factory(Capability.PAYMENTS)
+datasource_fake_tickets_a = _make_datasource_factory(Capability.TICKETS)
