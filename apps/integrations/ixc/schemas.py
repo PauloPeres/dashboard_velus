@@ -499,3 +499,77 @@ class IxcTicketSchema(BaseModel):
 
     def get_extras(self) -> dict[str, Any]:
         return dict(self.model_extra or {})
+
+
+# =============================================================================
+# Conexão RADIUS — endpoint /radusuarios no IXC
+# =============================================================================
+class IxcRadUserSchema(BaseModel):
+    """Schema do registro `radusuarios` (RADIUS/PPPoE) na API IXC.
+
+    `ativo` e `online` são flags S/N. `download`/`upload` são velocidades do
+    plano (strings opacas). `tempo_conectado_*` e bytes refletem a sessão atual.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    id_cliente: str = Field(default="")
+    id_contrato: str = Field(default="")
+    login: str = Field(default="")
+    ativo: str = Field(default="N")
+    online: str = Field(default="N")
+    ip: str = Field(default="")
+    nas_ip: str = Field(default="")
+    download: str = Field(default="")
+    upload: str = Field(default="")
+    bytes_recebidos: int = Field(default=0)
+    bytes_enviados: int = Field(default=0)
+    ultima_conexao: datetime | None = Field(default=None)
+
+    @field_validator(
+        "id", "id_cliente", "id_contrato", "login", "ativo", "online",
+        "ip", "nas_ip", "download", "upload",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("bytes_recebidos", "bytes_enviados", mode="before")
+    @classmethod
+    def _coerce_int(cls, v: Any) -> int:
+        if v in (None, ""):
+            return 0
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return 0
+
+    @field_validator("ultima_conexao", mode="before")
+    @classmethod
+    def _parse_ixc_datetime(cls, v: Any) -> datetime | None:
+        if v in (None, "", "0000-00-00 00:00:00", "0000-00-00"):
+            return None
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            from zoneinfo import ZoneInfo
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    naive = datetime.strptime(v, fmt)
+                    return naive.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+                except ValueError:
+                    continue
+        return None
+
+    @property
+    def is_active(self) -> bool:
+        return self.ativo.upper() == "S"
+
+    @property
+    def is_online(self) -> bool:
+        return self.online.upper() == "S"
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})

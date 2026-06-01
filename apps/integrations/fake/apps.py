@@ -19,6 +19,7 @@ class FakeAdapterConfig(AppConfig):
         from apps.integrations.shared.enums import Capability, SourceType
         from apps.integrations.shared.registry import registry
 
+        from .connections import FakeConnectionSource
         from .contracts import FakeContractSource
         from .customers import FakeCustomerSource
         from .expenses import FakeExpenseSource
@@ -33,6 +34,7 @@ class FakeAdapterConfig(AppConfig):
             (Capability.PAYMENTS, FakePaymentSource),
             (Capability.EXPENSES, FakeExpenseSource),
             (Capability.TICKETS, FakeTicketSource),
+            (Capability.CONNECTIONS, FakeConnectionSource),
         ]:
             if registry.get_factory(SourceType.FAKE, cap) is None:
                 registry.register(SourceType.FAKE, cap, cls)

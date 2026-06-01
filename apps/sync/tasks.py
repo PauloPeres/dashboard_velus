@@ -31,6 +31,8 @@ from apps.financial.infrastructure.repositories import (
 from apps.helpdesk.domain.dto import TicketDTO
 from apps.helpdesk.infrastructure.repositories import TicketRepository
 from apps.integrations.shared.enums import Capability, SourceType
+from apps.network.domain.dto import ConnectionDTO
+from apps.network.infrastructure.repositories import ConnectionRepository
 from apps.integrations.shared.registry import registry
 from apps.shared.context import (
     reset_current_organization,
@@ -121,6 +123,10 @@ def _ticket_port_call(source: Any, since: datetime | None) -> Iterator[TicketDTO
     return source.list_tickets(since=since)
 
 
+def _connection_port_call(source: Any, since: datetime | None) -> Iterator[ConnectionDTO]:
+    return source.list_connections(since=since)
+
+
 def _repo_upsert(repository: Any, dto: Any, source_type: SourceType) -> None:
     """Genérico: todos os repositories expõem o mesmo upsert_from_dto."""
     repository.upsert_from_dto(dto, source_type=source_type)
@@ -140,6 +146,7 @@ _DISPATCH: dict[
     Capability.PAYMENTS: (_payment_port_call, PaymentRepository, _repo_upsert),
     Capability.EXPENSES: (_expense_port_call, ExpenseRepository, _repo_upsert),
     Capability.TICKETS: (_ticket_port_call, TicketRepository, _repo_upsert),
+    Capability.CONNECTIONS: (_connection_port_call, ConnectionRepository, _repo_upsert),
 }
 
 
