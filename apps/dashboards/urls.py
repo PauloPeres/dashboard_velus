@@ -22,4 +22,5 @@ urlpatterns = [
     path("financial/pessoas/", views.pessoas, name="pessoas"),
     path("churn/", views.churn, name="churn"),
     path("operations/", views.operations, name="operations"),
+    path("network/", views.network, name="network"),
 ]

@@ -82,6 +82,12 @@
                 Operações
             </a>
 
+            <a href="{% url 'dashboards:network' %}"
+               class="flex items-center px-3 py-2 rounded-md
+                      {% if u == 'network' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
+                Rede
+            </a>
+
             <a href="{% url 'scenarios:pj_vs_clt' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'pj_vs_clt' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">

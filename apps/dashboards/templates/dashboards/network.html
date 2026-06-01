@@ -1,0 +1,164 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Rede · Velus{% endblock %}
+
+{% block content %}
+<!-- Cabeçalho -->
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Rede — Conexões</h1>
+    <p class="text-xs text-gray-400 mt-0.5">Status RADIUS · Uptime · Concentradores · Consumo de banda</p>
+  </div>
+</div>
+
+<!-- KPI Cards -->
+<h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Indicadores</h2>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+
+  <!-- Online -->
+  <div class="bg-white rounded-lg shadow-sm border border-emerald-200 p-5">
+    <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
+      Online
+      <span class="relative inline-block group/tip shrink-0">
+        <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
+        <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
+          Conexões ativas e autenticadas no RADIUS neste momento.
+          <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+        </span>
+      </span>
+    </p>
+    <p class="text-2xl font-bold text-emerald-700">{{ online_count|intcomma }}</p>
+    <p class="text-xs text-gray-500 mt-1">conexões ativas</p>
+  </div>
+
+  <!-- Offline -->
+  <div class="bg-white rounded-lg shadow-sm border {% if offline_count > 0 %}border-orange-300{% else %}border-gray-200{% endif %} p-5">
+    <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
+      Offline
+      <span class="relative inline-block group/tip shrink-0">
+        <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
+        <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
+          Conexões ativas no cadastro mas sem sessão RADIUS no momento.
+          <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+        </span>
+      </span>
+    </p>
+    <p class="text-2xl font-bold text-orange-600">{{ offline_count|intcomma }}</p>
+    <p class="text-xs text-gray-500 mt-1">sem sessão ativa</p>
+  </div>
+
+  <!-- Bloqueados -->
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
+      Bloqueados
+      <span class="relative inline-block group/tip shrink-0">
+        <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
+        <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
+          Conexões inativas no cadastro (geralmente por inadimplência ou cancelamento).
+          <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+        </span>
+      </span>
+    </p>
+    <p class="text-2xl font-bold text-red-700">{{ blocked_count|intcomma }}</p>
+    <p class="text-xs text-gray-500 mt-1">desativados</p>
+  </div>
+
+  <!-- Uptime -->
+  <div class="bg-white rounded-lg shadow-sm border {% if uptime_pct < 80 %}border-red-300{% elif uptime_pct < 90 %}border-orange-300{% else %}border-blue-200{% endif %} p-5">
+    <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
+      Uptime
+      <span class="relative inline-block group/tip shrink-0">
+        <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
+        <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
+          Online / (Online + Offline). Bloqueados são excluídos por não representarem falha de rede.
+          <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+        </span>
+      </span>
+    </p>
+    <p class="text-2xl font-bold {% if uptime_pct < 80 %}text-red-700{% elif uptime_pct < 90 %}text-orange-600{% else %}text-blue-700{% endif %}">{{ uptime_pct_str }}</p>
+    <p class="text-xs text-gray-500 mt-1">conexões ativas online</p>
+  </div>
+</div>
+
+<!-- Gráficos -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Distribuição por status</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Proporção de conexões online, offline e bloqueadas</p>
+    <div id="status-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Conexões por concentrador (NAS)</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Top 10 concentradores por número de conexões</p>
+    <div id="nas-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+</div>
+
+<!-- Tabela: Top 20 consumidores de banda -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+  <div class="p-5 pb-0 flex items-baseline justify-between">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-700">Maiores consumidores de banda</h2>
+      <p class="text-xs text-gray-400 mt-0.5">Top 20 ordenados por tráfego total (download + upload)</p>
+    </div>
+    <span class="text-xs text-gray-400">{{ total|intcomma }} conexões</span>
+  </div>
+  <table class="min-w-full text-sm mt-4">
+    <thead class="bg-gray-50 border-t border-gray-200">
+      <tr>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Login</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
+        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">NAS</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Download</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Upload</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Total (GB)</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for c in top_consumers %}
+      <tr class="hover:bg-gray-50">
+        <td class="px-4 py-3 font-medium text-gray-900">{{ c.login }}</td>
+        <td class="px-4 py-3 text-gray-700 truncate max-w-[200px]">{{ c.customer_name }}</td>
+        <td class="px-4 py-3 text-center">
+          {% if c.status == 'ONLINE' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-medium">{{ c.status_label }}</span>
+          {% elif c.status == 'OFFLINE' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-orange-100 text-orange-700 font-medium">{{ c.status_label }}</span>
+          {% elif c.status == 'BLOCKED' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-medium">{{ c.status_label }}</span>
+          {% else %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-700 font-medium">{{ c.status_label }}</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-3 text-gray-500 text-xs">{{ c.nas_ip|default:"—" }}</td>
+        <td class="px-4 py-3 text-right text-gray-500 tabular-nums text-xs">{{ c.rx_bytes|filesizeformat }}</td>
+        <td class="px-4 py-3 text-right text-gray-500 tabular-nums text-xs">{{ c.tx_bytes|filesizeformat }}</td>
+        <td class="px-4 py-3 text-right tabular-nums font-semibold text-gray-700">{{ c.total_gb|intcomma }}</td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="7" class="px-6 py-8 text-center text-gray-500">
+          Nenhuma conexão registrada
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ status_chart_json|json_script:"status-data" }}
+{{ nas_chart_json|json_script:"nas-data" }}
+<script>
+  renderChart("status-chart", "status-data");
+  renderChart("nas-chart", "nas-data");
+</script>
+{% endblock %}

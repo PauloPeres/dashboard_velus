@@ -918,3 +918,46 @@ def ticket_priority_pie(data: list[dict[str, Any]]) -> str:
         layout={**_LAYOUT_BASE, "showlegend": True},
     )
     return _to_json(fig)
+
+
+def connection_status_pie(data: list[dict[str, Any]]) -> str:
+    """Donut — distribuicao de conexoes por status (online/offline/bloqueado)."""
+    colors_map = {
+        "ONLINE": "#10b981",
+        "OFFLINE": "#f97316",
+        "BLOCKED": "#ef4444",
+        "UNKNOWN": "#9ca3af",
+    }
+    labels = [d["status"] for d in data]
+    values = [d["count"] for d in data]
+    colors = [colors_map.get(d.get("status_key", ""), "#6b7280") for d in data]
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.4,
+                marker={"colors": colors},
+                hovertemplate="<b>%{label}</b><br>%{value} conexões (%{percent})<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "showlegend": True},
+    )
+    return _to_json(fig)
+
+
+def connections_by_nas_bar(data: list[dict[str, Any]]) -> str:
+    """Barras horizontais — conexoes por concentrador (NAS/OLT)."""
+    labels = [d["nas_ip"] for d in data]
+    values = [d["count"] for d in data]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=values, y=labels, orientation="h",
+                marker_color="#0ea5e9",
+                hovertemplate="<b>%{y}</b><br>%{x} conexões<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "xaxis": {"title": "Conexões"}},
+    )
+    return _to_json(fig)

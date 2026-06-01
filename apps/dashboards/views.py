@@ -837,3 +837,89 @@ def operations(request: HttpRequest) -> HttpResponse:
             "priority_chart_json": charts.ticket_priority_pie(priority_dist),
         },
     )
+
+
+@login_required
+@never_cache
+def network(request: HttpRequest) -> HttpResponse:
+    from apps.network.infrastructure.models import Connection
+
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    qs = Connection.objects.filter(organization=org)
+    total = qs.count()
+
+    # KPIs por status
+    status_counts = {
+        row["status"]: row["count"]
+        for row in qs.values("status").annotate(count=Count("id"))
+    }
+    online_count = status_counts.get("ONLINE", 0)
+    offline_count = status_counts.get("OFFLINE", 0)
+    blocked_count = status_counts.get("BLOCKED", 0)
+
+    # Uptime % = online / (online + offline) — ignora bloqueados (não são falha de rede)
+    active_base = online_count + offline_count
+    uptime_pct = round(online_count / active_base * 100, 1) if active_base else 0.0
+
+    # Distribuição por status (donut)
+    status_labels = {
+        "ONLINE": "Online",
+        "OFFLINE": "Offline",
+        "BLOCKED": "Bloqueado",
+        "UNKNOWN": "Desconhecido",
+    }
+    status_dist = [
+        {
+            "status": status_labels.get(s, s),
+            "status_key": s,
+            "count": c,
+        }
+        for s, c in sorted(status_counts.items(), key=lambda kv: -kv[1])
+    ]
+
+    # Conexões por concentrador (NAS) — top 10
+    nas_dist = [
+        {"nas_ip": row["nas_ip"] or "—", "count": row["count"]}
+        for row in (
+            qs.exclude(nas_ip="")
+            .values("nas_ip")
+            .annotate(count=Count("id"))
+            .order_by("-count")[:10]
+        )
+    ]
+
+    # Top 20 consumidores de banda (rx + tx)
+    top_consumers = list(
+        qs.select_related("customer")
+        .annotate(total_bytes=F("rx_bytes") + F("tx_bytes"))
+        .order_by("-total_bytes")[:20]
+        .values(
+            "login", "customer__name", "customer_external_id",
+            "status", "nas_ip", "rx_bytes", "tx_bytes", "total_bytes",
+        )
+    )
+    for c in top_consumers:
+        c["status_label"] = status_labels.get(c["status"], c["status"])
+        c["customer_name"] = c["customer__name"] or f"Cliente #{c['customer_external_id']}"
+        c["total_gb"] = round((c["total_bytes"] or 0) / 1024**3, 2)
+
+    return render(
+        request,
+        "dashboards/network.html",
+        {
+            "total": total,
+            "online_count": online_count,
+            "offline_count": offline_count,
+            "blocked_count": blocked_count,
+            "uptime_pct": uptime_pct,
+            "uptime_pct_str": f"{uptime_pct:.1f}%",
+            "status_dist": status_dist,
+            "top_consumers": top_consumers,
+            "status_chart_json": charts.connection_status_pie(status_dist),
+            "nas_chart_json": charts.connections_by_nas_bar(nas_dist),
+        },
+    )
