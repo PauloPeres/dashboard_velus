@@ -440,3 +440,62 @@ class IxcContractSurchargeSchema(BaseModel):
         if v in (None, "", "0000-00-00"):
             return ""
         return str(v)[:10]
+
+
+# =============================================================================
+# Chamado — endpoint /su_oss_chamado no IXC
+# =============================================================================
+class IxcTicketSchema(BaseModel):
+    """Schema do registro `su_oss_chamado` (chamados de suporte) na API IXC.
+
+    Status: AG=agendado, A=aberto, EX=em execucao, F=fechado, EN=encaminhado.
+    Prioridade: N=normal, A=alta, B=baixa, U=urgente.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    id_cliente: str = Field(default="")
+    id_assunto: str = Field(default="")
+    setor: str = Field(default="")
+    id_tecnico: str = Field(default="")
+    status: str = Field(default="A")
+    prioridade: str = Field(default="N")
+    mensagem: str = Field(default="")
+    protocolo: str = Field(default="")
+    data_abertura: datetime | None = Field(default=None)
+    data_agenda: datetime | None = Field(default=None)
+    data_fechamento: datetime | None = Field(default=None)
+    ultima_atualizacao: datetime | None = Field(default=None)
+
+    @field_validator("id", "id_cliente", "id_assunto", "setor", "id_tecnico", "status", "prioridade", "protocolo", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("mensagem", mode="before")
+    @classmethod
+    def _empty_to_str(cls, v: Any) -> str:
+        if v in (None, "null"):
+            return ""
+        return str(v)
+
+    @field_validator("data_abertura", "data_agenda", "data_fechamento", "ultima_atualizacao", mode="before")
+    @classmethod
+    def _parse_ixc_datetime(cls, v: Any) -> datetime | None:
+        if v in (None, "", "0000-00-00 00:00:00", "0000-00-00"):
+            return None
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            from zoneinfo import ZoneInfo
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    naive = datetime.strptime(v, fmt)
+                    return naive.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+                except ValueError:
+                    continue
+        return None
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})

@@ -31,6 +31,7 @@ class Capability(models.TextChoices):
         CONTRACTS  → apps.customers.domain.ports.ContractSourcePort
         INVOICES   → apps.financial.domain.ports.InvoiceSourcePort
         PAYMENTS   → apps.financial.domain.ports.PaymentSourcePort
+        TICKETS    → apps.helpdesk.domain.ports.TicketSourcePort
     """
 
     CUSTOMERS = "CUSTOMERS", "Clientes"
@@ -38,3 +39,4 @@ class Capability(models.TextChoices):
     INVOICES = "INVOICES", "Faturas"
     PAYMENTS = "PAYMENTS", "Pagamentos"
     EXPENSES = "EXPENSES", "Despesas"
+    TICKETS = "TICKETS", "Chamados"

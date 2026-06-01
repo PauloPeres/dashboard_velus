@@ -55,6 +55,7 @@ LOCAL_APPS: list[str] = [
     "apps.integrations.shared",
     "apps.customers",
     "apps.financial",
+    "apps.helpdesk",
     "apps.analytics",
     "apps.integrations.fake",
     "apps.integrations.ixc",
