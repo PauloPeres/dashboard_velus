@@ -857,3 +857,64 @@ def forecast_area(
         },
     )
     return _to_json(fig)
+
+
+def ticket_volume_trend(series: list[dict[str, Any]]) -> str:
+    """Linha dupla — chamados abertos vs fechados por mes."""
+    labels = [s["label"] for s in series]
+    opened = [s["opened"] for s in series]
+    closed = [s["closed"] for s in series]
+    fig = go.Figure(
+        data=[
+            go.Scatter(
+                name="Abertos",
+                x=labels, y=opened,
+                mode="lines+markers",
+                line={"color": "#ef4444", "width": 3},
+                marker={"size": 8},
+                hovertemplate="<b>%{x}</b><br>Abertos: %{y}<extra></extra>",
+            ),
+            go.Scatter(
+                name="Fechados",
+                x=labels, y=closed,
+                mode="lines+markers",
+                line={"color": "#10b981", "width": 3},
+                marker={"size": 8},
+                hovertemplate="<b>%{x}</b><br>Fechados: %{y}<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "showlegend": True,
+            "yaxis": {"title": "Chamados"},
+            "legend": {"orientation": "h", "y": -0.25},
+        },
+    )
+    return _to_json(fig)
+
+
+def ticket_priority_pie(data: list[dict[str, Any]]) -> str:
+    """Donut — distribuicao de chamados abertos por prioridade."""
+    colors_map = {
+        "URGENT": "#dc2626",
+        "HIGH": "#f97316",
+        "NORMAL": "#2563eb",
+        "LOW": "#10b981",
+        "UNKNOWN": "#9ca3af",
+    }
+    labels = [d["priority"] for d in data]
+    values = [d["count"] for d in data]
+    colors = [colors_map.get(d.get("priority_key", ""), "#6b7280") for d in data]
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.4,
+                marker={"colors": colors},
+                hovertemplate="<b>%{label}</b><br>%{value} chamados (%{percent})<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "showlegend": True},
+    )
+    return _to_json(fig)

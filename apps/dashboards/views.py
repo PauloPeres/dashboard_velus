@@ -6,12 +6,16 @@ e via context_processor exposto em `current_organization`.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
+from dateutil.relativedelta import relativedelta
 from django.contrib.auth.decorators import login_required
+from django.db.models import Avg, Count, F
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
 from django.shortcuts import render
 from django.urls import reverse
+from django.utils import timezone
 from django.views.decorators.cache import never_cache
 
 from apps.analytics.application.aggregations import (
@@ -686,5 +690,150 @@ def churn(request: HttpRequest) -> HttpResponse:
             "churn_reason_json": charts.churn_reason_pareto(reasons),
             "ltv_hist_json": charts.ltv_histogram(ltv_dist),
             "churn_scatter_json": charts.churn_plan_risk_scatter(plan_detail_display, overall_rate),
+        },
+    )
+
+
+@login_required
+@never_cache
+def operations(request: HttpRequest) -> HttpResponse:
+    from apps.helpdesk.infrastructure.models import Ticket
+
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+    months = _get_months(request)
+
+    # All tickets for this org (TenantManager filters by org)
+    qs = Ticket.objects.filter(organization=org)
+    now = timezone.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    # KPIs
+    open_count = qs.exclude(status="CLOSED").count()
+
+    closed_this_month_qs = qs.filter(status="CLOSED", closed_at__gte=month_start)
+    closed_this_month = closed_this_month_qs.count()
+
+    # Avg resolution time (closed tickets this month)
+    avg_resolution = closed_this_month_qs.filter(
+        opened_at__isnull=False,
+        closed_at__isnull=False,
+    ).aggregate(
+        avg_hours=Avg(F("closed_at") - F("opened_at"))
+    )["avg_hours"]
+    avg_resolution_hours = 0.0
+    if avg_resolution is not None:
+        avg_resolution_hours = avg_resolution.total_seconds() / 3600
+
+    # SLA % (closed within 24h / total closed this month)
+    sla_threshold = timedelta(hours=24)
+    if closed_this_month > 0:
+        from django.db.models import DurationField, ExpressionWrapper
+        within_sla = (
+            closed_this_month_qs
+            .filter(opened_at__isnull=False, closed_at__isnull=False)
+            .annotate(
+                resolution_time=ExpressionWrapper(
+                    F("closed_at") - F("opened_at"),
+                    output_field=DurationField(),
+                )
+            )
+            .filter(resolution_time__lte=sla_threshold)
+            .count()
+        )
+        sla_pct = round(within_sla / closed_this_month * 100, 1)
+    else:
+        sla_pct = 0.0
+
+    # Volume trend (opened vs closed per month, last N months)
+    volume_series = []
+    for i in range(months):
+        m_start = (now - relativedelta(months=months - 1 - i)).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        if i < months - 1:
+            m_end = (now - relativedelta(months=months - 2 - i)).replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+        else:
+            m_end = now
+        opened_m = qs.filter(opened_at__gte=m_start, opened_at__lt=m_end).count()
+        closed_m = qs.filter(closed_at__gte=m_start, closed_at__lt=m_end).count()
+        volume_series.append({
+            "month": m_start.strftime("%Y-%m"),
+            "label": m_start.strftime("%b/%y"),
+            "opened": opened_m,
+            "closed": closed_m,
+        })
+
+    # Priority distribution (open tickets)
+    priority_labels = {
+        "URGENT": "Urgente",
+        "HIGH": "Alta",
+        "NORMAL": "Normal",
+        "LOW": "Baixa",
+        "UNKNOWN": "Desconhecido",
+    }
+    priority_qs = (
+        qs.exclude(status="CLOSED")
+        .values("priority")
+        .annotate(count=Count("id"))
+        .order_by("-count")
+    )
+    priority_dist = [
+        {
+            "priority": priority_labels.get(p["priority"], p["priority"]),
+            "priority_key": p["priority"],
+            "count": p["count"],
+        }
+        for p in priority_qs
+    ]
+
+    # Top 20 open tickets (oldest first)
+    open_tickets = list(
+        qs.exclude(status="CLOSED")
+        .select_related("customer")
+        .order_by("opened_at")[:20]
+        .values(
+            "protocol", "customer__name", "customer_external_id",
+            "priority", "status", "opened_at",
+        )
+    )
+    # Enrich with age
+    for t in open_tickets:
+        if t["opened_at"]:
+            delta = now - t["opened_at"]
+            t["age_days"] = delta.days
+        else:
+            t["age_days"] = None
+        t["priority_label"] = priority_labels.get(t["priority"], t["priority"])
+        status_labels = {
+            "OPEN": "Aberto", "SCHEDULED": "Agendado",
+            "IN_PROGRESS": "Em execucao", "FORWARDED": "Encaminhado",
+        }
+        t["status_label"] = status_labels.get(t["status"], t["status"])
+        t["customer_name"] = t["customer__name"] or f"Cliente #{t['customer_external_id']}"
+
+    # Format avg resolution
+    if avg_resolution_hours >= 24:
+        avg_res_str = f"{avg_resolution_hours / 24:.1f} dias"
+    else:
+        avg_res_str = f"{avg_resolution_hours:.1f}h"
+
+    return render(
+        request,
+        "dashboards/operations.html",
+        {
+            "open_count": open_count,
+            "closed_this_month": closed_this_month,
+            "avg_resolution_str": avg_res_str,
+            "sla_pct": sla_pct,
+            "sla_pct_str": f"{sla_pct:.1f}%",
+            "open_tickets": open_tickets,
+            "priority_dist": priority_dist,
+            "volume_chart_json": charts.ticket_volume_trend(volume_series),
+            "priority_chart_json": charts.ticket_priority_pie(priority_dist),
         },
     )
