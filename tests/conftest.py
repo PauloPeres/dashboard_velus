@@ -20,9 +20,11 @@ from apps.helpdesk.domain.dto import TicketDTO
 from apps.integrations.fake.connections import FakeConnectionSource
 from apps.integrations.fake.contracts import FakeContractSource
 from apps.integrations.fake.customers import FakeCustomerSource
+from apps.integrations.fake.equipment import FakeEquipmentSource
 from apps.integrations.fake.invoices import FakeInvoiceSource, FakePaymentSource
 from apps.integrations.fake.tickets import FakeTicketSource
 from apps.integrations.shared.enums import Capability, SourceType
+from apps.inventory.domain.dto import EquipmentDTO
 from apps.network.domain.dto import ConnectionDTO
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import (
@@ -46,6 +48,7 @@ def _clean_state_around_test() -> Iterator[None]:
     FakePaymentSource.reset_seed()
     FakeTicketSource.reset_seed()
     FakeConnectionSource.reset_seed()
+    FakeEquipmentSource.reset_seed()
     try:
         yield
     finally:
@@ -276,6 +279,32 @@ def sample_connection_dtos() -> list[ConnectionDTO]:
     ]
 
 
+@pytest.fixture
+def sample_equipment_dtos() -> list[EquipmentDTO]:
+    from decimal import Decimal
+
+    return [
+        EquipmentDTO(
+            external_id="eq-1",
+            contract_external_id="ctr-1",
+            product_name="ONT Huawei HG8245",
+            status="ACTIVE",
+            serial="SN-0001",
+            mac="AA:BB:CC:00:00:01",
+            value=Decimal("250.00"),
+        ),
+        EquipmentDTO(
+            external_id="eq-2",
+            contract_external_id="ctr-2",
+            product_name="Roteador TP-Link",
+            status="RETURNED",
+            serial="SN-0002",
+            mac="AA:BB:CC:00:00:02",
+            value=Decimal("120.00"),
+        ),
+    ]
+
+
 def _make_datasource_factory(capability: Capability) -> Any:
     """Helper pra criar fixture de OrganizationDataSource FAKE pra qualquer capability."""
     @pytest.fixture
@@ -298,3 +327,4 @@ datasource_fake_invoices_a = _make_datasource_factory(Capability.INVOICES)
 datasource_fake_payments_a = _make_datasource_factory(Capability.PAYMENTS)
 datasource_fake_tickets_a = _make_datasource_factory(Capability.TICKETS)
 datasource_fake_connections_a = _make_datasource_factory(Capability.CONNECTIONS)
+datasource_fake_equipment_a = _make_datasource_factory(Capability.EQUIPMENT)

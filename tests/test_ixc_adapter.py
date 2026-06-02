@@ -918,3 +918,169 @@ class TestIxcPaymentToDto:
         dtos = list(source.list_payments())
         assert len(dtos) == 1
         assert dtos[0].external_id == "2"
+
+
+# =============================================================================
+# Equipment — schema cliente_contrato_comodato + _to_dto
+# =============================================================================
+from apps.integrations.ixc.equipment import IxcEquipmentSource
+from apps.integrations.ixc.schemas import IxcEquipmentSchema
+from apps.inventory.domain.dto import EquipmentDTO
+
+
+def _sample_ixc_comodato(**overrides: Any) -> dict[str, Any]:
+    """Fixture inline de um registro `cliente_contrato_comodato` do IXC."""
+    base = {
+        "id": "300",
+        "id_cliente_contrato": "100",
+        "id_produto": "12",
+        "descricao": "ONT Huawei HG8245",
+        "serial": "SN-0001",
+        "mac": "AA:BB:CC:00:00:01",
+        "valor": "250.00",
+        "status": "A",
+        # Campo extra desconhecido — deve ir pra raw_extras
+        "id_filial": "1",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestIxcEquipmentSchema:
+    def test_parses_canonical_response(self) -> None:
+        schema = IxcEquipmentSchema.model_validate(_sample_ixc_comodato())
+        assert schema.id == "300"
+        assert schema.id_cliente_contrato == "100"
+        assert schema.id_produto == "12"
+        assert schema.descricao == "ONT Huawei HG8245"
+        assert schema.serial == "SN-0001"
+        assert schema.valor == "250.00"
+        assert schema.status == "A"
+
+    def test_coerces_int_id_to_string(self) -> None:
+        schema = IxcEquipmentSchema.model_validate(
+            _sample_ixc_comodato(id=300, id_cliente_contrato=100)
+        )
+        assert schema.id == "300"
+        assert schema.id_cliente_contrato == "100"
+
+    def test_coerces_comma_decimal(self) -> None:
+        schema = IxcEquipmentSchema.model_validate(_sample_ixc_comodato(valor="250,75"))
+        assert schema.valor == "250.75"  # vírgula → ponto
+
+    def test_empty_valor_becomes_zero(self) -> None:
+        schema = IxcEquipmentSchema.model_validate(
+            _sample_ixc_comodato(valor="")
+        )
+        assert schema.valor == "0"
+
+    def test_defaults_when_optional_missing(self) -> None:
+        schema = IxcEquipmentSchema.model_validate({"id": "300"})
+        assert schema.id_cliente_contrato == ""
+        assert schema.descricao == ""
+        assert schema.valor == "0"
+        assert schema.status == ""
+
+    def test_extras_captured(self) -> None:
+        schema = IxcEquipmentSchema.model_validate(_sample_ixc_comodato())
+        extras = schema.get_extras()
+        assert extras.get("id_filial") == "1"
+
+    def test_rejects_missing_id(self) -> None:
+        raw = _sample_ixc_comodato()
+        del raw["id"]
+        with pytest.raises(Exception):  # noqa: B017 — ValidationError
+            IxcEquipmentSchema.model_validate(raw)
+
+
+class TestIxcEquipmentSourceDeclaration:
+    def test_implements_port_contract(self) -> None:
+        assert IxcEquipmentSource.source_type == SourceType.IXC
+        assert IxcEquipmentSource.capabilities == frozenset({Capability.EQUIPMENT})
+
+
+class TestIxcEquipmentToDto:
+    def test_basic_mapping(self) -> None:
+        schema = IxcEquipmentSchema.model_validate(_sample_ixc_comodato())
+        dto = IxcEquipmentSource._to_dto(schema)
+        assert isinstance(dto, EquipmentDTO)
+        assert dto.external_id == "300"
+        assert dto.contract_external_id == "100"
+        assert dto.product_name == "ONT Huawei HG8245"
+        assert dto.serial == "SN-0001"
+        assert dto.mac == "AA:BB:CC:00:00:01"
+        assert dto.value == Decimal("250.00")
+
+    @pytest.mark.parametrize(
+        ("ixc_status", "expected"),
+        [
+            ("A", "ACTIVE"),
+            ("S", "ACTIVE"),
+            ("D", "RETURNED"),
+            ("N", "RETURNED"),
+            ("ZZ", "UNKNOWN"),  # desconhecido → fallback UNKNOWN
+            ("", "UNKNOWN"),
+        ],
+    )
+    def test_status_mapping(self, ixc_status: str, expected: str) -> None:
+        schema = IxcEquipmentSchema.model_validate(
+            _sample_ixc_comodato(status=ixc_status)
+        )
+        dto = IxcEquipmentSource._to_dto(schema)
+        assert dto.status == expected
+
+    def test_product_name_fallback_to_id_produto(self) -> None:
+        schema = IxcEquipmentSchema.model_validate(
+            _sample_ixc_comodato(descricao="", id_produto="12")
+        )
+        dto = IxcEquipmentSource._to_dto(schema)
+        assert dto.product_name == "Produto #12"
+
+    def test_product_name_empty_when_no_descricao_no_produto(self) -> None:
+        schema = IxcEquipmentSchema.model_validate(
+            _sample_ixc_comodato(descricao="", id_produto="")
+        )
+        dto = IxcEquipmentSource._to_dto(schema)
+        assert dto.product_name == ""
+
+    def test_lists_single_page_translates_to_dtos(self, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get(f"{API_URL}/cliente_contrato_comodato").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        _sample_ixc_comodato(id="1", status="A"),
+                        _sample_ixc_comodato(id="2", status="D"),
+                    ],
+                },
+            )
+        )
+        source = IxcEquipmentSource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_equipment())
+
+        assert len(dtos) == 2
+        assert all(isinstance(d, EquipmentDTO) for d in dtos)
+        assert dtos[0].status == "ACTIVE"
+        assert dtos[1].status == "RETURNED"
+
+    def test_invalid_record_skipped_not_raised(self, respx_mock: respx.MockRouter) -> None:
+        """Registro inválido (sem id) é pulado, não derruba o sync inteiro."""
+        respx_mock.get(f"{API_URL}/cliente_contrato_comodato").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        {"id_cliente_contrato": "100"},  # falta id → pulado
+                        _sample_ixc_comodato(id="2"),
+                    ],
+                },
+            )
+        )
+        source = IxcEquipmentSource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_equipment())
+        assert len(dtos) == 1
+        assert dtos[0].external_id == "2"
