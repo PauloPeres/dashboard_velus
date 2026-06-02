@@ -745,3 +745,176 @@ class TestIxcConnectionToDto:
         dtos = list(source.list_connections())
         assert len(dtos) == 1
         assert dtos[0].external_id == "2"
+
+
+# =============================================================================
+# Payment — schema fn_areceber_baixas + _to_dto
+# =============================================================================
+from decimal import Decimal
+
+from apps.financial.domain.dto import PaymentDTO
+from apps.integrations.ixc.payments import IxcPaymentSource
+from apps.integrations.ixc.schemas import IxcPaymentSchema
+
+
+def _sample_ixc_baixa(**overrides: Any) -> dict[str, Any]:
+    """Fixture inline de um registro `fn_areceber_baixas` do IXC."""
+    base = {
+        "id": "900",
+        "id_areceber": "55",
+        "id_cliente": "42",
+        "valor": "150.00",
+        "data_baixa": "2025-05-15 10:30:00",
+        "forma_pagamento": "PIX",
+        "juros": "5.00",
+        "multa": "2.50",
+        "desconto": "0.00",
+        # Campo extra desconhecido — deve ir pra raw_extras
+        "id_operador": "7",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestIxcPaymentSchema:
+    def test_parses_canonical_response(self) -> None:
+        schema = IxcPaymentSchema.model_validate(_sample_ixc_baixa())
+        assert schema.id == "900"
+        assert schema.id_areceber == "55"
+        assert schema.valor == "150.00"
+        assert schema.data_baixa is not None
+        assert schema.data_baixa.tzinfo is not None  # tz-aware
+
+    def test_coerces_int_id_to_string(self) -> None:
+        schema = IxcPaymentSchema.model_validate(
+            _sample_ixc_baixa(id=900, id_areceber=55)
+        )
+        assert schema.id == "900"
+        assert schema.id_areceber == "55"
+
+    def test_coerces_comma_decimal(self) -> None:
+        schema = IxcPaymentSchema.model_validate(_sample_ixc_baixa(valor="150,75"))
+        assert schema.valor == "150.75"  # vírgula → ponto
+
+    def test_empty_amounts_become_zero(self) -> None:
+        schema = IxcPaymentSchema.model_validate(
+            _sample_ixc_baixa(juros="", multa=None, desconto="0.00")
+        )
+        assert schema.juros == "0"
+        assert schema.multa == "0"
+        assert schema.desconto == "0"
+
+    def test_zero_date_becomes_none(self) -> None:
+        schema = IxcPaymentSchema.model_validate(
+            _sample_ixc_baixa(data_baixa="0000-00-00 00:00:00")
+        )
+        assert schema.data_baixa is None
+
+    def test_extras_captured(self) -> None:
+        schema = IxcPaymentSchema.model_validate(_sample_ixc_baixa())
+        extras = schema.get_extras()
+        assert extras.get("id_operador") == "7"
+
+    def test_rejects_missing_id(self) -> None:
+        raw = _sample_ixc_baixa()
+        del raw["id"]
+        with pytest.raises(Exception):  # noqa: B017 — ValidationError
+            IxcPaymentSchema.model_validate(raw)
+
+
+class TestIxcPaymentSourceDeclaration:
+    def test_implements_port_contract(self) -> None:
+        assert IxcPaymentSource.source_type == SourceType.IXC
+        assert IxcPaymentSource.capabilities == frozenset({Capability.PAYMENTS})
+
+
+class TestIxcPaymentToDto:
+    def test_basic_mapping(self) -> None:
+        schema = IxcPaymentSchema.model_validate(_sample_ixc_baixa())
+        dto = IxcPaymentSource._to_dto(schema)
+        assert isinstance(dto, PaymentDTO)
+        assert dto.external_id == "900"
+        assert dto.invoice_external_id == "55"
+        assert dto.contract_external_id is None
+        assert dto.amount == Decimal("150.00")
+        assert dto.method == "PIX"
+
+    def test_juros_multa_desconto_in_extras(self) -> None:
+        schema = IxcPaymentSchema.model_validate(_sample_ixc_baixa())
+        dto = IxcPaymentSource._to_dto(schema)
+        assert dto is not None
+        assert dto.raw_extras["juros"] == "5.00"
+        assert dto.raw_extras["multa"] == "2.50"
+        assert dto.raw_extras["desconto"] == "0"
+
+    def test_baixa_without_date_skipped(self) -> None:
+        schema = IxcPaymentSchema.model_validate(
+            _sample_ixc_baixa(data_baixa="0000-00-00 00:00:00")
+        )
+        assert IxcPaymentSource._to_dto(schema) is None
+
+    def test_empty_invoice_id_becomes_none(self) -> None:
+        schema = IxcPaymentSchema.model_validate(_sample_ixc_baixa(id_areceber=""))
+        dto = IxcPaymentSource._to_dto(schema)
+        assert dto is not None
+        assert dto.invoice_external_id is None
+
+    @pytest.mark.parametrize(
+        ("forma", "expected"),
+        [
+            ("PIX", "PIX"),
+            ("Boleto Bancário", "BOLETO"),
+            ("Cartão de Crédito", "CARD"),
+            ("TED", "TRANSFER"),
+            ("Dinheiro", "CASH"),
+            ("", "UNKNOWN"),
+            ("Cheque", "UNKNOWN"),
+        ],
+    )
+    def test_method_mapping(self, forma: str, expected: str) -> None:
+        schema = IxcPaymentSchema.model_validate(_sample_ixc_baixa(forma_pagamento=forma))
+        dto = IxcPaymentSource._to_dto(schema)
+        assert dto is not None
+        assert dto.method == expected
+
+    def test_lists_single_page_translates_to_dtos(self, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get(f"{API_URL}/fn_areceber_baixas").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        _sample_ixc_baixa(id="1", forma_pagamento="PIX"),
+                        _sample_ixc_baixa(id="2", forma_pagamento="Boleto"),
+                    ],
+                },
+            )
+        )
+        source = IxcPaymentSource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_payments())
+
+        assert len(dtos) == 2
+        assert all(isinstance(d, PaymentDTO) for d in dtos)
+        assert dtos[0].method == "PIX"
+        assert dtos[1].method == "BOLETO"
+
+    def test_invalid_record_skipped_not_raised(self, respx_mock: respx.MockRouter) -> None:
+        """Registro inválido (sem id) é pulado, não derruba o sync inteiro."""
+        respx_mock.get(f"{API_URL}/fn_areceber_baixas").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        {"id_areceber": "55"},  # falta id → pulado
+                        _sample_ixc_baixa(id="2"),
+                    ],
+                },
+            )
+        )
+        source = IxcPaymentSource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_payments())
+        assert len(dtos) == 1
+        assert dtos[0].external_id == "2"

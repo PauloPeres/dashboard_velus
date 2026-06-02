@@ -170,3 +170,70 @@ class TestFinancialCrossTenant:
 
         set_current_organization(organization_b)
         assert Payment.objects.count() == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.e2e
+class TestPaymentSync:
+    def test_bootstrap_persists_payments(
+        self,
+        organization_a: Organization,
+        datasource_fake_payments_a: OrganizationDataSource,
+        sample_payment_dtos: list,
+    ) -> None:
+        from apps.integrations.fake.invoices import FakePaymentSource
+
+        FakePaymentSource.set_seed(sample_payment_dtos)
+        result = sync_capability(
+            organization_id=organization_a.pk, capability="PAYMENTS", mode="BOOTSTRAP"
+        )
+
+        assert result["records_processed"] == 1
+        set_current_organization(organization_a)
+        assert Payment.objects.count() == 1
+        pay = Payment.objects.first()
+        assert pay.external_id == "pay-1"
+        assert pay.method == "PIX"
+
+    def test_idempotency_no_duplicates_on_rerun(
+        self,
+        organization_a: Organization,
+        datasource_fake_payments_a: OrganizationDataSource,
+        sample_payment_dtos: list,
+    ) -> None:
+        from apps.integrations.fake.invoices import FakePaymentSource
+
+        FakePaymentSource.set_seed(sample_payment_dtos)
+        sync_capability(
+            organization_id=organization_a.pk, capability="PAYMENTS", mode="BOOTSTRAP"
+        )
+        sync_capability(
+            organization_id=organization_a.pk, capability="PAYMENTS", mode="BOOTSTRAP"
+        )
+
+        set_current_organization(organization_a)
+        assert Payment.objects.count() == 1
+
+    def test_resolves_invoice_fk_when_invoices_synced_first(
+        self,
+        organization_a: Organization,
+        datasource_fake_invoices_a: OrganizationDataSource,
+        datasource_fake_payments_a: OrganizationDataSource,
+        sample_invoice_dtos: list,
+        sample_payment_dtos: list,
+    ) -> None:
+        from apps.integrations.fake.invoices import FakeInvoiceSource, FakePaymentSource
+
+        FakeInvoiceSource.set_seed(sample_invoice_dtos)
+        sync_capability(
+            organization_id=organization_a.pk, capability="INVOICES", mode="BOOTSTRAP"
+        )
+        FakePaymentSource.set_seed(sample_payment_dtos)
+        sync_capability(
+            organization_id=organization_a.pk, capability="PAYMENTS", mode="BOOTSTRAP"
+        )
+
+        set_current_organization(organization_a)
+        pay = Payment.objects.get(external_id="pay-1")
+        assert pay.invoice is not None
+        assert pay.invoice.external_id == "inv-1"
