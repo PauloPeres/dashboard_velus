@@ -22,9 +22,12 @@ from apps.integrations.fake.contracts import FakeContractSource
 from apps.integrations.fake.customers import FakeCustomerSource
 from apps.integrations.fake.equipment import FakeEquipmentSource
 from apps.integrations.fake.invoices import FakeInvoiceSource, FakePaymentSource
+from apps.integrations.fake.leads import FakeLeadSource
+from apps.integrations.fake.opportunities import FakeOpportunitySource
 from apps.integrations.fake.tickets import FakeTicketSource
 from apps.integrations.shared.enums import Capability, SourceType
 from apps.inventory.domain.dto import EquipmentDTO
+from apps.sales.domain.dto import LeadDTO, OpportunityDTO
 from apps.network.domain.dto import ConnectionDTO
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import (
@@ -49,6 +52,8 @@ def _clean_state_around_test() -> Iterator[None]:
     FakeTicketSource.reset_seed()
     FakeConnectionSource.reset_seed()
     FakeEquipmentSource.reset_seed()
+    FakeLeadSource.reset_seed()
+    FakeOpportunitySource.reset_seed()
     try:
         yield
     finally:
@@ -59,6 +64,9 @@ def _clean_state_around_test() -> Iterator[None]:
         FakePaymentSource.reset_seed()
         FakeTicketSource.reset_seed()
         FakeConnectionSource.reset_seed()
+        FakeEquipmentSource.reset_seed()
+        FakeLeadSource.reset_seed()
+        FakeOpportunitySource.reset_seed()
 
 
 # =============================================================================
@@ -305,6 +313,54 @@ def sample_equipment_dtos() -> list[EquipmentDTO]:
     ]
 
 
+@pytest.fixture
+def sample_lead_dtos() -> list[LeadDTO]:
+    return [
+        LeadDTO(
+            external_id="lead-1",
+            name="Prospect Um",
+            status="NEW",
+            phone="11999990001",
+            email="prospect1@example.test",
+            origin="Indicação",
+            salesperson_id="7",
+            created_at_source=datetime(2025, 4, 5, tzinfo=UTC),
+        ),
+        LeadDTO(
+            external_id="lead-2",
+            name="Prospect Dois",
+            status="CONVERTED",
+            phone="11999990002",
+            origin="Site",
+            salesperson_id="7",
+            created_at_source=datetime(2025, 5, 12, tzinfo=UTC),
+        ),
+    ]
+
+
+@pytest.fixture
+def sample_opportunity_dtos() -> list[OpportunityDTO]:
+    from decimal import Decimal
+
+    return [
+        OpportunityDTO(
+            external_id="opp-1",
+            lead_external_id="lead-1",
+            status="OPEN",
+            value=Decimal("1200.00"),
+            created_at_source=datetime(2025, 4, 6, tzinfo=UTC),
+        ),
+        OpportunityDTO(
+            external_id="opp-2",
+            lead_external_id="lead-2",
+            status="WON",
+            value=Decimal("2400.00"),
+            created_at_source=datetime(2025, 5, 13, tzinfo=UTC),
+            closed_at=datetime(2025, 5, 20, tzinfo=UTC),
+        ),
+    ]
+
+
 def _make_datasource_factory(capability: Capability) -> Any:
     """Helper pra criar fixture de OrganizationDataSource FAKE pra qualquer capability."""
     @pytest.fixture
@@ -328,3 +384,5 @@ datasource_fake_payments_a = _make_datasource_factory(Capability.PAYMENTS)
 datasource_fake_tickets_a = _make_datasource_factory(Capability.TICKETS)
 datasource_fake_connections_a = _make_datasource_factory(Capability.CONNECTIONS)
 datasource_fake_equipment_a = _make_datasource_factory(Capability.EQUIPMENT)
+datasource_fake_leads_a = _make_datasource_factory(Capability.LEADS)
+datasource_fake_opportunities_a = _make_datasource_factory(Capability.OPPORTUNITIES)

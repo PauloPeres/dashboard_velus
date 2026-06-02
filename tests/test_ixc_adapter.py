@@ -1084,3 +1084,298 @@ class TestIxcEquipmentToDto:
         dtos = list(source.list_equipment())
         assert len(dtos) == 1
         assert dtos[0].external_id == "2"
+
+
+# =============================================================================
+# Leads — schema crm_canditados + _to_dto
+# =============================================================================
+from apps.integrations.ixc.leads import IxcLeadSource
+from apps.integrations.ixc.opportunities import IxcOpportunitySource
+from apps.integrations.ixc.schemas import IxcLeadSchema, IxcOpportunitySchema
+from apps.sales.domain.dto import LeadDTO, OpportunityDTO
+
+
+def _sample_ixc_lead(**overrides: Any) -> dict[str, Any]:
+    """Fixture inline de um registro `crm_canditados` do IXC."""
+    base = {
+        "id": "500",
+        "nome": "Prospect Um",
+        "telefone": "11999990001",
+        "email": "p1@example.test",
+        "status_prospeccao": "N",
+        "origem": "Indicação",
+        "id_vendedor": "7",
+        "data_cadastro": "2025-04-05 10:00:00",
+        # Campo extra desconhecido — deve ir pra raw_extras
+        "id_filial": "1",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestIxcLeadSchema:
+    def test_parses_canonical_response(self) -> None:
+        schema = IxcLeadSchema.model_validate(_sample_ixc_lead())
+        assert schema.id == "500"
+        assert schema.nome == "Prospect Um"
+        assert schema.telefone == "11999990001"
+        assert schema.status_prospeccao == "N"
+        assert schema.origem == "Indicação"
+        assert schema.id_vendedor == "7"
+
+    def test_coerces_int_id_to_string(self) -> None:
+        schema = IxcLeadSchema.model_validate(_sample_ixc_lead(id=500, id_vendedor=7))
+        assert schema.id == "500"
+        assert schema.id_vendedor == "7"
+
+    def test_parses_data_cadastro_tz_aware(self) -> None:
+        schema = IxcLeadSchema.model_validate(_sample_ixc_lead())
+        assert schema.data_cadastro is not None
+        assert schema.data_cadastro.tzinfo is not None
+
+    def test_zero_date_becomes_none(self) -> None:
+        schema = IxcLeadSchema.model_validate(
+            _sample_ixc_lead(data_cadastro="0000-00-00 00:00:00")
+        )
+        assert schema.data_cadastro is None
+
+    def test_defaults_when_optional_missing(self) -> None:
+        schema = IxcLeadSchema.model_validate({"id": "500"})
+        assert schema.nome == ""
+        assert schema.status_prospeccao == ""
+        assert schema.origem == ""
+        assert schema.data_cadastro is None
+
+    def test_extras_captured(self) -> None:
+        schema = IxcLeadSchema.model_validate(_sample_ixc_lead())
+        assert schema.get_extras().get("id_filial") == "1"
+
+    def test_rejects_missing_id(self) -> None:
+        raw = _sample_ixc_lead()
+        del raw["id"]
+        with pytest.raises(Exception):  # noqa: B017 — ValidationError
+            IxcLeadSchema.model_validate(raw)
+
+
+class TestIxcLeadSourceDeclaration:
+    def test_implements_port_contract(self) -> None:
+        assert IxcLeadSource.source_type == SourceType.IXC
+        assert IxcLeadSource.capabilities == frozenset({Capability.LEADS})
+
+
+class TestIxcLeadToDto:
+    def test_basic_mapping(self) -> None:
+        schema = IxcLeadSchema.model_validate(_sample_ixc_lead())
+        dto = IxcLeadSource._to_dto(schema)
+        assert isinstance(dto, LeadDTO)
+        assert dto.external_id == "500"
+        assert dto.name == "Prospect Um"
+        assert dto.phone == "11999990001"
+        assert dto.origin == "Indicação"
+        assert dto.salesperson_id == "7"
+
+    @pytest.mark.parametrize(
+        ("ixc_status", "expected"),
+        [
+            ("N", "NEW"),
+            ("NOVO", "NEW"),
+            ("C", "CONTACTED"),
+            ("G", "CONVERTED"),
+            ("P", "LOST"),
+            ("ZZ", "UNKNOWN"),
+            ("", "UNKNOWN"),
+        ],
+    )
+    def test_status_mapping(self, ixc_status: str, expected: str) -> None:
+        schema = IxcLeadSchema.model_validate(
+            _sample_ixc_lead(status_prospeccao=ixc_status)
+        )
+        dto = IxcLeadSource._to_dto(schema)
+        assert dto.status == expected
+
+    def test_lists_single_page_translates_to_dtos(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        respx_mock.get(f"{API_URL}/crm_canditados").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        _sample_ixc_lead(id="1", status_prospeccao="N"),
+                        _sample_ixc_lead(id="2", status_prospeccao="G"),
+                    ],
+                },
+            )
+        )
+        source = IxcLeadSource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_leads())
+        assert len(dtos) == 2
+        assert dtos[0].status == "NEW"
+        assert dtos[1].status == "CONVERTED"
+
+    def test_invalid_record_skipped_not_raised(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        respx_mock.get(f"{API_URL}/crm_canditados").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        {"nome": "Sem id"},  # falta id → pulado
+                        _sample_ixc_lead(id="2"),
+                    ],
+                },
+            )
+        )
+        source = IxcLeadSource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_leads())
+        assert len(dtos) == 1
+        assert dtos[0].external_id == "2"
+
+
+# =============================================================================
+# Opportunities — schema crm_negociacoes + _to_dto
+# =============================================================================
+def _sample_ixc_opportunity(**overrides: Any) -> dict[str, Any]:
+    """Fixture inline de um registro `crm_negociacoes` do IXC."""
+    base = {
+        "id": "800",
+        "id_candidato": "500",
+        "valor": "1200.00",
+        "status": "A",
+        "motivo_perda": "",
+        "data_criacao": "2025-04-06 09:00:00",
+        "id_filial": "1",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestIxcOpportunitySchema:
+    def test_parses_canonical_response(self) -> None:
+        schema = IxcOpportunitySchema.model_validate(_sample_ixc_opportunity())
+        assert schema.id == "800"
+        assert schema.id_candidato == "500"
+        assert schema.valor == "1200.00"
+        assert schema.status == "A"
+
+    def test_coerces_int_id_to_string(self) -> None:
+        schema = IxcOpportunitySchema.model_validate(
+            _sample_ixc_opportunity(id=800, id_candidato=500)
+        )
+        assert schema.id == "800"
+        assert schema.id_candidato == "500"
+
+    def test_coerces_comma_decimal(self) -> None:
+        schema = IxcOpportunitySchema.model_validate(
+            _sample_ixc_opportunity(valor="1200,50")
+        )
+        assert schema.valor == "1200.50"
+
+    def test_empty_valor_becomes_zero(self) -> None:
+        schema = IxcOpportunitySchema.model_validate(
+            _sample_ixc_opportunity(valor="")
+        )
+        assert schema.valor == "0"
+
+    def test_defaults_when_optional_missing(self) -> None:
+        schema = IxcOpportunitySchema.model_validate({"id": "800"})
+        assert schema.id_candidato == ""
+        assert schema.valor == "0"
+        assert schema.status == ""
+        assert schema.data_criacao is None
+
+    def test_extras_captured(self) -> None:
+        schema = IxcOpportunitySchema.model_validate(_sample_ixc_opportunity())
+        assert schema.get_extras().get("id_filial") == "1"
+
+    def test_rejects_missing_id(self) -> None:
+        raw = _sample_ixc_opportunity()
+        del raw["id"]
+        with pytest.raises(Exception):  # noqa: B017 — ValidationError
+            IxcOpportunitySchema.model_validate(raw)
+
+
+class TestIxcOpportunitySourceDeclaration:
+    def test_implements_port_contract(self) -> None:
+        assert IxcOpportunitySource.source_type == SourceType.IXC
+        assert IxcOpportunitySource.capabilities == frozenset(
+            {Capability.OPPORTUNITIES}
+        )
+
+
+class TestIxcOpportunityToDto:
+    def test_basic_mapping(self) -> None:
+        schema = IxcOpportunitySchema.model_validate(_sample_ixc_opportunity())
+        dto = IxcOpportunitySource._to_dto(schema)
+        assert isinstance(dto, OpportunityDTO)
+        assert dto.external_id == "800"
+        assert dto.lead_external_id == "500"
+        assert dto.value == Decimal("1200.00")
+
+    @pytest.mark.parametrize(
+        ("ixc_status", "expected"),
+        [
+            ("A", "OPEN"),
+            ("ABERTO", "OPEN"),
+            ("G", "WON"),
+            ("GANHA", "WON"),
+            ("P", "LOST"),
+            ("PERDIDA", "LOST"),
+            ("ZZ", "UNKNOWN"),
+            ("", "UNKNOWN"),
+        ],
+    )
+    def test_status_mapping(self, ixc_status: str, expected: str) -> None:
+        schema = IxcOpportunitySchema.model_validate(
+            _sample_ixc_opportunity(status=ixc_status)
+        )
+        dto = IxcOpportunitySource._to_dto(schema)
+        assert dto.status == expected
+
+    def test_lists_single_page_translates_to_dtos(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        respx_mock.get(f"{API_URL}/crm_negociacoes").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        _sample_ixc_opportunity(id="1", status="A"),
+                        _sample_ixc_opportunity(id="2", status="G"),
+                    ],
+                },
+            )
+        )
+        source = IxcOpportunitySource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_opportunities())
+        assert len(dtos) == 2
+        assert dtos[0].status == "OPEN"
+        assert dtos[1].status == "WON"
+
+    def test_invalid_record_skipped_not_raised(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        respx_mock.get(f"{API_URL}/crm_negociacoes").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        {"valor": "100.00"},  # falta id → pulado
+                        _sample_ixc_opportunity(id="2"),
+                    ],
+                },
+            )
+        )
+        source = IxcOpportunitySource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_opportunities())
+        assert len(dtos) == 1
+        assert dtos[0].external_id == "2"
