@@ -52,3 +52,14 @@ LOGGING = {
 # -----------------------------------------------------------------------------
 SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False
+
+# -----------------------------------------------------------------------------
+# Staticfiles — storage simples (sem manifest) pra renderizar templates em teste
+# sem precisar rodar collectstatic.
+# -----------------------------------------------------------------------------
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"
+    },
+}
