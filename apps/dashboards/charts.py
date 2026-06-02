@@ -1044,6 +1044,49 @@ def os_status_pie(data: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+def technician_production_bar(rows: list[dict[str, Any]]) -> str:
+    """Barras horizontais — produção (volume de OS) por técnico."""
+    ordered = sorted(rows, key=lambda r: r["total"])
+    labels = [r["technician"] for r in ordered]
+    values = [r["total"] for r in ordered]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=values, y=labels, orientation="h",
+                marker_color="#0ea5e9",
+                hovertemplate="<b>%{y}</b><br>%{x} OS<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "xaxis": {"title": "OS atendidas"}},
+    )
+    return _to_json(fig)
+
+
+def technician_solution_bar(rows: list[dict[str, Any]]) -> str:
+    """Barras horizontais — taxa de solução (%) por técnico, colorida por faixa."""
+    ordered = sorted(rows, key=lambda r: r["solution_rate"])
+    labels = [r["technician"] for r in ordered]
+    values = [r["solution_rate"] for r in ordered]
+    colors = [
+        "#ef4444" if v < 70 else "#f59e0b" if v < 85 else "#10b981"
+        for v in values
+    ]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=values, y=labels, orientation="h",
+                marker_color=colors,
+                hovertemplate="<b>%{y}</b><br>%{x:.1f}% resolvidas<extra></extra>",
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "xaxis": {"title": "Taxa de solução (%)", "range": [0, 100]},
+        },
+    )
+    return _to_json(fig)
+
+
 def connection_status_pie(data: list[dict[str, Any]]) -> str:
     """Donut — distribuicao de conexoes por status (online/offline/bloqueado)."""
     colors_map = {

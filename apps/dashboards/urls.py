@@ -24,6 +24,7 @@ urlpatterns = [
     path("risk/", views.risk, name="risk"),
     path("operations/", views.operations, name="operations"),
     path("operations/os/", views.os_dashboard, name="os_dashboard"),
+    path("operations/tecnicos/", views.tecnicos, name="tecnicos"),
     path("network/", views.network, name="network"),
     path("sales/", views.sales, name="sales"),
     path("customers/", views.customers, name="customers"),

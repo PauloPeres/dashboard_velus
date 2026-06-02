@@ -1021,6 +1021,87 @@ def os_dashboard(request: HttpRequest) -> HttpResponse:
 
 @login_required
 @never_cache
+def tecnicos(request: HttpRequest) -> HttpResponse:
+    """Qualidade e produção de técnicos — ranking + retorno (revisitas)."""
+    from apps.helpdesk.application.os_lookups import load_os_lookups
+    from apps.helpdesk.application.technician_stats import compute_technician_stats
+    from apps.helpdesk.infrastructure.models import Ticket
+
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+    months = _get_months(request)
+
+    lookups = load_os_lookups(org)
+    now = timezone.now()
+    window_start = (now - relativedelta(months=months)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    tickets = list(
+        Ticket.objects.filter(organization=org, opened_at__gte=window_start).values(
+            "technician_id", "customer_external_id", "subject_id",
+            "status", "opened_at", "closed_at",
+        )
+    )
+    stats = compute_technician_stats(tickets)
+
+    # Resolve nomes (técnico + tipo predominante) e formata tempo médio.
+    rows = []
+    for s in stats:
+        avg_hours = s["avg_res_hours"]
+        if avg_hours >= 24:
+            avg_str = f"{avg_hours / 24:.1f} dias"
+        elif avg_hours > 0:
+            avg_str = f"{avg_hours:.1f}h"
+        else:
+            avg_str = "—"
+        rows.append({
+            **s,
+            "technician": lookups.technician_name(s["technician_id"]),
+            "top_subject": lookups.subject_name(s["top_subject_id"]),
+            "avg_res_str": avg_str,
+        })
+
+    # --- KPIs (agregados sobre o conjunto) ---
+    active_techs = len(rows)
+    total_os = sum(r["total"] for r in rows)
+    total_closed = sum(r["closed"] for r in rows)
+    total_returns = sum(r["returns"] for r in rows)
+    avg_solution = round(total_closed / total_os * 100, 1) if total_os else 0.0
+    return_rate = round(total_returns / total_os * 100, 1) if total_os else 0.0
+
+    # Tempo médio global (ponderado pelas OS fechadas com tempo medido).
+    weighted_hours = sum(r["avg_res_hours"] * r["closed"] for r in rows)
+    avg_res_hours = weighted_hours / total_closed if total_closed else 0.0
+    if avg_res_hours >= 24:
+        avg_res_str = f"{avg_res_hours / 24:.1f} dias"
+    else:
+        avg_res_str = f"{avg_res_hours:.1f}h"
+
+    top_rows = sorted(rows, key=lambda r: r["total"], reverse=True)[:12]
+
+    return render(
+        request,
+        "dashboards/tecnicos.html",
+        {
+            "active_techs": active_techs,
+            "avg_solution_str": f"{avg_solution:.1f}%",
+            "avg_solution": avg_solution,
+            "avg_res_str": avg_res_str,
+            "return_rate_str": f"{return_rate:.1f}%",
+            "return_rate": return_rate,
+            "rows": rows,
+            "synced": bool(lookups.technician_map),
+            "production_chart_json": charts.technician_production_bar(top_rows),
+            "solution_chart_json": charts.technician_solution_bar(top_rows),
+        },
+    )
+
+
+@login_required
+@never_cache
 def network(request: HttpRequest) -> HttpResponse:
     from apps.network.infrastructure.models import Connection
 
