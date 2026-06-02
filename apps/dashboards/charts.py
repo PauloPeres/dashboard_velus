@@ -1189,6 +1189,60 @@ def technician_category_stacked(data: dict[str, Any]) -> str:
     return _to_json(fig)
 
 
+def network_history_lines(data: dict[str, Any]) -> str:
+    """Série temporal — evolução de conexões online/offline e banda por snapshot.
+
+    `data` traz `labels` (eixo do tempo) e as séries `online`, `offline` e
+    `bandwidth_gb`. Banda vai num eixo Y secundário (escala diferente de nº de
+    conexões). Sem snapshots ainda, retorna figura vazia (fallback no template).
+    """
+    labels = data.get("labels", [])
+    traces = [
+        go.Scatter(
+            name="Online",
+            x=labels,
+            y=data.get("online", []),
+            mode="lines",
+            line={"color": "#10b981", "width": 2},
+            hovertemplate="%{x}<br>Online: %{y}<extra></extra>",
+        ),
+        go.Scatter(
+            name="Offline",
+            x=labels,
+            y=data.get("offline", []),
+            mode="lines",
+            line={"color": "#f97316", "width": 2},
+            hovertemplate="%{x}<br>Offline: %{y}<extra></extra>",
+        ),
+        go.Scatter(
+            name="Banda (GB)",
+            x=labels,
+            y=data.get("bandwidth_gb", []),
+            mode="lines",
+            yaxis="y2",
+            line={"color": "#2563eb", "width": 2, "dash": "dot"},
+            hovertemplate="%{x}<br>Banda: %{y} GB<extra></extra>",
+        ),
+    ]
+    fig = go.Figure(
+        data=traces,
+        layout={
+            **_LAYOUT_BASE,
+            "showlegend": True,
+            "yaxis": {"title": "Conexões"},
+            "yaxis2": {
+                "title": "Banda (GB)",
+                "overlaying": "y",
+                "side": "right",
+                "showgrid": False,
+            },
+            "legend": {"orientation": "h", "y": -0.25, "font": {"size": 10}},
+            "margin": {"l": 50, "r": 55, "t": 30, "b": 60},
+        },
+    )
+    return _to_json(fig)
+
+
 def connection_status_pie(data: list[dict[str, Any]]) -> str:
     """Donut — distribuicao de conexoes por status (online/offline/bloqueado)."""
     colors_map = {

@@ -241,6 +241,34 @@ class FactExpense(TenantModel):
         ]
 
 
+class FactNetworkSnapshot(TenantModel):
+    """Snapshot pontual das métricas de rede — base da série temporal.
+
+    `Connection`/`BandwidthUsage` só guardam o estado atual (sync sobrescreve).
+    Esta fact é append-only: a cada captura (Beat) grava 1 linha com a foto
+    agregada do momento (contagens por status + banda acumulada), permitindo
+    reconstruir tendência de conexões/banda ao longo do tempo em /network/.
+    """
+
+    captured_at = models.DateTimeField(db_index=True)
+    total_count = models.IntegerField(default=0)
+    online_count = models.IntegerField(default=0)
+    offline_count = models.IntegerField(default=0)
+    blocked_count = models.IntegerField(default=0)
+    unknown_count = models.IntegerField(default=0)
+    # uptime = online / (online + offline) * 100 — bloqueados não são falha
+    uptime_pct = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+    rx_bytes_total = models.BigIntegerField(default=0)
+    tx_bytes_total = models.BigIntegerField(default=0)
+
+    class Meta:
+        verbose_name = _("Fato: snapshot de rede")
+        verbose_name_plural = _("Fatos: snapshots de rede")
+        indexes = [
+            models.Index(fields=["organization", "captured_at"]),
+        ]
+
+
 # =============================================================================
 # Churn risk — score de risco de cancelamento por cliente
 # =============================================================================

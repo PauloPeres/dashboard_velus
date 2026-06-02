@@ -331,6 +331,11 @@ CELERY_BEAT_SCHEDULE: dict = {
         "schedule": crontab(minute=40, hour=3),  # 03:40 — rede de segurança
         "options": {"queue": "celery"},
     },
+    "capture-network-snapshot-every-3h": {
+        "task": "apps.analytics.tasks.dispatch_network_snapshot_for_all_orgs",
+        "schedule": crontab(minute=15, hour="*/3"),  # foto de rede a cada 3h
+        "options": {"queue": "celery"},
+    },
     "compute-churn-risk-daily": {
         "task": "apps.analytics.tasks.dispatch_churn_risk_for_all_orgs",
         "schedule": crontab(minute=0, hour=4),  # 04:00 todo dia

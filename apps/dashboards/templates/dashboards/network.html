@@ -100,6 +100,21 @@
   </div>
 </div>
 
+<!-- Histórico temporal — série de snapshots de rede (#35) -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Evolução da rede (30 dias)</h2>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">Conexões online/offline e banda acumulada por captura periódica</p>
+  {% if history_has_data %}
+  <div id="history-chart" style="height:340px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  {% else %}
+  <div class="py-12 text-center text-gray-400 text-sm">
+    Ainda sem histórico — os snapshots de rede são coletados periodicamente e a série aparece aqui em seguida.
+  </div>
+  {% endif %}
+</div>
+
 <!-- Consumo de banda (accounting RADIUS / radusuarios_consumo) -->
 {% if bandwidth_has_data %}
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Consumo de banda</h2>
@@ -175,10 +190,12 @@
 {% block scripts %}
 {{ status_chart_json|json_script:"status-data" }}
 {{ nas_chart_json|json_script:"nas-data" }}
+{% if history_has_data %}{{ history_chart_json|json_script:"history-data" }}{% endif %}
 {% if bandwidth_has_data %}{{ bandwidth_chart_json|json_script:"bandwidth-data" }}{% endif %}
 <script>
   renderChart("status-chart", "status-data");
   renderChart("nas-chart", "nas-data");
+  {% if history_has_data %}renderChart("history-chart", "history-data");{% endif %}
   {% if bandwidth_has_data %}renderChart("bandwidth-chart", "bandwidth-data");{% endif %}
 </script>
 {% endblock %}

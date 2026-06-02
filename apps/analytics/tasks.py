@@ -215,6 +215,61 @@ def _run_fact_rebuild(*, organization_id: int) -> dict[str, Any]:
 
 
 # =============================================================================
+# Snapshot de rede — captura métricas de conexão/banda pra série temporal (Beat)
+# =============================================================================
+@shared_task(name="apps.analytics.tasks.dispatch_network_snapshot_for_all_orgs")
+def dispatch_network_snapshot_for_all_orgs() -> dict[str, int]:
+    """Enfileira a captura do snapshot de rede para cada org ativa."""
+    return _dispatch_network_snapshot()
+
+
+@allow_cross_tenant(reason="dispatch_network_snapshot itera Organization (não-TenantModel)")
+def _dispatch_network_snapshot() -> dict[str, int]:
+    from apps.tenancy.models import Organization
+
+    n = 0
+    for org in Organization.objects.filter(is_active=True):
+        capture_network_snapshot_for_org.apply_async(
+            kwargs={"organization_id": org.pk},
+            queue=org.celery_queue_name,
+        )
+        n += 1
+        _logger.info("network_snapshot_dispatched", org=org.slug)
+
+    return {"dispatched": n}
+
+
+@shared_task(
+    name="apps.analytics.tasks.capture_network_snapshot_for_org",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    max_retries=2,
+    acks_late=True,
+)
+def capture_network_snapshot_for_org(*, organization_id: int) -> dict[str, Any]:
+    """Captura e persiste 1 snapshot de métricas de rede de uma org."""
+    return _run_network_snapshot(organization_id=organization_id)
+
+
+@allow_cross_tenant(reason="snapshot de rede opera fora de request HTTP")
+def _run_network_snapshot(*, organization_id: int) -> dict[str, Any]:
+    from apps.analytics.application.network_snapshots import capture_network_snapshot
+    from apps.tenancy.models import Organization
+
+    org = Organization.objects.get(pk=organization_id)
+    set_current_organization(org)
+    snap = capture_network_snapshot(org)
+    summary = {
+        "total": snap.total_count,
+        "online": snap.online_count,
+        "offline": snap.offline_count,
+    }
+    _logger.info("network_snapshot_done", org=org.slug, **summary)
+    return summary
+
+
+# =============================================================================
 # Churn risk — recomputa scores de risco de cancelamento (Beat diário)
 # =============================================================================
 @shared_task(name="apps.analytics.tasks.dispatch_churn_risk_for_all_orgs")

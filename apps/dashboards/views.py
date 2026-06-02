@@ -63,6 +63,7 @@ from apps.analytics.application.aggregations import (
     compute_top_risk_customers,
     search_customers,
 )
+from apps.analytics.application.network_snapshots import compute_network_history
 from apps.shared.context import get_current_organization
 
 from . import charts
@@ -1261,6 +1262,9 @@ def network(request: HttpRequest) -> HttpResponse:
     # Consumo de banda agregado (accounting RADIUS / radusuarios_consumo)
     bandwidth = compute_bandwidth_summary(org)
 
+    # Histórico temporal — série de snapshots de rede (#35)
+    history = compute_network_history(org, days=30)
+
     return render(
         request,
         "dashboards/network.html",
@@ -1275,6 +1279,8 @@ def network(request: HttpRequest) -> HttpResponse:
             "top_consumers": top_consumers,
             "status_chart_json": charts.connection_status_pie(status_dist),
             "nas_chart_json": charts.connections_by_nas_bar(nas_dist),
+            "history_has_data": history["count"] > 0,
+            "history_chart_json": charts.network_history_lines(history),
             "bandwidth": bandwidth,
             "bandwidth_has_data": bandwidth["total_bytes"] > 0,
             "bandwidth_total_gb_str": f"{bandwidth['total_gb']:,.2f}".replace(",", "."),
