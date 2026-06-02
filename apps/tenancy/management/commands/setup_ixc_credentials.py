@@ -9,8 +9,10 @@ Vai pedir:
 - API Token (input escondido via getpass)
 
 Cria/atualiza OrganizationDataSource pra TODAS as capabilities suportadas pelo
-adapter IXC (Customers, Contracts, Invoices). Credenciais criptografadas com
-Fernet antes de salvar no DB.
+adapter IXC — a lista vem do SourceRegistry, então acompanha automaticamente
+novos adapters (Customers, Contracts, Invoices, Payments, Expenses, Tickets,
+Connections, Bandwidth, Equipment, Leads, Opportunities). Credenciais
+criptografadas com Fernet antes de salvar no DB.
 
 Token NUNCA aparece em log, stdout, ou stderr — só em memória do processo.
 """
@@ -82,12 +84,21 @@ class Command(BaseCommand):
             "api_token": api_token,
         }
 
-        # Cria/atualiza datasource pra cada capability suportada pelo IXC adapter
+        # Cria/atualiza datasource pra cada capability suportada pelo IXC adapter.
+        # Lista derivada do registry (não hardcoded) — cobre todas as capabilities
+        # que o adapter IXC registra, e acompanha adapters futuros sem editar aqui.
+        from apps.integrations.shared.registry import registry
+
         ixc_capabilities = [
-            Capability.CUSTOMERS,
-            Capability.CONTRACTS,
-            Capability.INVOICES,
+            cap
+            for cap in Capability
+            if registry.get_factory(SourceType.IXC, cap) is not None
         ]
+        if not ixc_capabilities:
+            raise CommandError(
+                "Nenhuma capability IXC registrada no SourceRegistry — "
+                "verifique se o app integrations.ixc carregou."
+            )
 
         created_count = 0
         updated_count = 0
