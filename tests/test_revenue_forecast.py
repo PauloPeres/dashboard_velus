@@ -20,8 +20,9 @@ from apps.analytics.application.aggregations import (
     _seasonal_factors,
     compute_revenue_forecast,
 )
-from apps.analytics.infrastructure.models import FactContractStatusDaily
+from apps.analytics.infrastructure.models import FactContractStatusDaily, FactExpense
 from apps.customers.infrastructure.models import Contract
+from apps.financial.infrastructure.models import Expense
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import Organization
 
@@ -82,6 +83,140 @@ def _make_mrr_history(org: Organization, monthly_values: list[Decimal]) -> None:
             monthly_amount=value,
             is_active=True,
         )
+
+
+def _next_month_first(today: date) -> date:
+    nm, ny = today.month + 1, today.year
+    if nm > 12:
+        nm, ny = 1, ny + 1
+    return date(ny, nm, 1)
+
+
+def _make_fact_expense(
+    org: Organization,
+    *,
+    due_date: date,
+    amount: Decimal,
+    status: str,
+    expense_date: date,
+    paid_date: date | None = None,
+) -> None:
+    """Cria Expense + FactExpense para alimentar séries de despesa/programadas."""
+    global _seq
+    _seq += 1
+    set_current_organization(org)
+    exp = Expense.objects.create(
+        organization=org,
+        source_type="FAKE",
+        external_id=f"fe-{_seq}",
+        amount=amount,
+        due_date=due_date,
+        paid_at=paid_date,
+        status=status,
+    )
+    FactExpense.objects.create(
+        organization=org,
+        expense=exp,
+        expense_date=expense_date,
+        due_date=due_date,
+        paid_date=paid_date,
+        amount=amount,
+        status=status,
+    )
+
+
+@pytest.mark.django_db
+class TestProgrammedExpenses:
+    """#38 — forecast considera despesas programadas (a vencer), não só lançadas."""
+
+    def test_programmed_reflected_when_above_trend(
+        self, organization_a: Organization
+    ) -> None:
+        # MRR p/ destravar o caminho OLS; sem histórico de despesa paga → trend ~0.
+        _make_mrr_history(
+            organization_a,
+            [Decimal(str(v)) for v in (100, 110, 120, 130, 140, 150)],
+        )
+        today = timezone.now().date()
+        nm_first = _next_month_first(today)
+        _make_fact_expense(
+            organization_a,
+            due_date=nm_first.replace(day=15),
+            amount=Decimal("50000"),
+            status="OPEN",
+            expense_date=nm_first.replace(day=15),
+        )
+        set_current_organization(organization_a)
+
+        result = compute_revenue_forecast(organization_a, months_ahead=3)
+        first = result[0]
+        assert first["forecast_expenses_programmed"] == pytest.approx(50000.0)
+        # Sem histórico pago → tendência ~0, então programada domina (max).
+        assert first["forecast_expenses"] == pytest.approx(50000.0)
+
+    def test_falls_back_to_trend_when_no_programmed(
+        self, organization_a: Organization
+    ) -> None:
+        _make_mrr_history(
+            organization_a,
+            [Decimal(str(v)) for v in (100, 110, 120, 130, 140, 150)],
+        )
+        # Histórico de despesas pagas constante (~10000/mês) nos últimos 6 meses.
+        today = timezone.now().date()
+        for i in range(1, 7):
+            d = _first_of_month_n_ago(today, i).replace(day=15)
+            _make_fact_expense(
+                organization_a,
+                due_date=d,
+                amount=Decimal("10000"),
+                status="PAID",
+                expense_date=d,
+                paid_date=d,
+            )
+        set_current_organization(organization_a)
+
+        result = compute_revenue_forecast(organization_a, months_ahead=3)
+        first = result[0]
+        assert first["forecast_expenses_programmed"] == pytest.approx(0.0)
+        # Sem programada → cai na tendência histórica.
+        assert first["forecast_expenses"] == pytest.approx(first["forecast_expenses_trend"])
+        assert first["forecast_expenses"] == pytest.approx(10000.0, rel=0.01)
+
+    def test_trend_wins_when_above_programmed(
+        self, organization_a: Organization
+    ) -> None:
+        _make_mrr_history(
+            organization_a,
+            [Decimal(str(v)) for v in (100, 110, 120, 130, 140, 150)],
+        )
+        today = timezone.now().date()
+        for i in range(1, 7):
+            d = _first_of_month_n_ago(today, i).replace(day=15)
+            _make_fact_expense(
+                organization_a,
+                due_date=d,
+                amount=Decimal("10000"),
+                status="PAID",
+                expense_date=d,
+                paid_date=d,
+            )
+        # Programada pequena (3000) abaixo da tendência (~10000).
+        nm_first = _next_month_first(today)
+        _make_fact_expense(
+            organization_a,
+            due_date=nm_first.replace(day=10),
+            amount=Decimal("3000"),
+            status="OPEN",
+            expense_date=nm_first.replace(day=10),
+        )
+        set_current_organization(organization_a)
+
+        result = compute_revenue_forecast(organization_a, months_ahead=3)
+        first = result[0]
+        assert first["forecast_expenses_programmed"] == pytest.approx(3000.0)
+        # max(tendência, programada) → tendência domina.
+        assert first["forecast_expenses"] == pytest.approx(first["forecast_expenses_trend"])
+        assert first["forecast_expenses"] > 3000.0
 
 
 class TestOlsFit:
