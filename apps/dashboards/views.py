@@ -117,10 +117,15 @@ def executive(request: HttpRequest) -> HttpResponse:
     risk_summary = compute_churn_risk_summary(org)
 
     # Caixa: recebido (realizado) × projetado — entrada estratégica que faltava (#43).
+    # paid_date do IXC tem registros futuros (erro de digitação na baixa), então
+    # filtramos por mês corrente real em vez de confiar no último item da série.
     cash_series = compute_cash_received_series(org, months=months)
     forecast_data = compute_revenue_forecast(org, months_ahead=3)
-    cash_realized_recent = cash_series[-6:]
-    cash_this_month = cash_series[-1]["amount"] if cash_series else 0.0
+    current_month_key = timezone.now().strftime("%Y-%m")
+    cash_realized_recent = [c for c in cash_series if c["month"] <= current_month_key][-6:]
+    cash_this_month = next(
+        (c["amount"] for c in cash_series if c["month"] == current_month_key), 0.0
+    )
     cash_projected_next = forecast_data[0]["forecast_cash"] if forecast_data else 0.0
     collection_rate_pct = forecast_data[0]["collection_rate_pct"] if forecast_data else 0.0
 
