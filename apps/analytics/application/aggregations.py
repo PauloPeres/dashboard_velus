@@ -608,6 +608,32 @@ def compute_expense_series(
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_programmed_expenses(
+    organization: Organization, start: date_cls
+) -> dict[str, float]:
+    """Despesas programadas (a vencer) somadas por mês de `due_date`.
+
+    São despesas já cadastradas mas ainda não pagas (status ≠ PAID/CANCELED)
+    com vencimento >= `start` — tipicamente parcelas de empréstimo/financiamento
+    e contas a pagar conhecidas (vide diagnóstico do #39). Diferente de
+    `compute_expense_series`, que olha o histórico já pago.
+
+    Retorna {"YYYY-MM" → total}. Meses sem despesa programada ficam ausentes.
+    """
+    by_month = (
+        FactExpense.objects.filter(
+            organization=organization,
+            due_date__gte=start,
+        )
+        .exclude(status__in=["PAID", "CANCELED"])
+        .annotate(month=TruncMonth("due_date"))
+        .values("month")
+        .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
+    )
+    return {row["month"].strftime("%Y-%m"): float(row["total"]) for row in by_month}
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_cashflow_series(
     organization: Organization, months: int = 12
 ) -> list[dict[str, Any]]:
@@ -865,7 +891,10 @@ def compute_revenue_forecast(
       amortecido para 1.0 — só temos ~1 ano de dados, então não superajustamos.
     * **Taxa de recebimento variável**: OLS sobre a razão caixa/MRR mês a mês,
       projetada forward (clamp 0.50–1.05) em vez de constante.
-    * **Despesas com tendência**: OLS sobre despesas mensais (fallback média 3m).
+    * **Despesas com tendência**: OLS sobre despesas mensais (fallback média 3m),
+      combinada com despesas **programadas** (parcelas/contas a vencer já
+      cadastradas) via `max(tendência, programada)` — reflete compromissos
+      conhecidos sem subestimar, caindo na tendência quando não há programada.
     * **Cenários**: banda otimista/pessimista a partir do desvio relativo dos
       resíduos, alargando com o horizonte (`rel_std * sqrt(i+1)`).
 
@@ -942,15 +971,27 @@ def compute_revenue_forecast(
         e_slope, e_intercept = _ols_fit(exp_values)
         ne = len(exp_values)
 
-        def _exp_at(i: int) -> float:
+        def _exp_trend_at(i: int) -> float:
             return max(0.0, e_slope * (ne - 1 + i + 1) + e_intercept)
     else:
         avg_exp = (
             sum(exp_nonzero[-3:]) / len(exp_nonzero[-3:]) if exp_nonzero else 0.0
         )
 
-        def _exp_at(i: int) -> float:
+        def _exp_trend_at(i: int) -> float:
             return avg_exp
+
+    # --- Despesas programadas (parcelas/contas a vencer já cadastradas) ---
+    # Combina com a tendência: usamos max(tendência, programada) para nunca
+    # subestimar compromissos conhecidos sem dupla contagem (a tendência já
+    # embute a recorrência operacional; a programada captura parcelas futuras).
+    # Tendência é o fallback quando não há despesa programada no mês.
+    programmed_by_month = compute_programmed_expenses(organization, forecast_start)
+
+    def _exp_at(i: int) -> tuple[float, float, float]:
+        trend = _exp_trend_at(i)
+        programmed = programmed_by_month.get(_month_at(i).strftime("%Y-%m"), 0.0)
+        return max(trend, programmed), trend, programmed
 
     result: list[dict[str, Any]] = []
     for i in range(months_ahead):
@@ -968,7 +1009,7 @@ def compute_revenue_forecast(
         mrr_pess = max(0.0, forecast_mrr * (1 - band))
 
         rate = _rate_at(i)
-        exp = _exp_at(i)
+        exp, exp_trend, exp_programmed = _exp_at(i)
 
         forecast_cash = forecast_mrr * rate
         forecast_net = forecast_cash - exp
@@ -984,6 +1025,8 @@ def compute_revenue_forecast(
                 "forecast_mrr_pessimistic": round(mrr_pess, 2),
                 "forecast_cash": round(forecast_cash, 2),
                 "forecast_expenses": round(exp, 2),
+                "forecast_expenses_trend": round(exp_trend, 2),
+                "forecast_expenses_programmed": round(exp_programmed, 2),
                 "forecast_net": round(forecast_net, 2),
                 "forecast_net_optimistic": round(net_opt, 2),
                 "forecast_net_pessimistic": round(net_pess, 2),
