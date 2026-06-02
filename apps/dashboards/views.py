@@ -116,6 +116,14 @@ def executive(request: HttpRequest) -> HttpResponse:
     contract_status_trend = compute_contract_status_trend(org, months=months)
     risk_summary = compute_churn_risk_summary(org)
 
+    # Caixa: recebido (realizado) × projetado — entrada estratégica que faltava (#43).
+    cash_series = compute_cash_received_series(org, months=months)
+    forecast_data = compute_revenue_forecast(org, months_ahead=3)
+    cash_realized_recent = cash_series[-6:]
+    cash_this_month = cash_series[-1]["amount"] if cash_series else 0.0
+    cash_projected_next = forecast_data[0]["forecast_cash"] if forecast_data else 0.0
+    collection_rate_pct = forecast_data[0]["collection_rate_pct"] if forecast_data else 0.0
+
     # ARPU = MRR ÷ contratos ativos
     arpu = (
         kpis["mrr_now"] / kpis["active_contracts"]
@@ -187,6 +195,13 @@ def executive(request: HttpRequest) -> HttpResponse:
             "aging_chart_json": charts.aging_bar_chart(aging),
             "delinquency_trend_json": charts.delinquency_trend_chart(delinquency_trend),
             "contract_status_json": charts.contract_status_stacked_chart(contract_status_trend),
+            # Caixa recebido × projetado (#43)
+            "cash_this_month_str": _fmt_brl(cash_this_month),
+            "cash_projected_next_str": _fmt_brl(cash_projected_next),
+            "collection_rate_str": f"{collection_rate_pct:.0f}%",
+            "cash_vs_projected_json": charts.cash_vs_projected_chart(
+                cash_realized_recent, forecast_data
+            ),
         },
     )
 

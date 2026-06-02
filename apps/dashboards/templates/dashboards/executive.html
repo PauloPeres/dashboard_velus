@@ -102,12 +102,30 @@
   {% include "dashboards/_kpi_card.html" with label="Churn Mensal" value=churn_pct_str subtitle=churn_subtitle variant=churn_variant tooltip="Contratos cancelados no mês ÷ contratos ativos no início do mês × 100. Meta para provedores saudáveis: abaixo de 1,5% ao mês." %}
 </div>
 
+<!-- Seção Caixa -->
+<h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Caixa</h2>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+  {% include "dashboards/_kpi_card.html" with label="Caixa Recebido (mês)" value=cash_this_month_str subtitle="Pagamentos confirmados no mês corrente" tooltip="Soma das faturas pagas (status PAID, paid_date no mês corrente). Entrada de caixa real — não confundir com MRR faturado, que inclui o que ainda não foi pago." %}
+  {% include "dashboards/_kpi_card.html" with label="Projeção Próximo Mês" value=cash_projected_next_str subtitle="Caixa esperado no mês seguinte" tooltip="Projeção de caixa do próximo mês = MRR projetado × taxa de recebimento (tendência OLS sobre caixa÷MRR histórico). Cenário base do modelo de previsão." %}
+  {% include "dashboards/_kpi_card.html" with label="Taxa de Recebimento" value=collection_rate_str subtitle="Caixa recebido ÷ MRR faturado" tooltip="Percentual do MRR que efetivamente vira caixa. Abaixo de 100% indica inadimplência corrente: parte do que foi faturado não foi pago no mês." %}
+</div>
+
 <!-- Seção Inadimplência -->
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Inadimplência</h2>
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
   {% include "dashboards/_kpi_card.html" with label="Estoque Inadimplente" value=delinquency_amount_str subtitle=delinquency_subtitle variant="border-red-200" tooltip="Soma de todas as mensalidades vencidas e não pagas (status PENDING ou OVERDUE com days_overdue > 0). Para um provedor, inclui clientes de qualquer período — mesmo os já desconectados que nunca quitaram. É um estoque acumulado, não o mês corrente." %}
   {% include "dashboards/_kpi_card.html" with label="Crítico (90+ dias)" value=over_90_value subtitle=over_90_subtitle variant="border-red-300" value_color="text-red-700" tooltip="Faturas com mais de 90 dias sem pagamento. Nessa faixa, a probabilidade de recuperação é muito baixa — geralmente indica evasão do cliente. Ação recomendada: negativação no SPC/Serasa ou encaminhamento para cobrança judicial." %}
   {% include "dashboards/_kpi_card.html" with label="Inadimplência / MRR" value=delinquency_pct_str subtitle="Estoque acumulado ÷ receita mensal" tooltip="Estoque total de inadimplência ÷ MRR atual. Mostra quantos meses de receita estão represados como dívida. Abaixo de 50%: saudável. Entre 50–100%: atenção. Acima de 100%: crítico — o estoque acumulado supera 1 mês de receita." %}
+</div>
+
+<!-- Gráfico — Caixa recebido × projetado (full-width) -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Caixa recebido × projetado</h2>
+    <a href="{% url 'dashboards:forecast' %}" class="text-xs text-blue-600 hover:underline">Ver previsão →</a>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">Verde sólido = recebido (realizado) · Verde claro = projeção dos próximos meses — entrada de caixa esperada vs. histórica</p>
+  <div id="cash-vs-projected-chart" style="height:260px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
 </div>
 
 <!-- Gráficos — linha 1: MRR + Aging snapshot -->
@@ -159,10 +177,12 @@
 {{ aging_chart_json|json_script:"aging-data" }}
 {{ delinquency_trend_json|json_script:"delinquency-trend-data" }}
 {{ contract_status_json|json_script:"contract-status-data" }}
+{{ cash_vs_projected_json|json_script:"cash-vs-projected-data" }}
 <script>
   renderChart("mrr-chart", "mrr-data");
   renderChart("aging-chart", "aging-data");
   renderChart("delinquency-trend-chart", "delinquency-trend-data");
   renderChart("contract-status-chart", "contract-status-data");
+  renderChart("cash-vs-projected-chart", "cash-vs-projected-data");
 </script>
 {% endblock %}

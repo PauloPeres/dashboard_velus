@@ -109,6 +109,46 @@ def cash_received_chart(series: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+def cash_vs_projected_chart(
+    realized: list[dict[str, Any]], forecast: list[dict[str, Any]]
+) -> str:
+    """Barras — caixa recebido (realizado) e projetado num único eixo temporal.
+
+    Realizado em verde sólido (`amount` de compute_cash_received_series),
+    projetado em verde claro tracejado (`forecast_cash` de
+    compute_revenue_forecast). Dá ao executivo a leitura recebido × projetado
+    em uma só visão.
+    """
+    real_labels = [p["label"] for p in realized]
+    real_values = [p["amount"] for p in realized]
+    proj_labels = [p["label"] for p in forecast]
+    proj_values = [p["forecast_cash"] for p in forecast]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                name="Recebido",
+                x=real_labels, y=real_values,
+                marker_color="#16a34a",
+                hovertemplate="<b>%{x}</b><br>Recebido: R$ %{y:,.0f}<extra></extra>",
+            ),
+            go.Bar(
+                name="Projetado",
+                x=proj_labels, y=proj_values,
+                marker_color="#86efac",
+                marker_line={"color": "#16a34a", "width": 1},
+                hovertemplate="<b>%{x}</b><br>Projetado: R$ %{y:,.0f}<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "showlegend": True,
+            "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f"},
+            "legend": {"orientation": "h", "y": -0.2},
+        },
+    )
+    return _to_json(fig)
+
+
 def cashflow_waterfall(series: list[dict[str, Any]]) -> str:
     """Barras agrupadas — receita vs despesas por mês (cashflow)."""
     labels = [s["label"] for s in series]
