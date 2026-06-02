@@ -54,6 +54,7 @@ from apps.analytics.application.aggregations import (
     compute_net_adds_series,
     compute_pipeline_aging,
     compute_recovery_rate,
+    compute_revenue_comparison,
     compute_revenue_forecast,
     compute_sales_funnel,
     compute_top_delinquent_invoices,
@@ -199,6 +200,23 @@ def revenue(request: HttpRequest) -> HttpResponse:
     arpu_data = compute_arpu_by_plan(org)
     status_trend = compute_contract_status_trend(org, months=months)
     churn_plan = compute_churn_by_plan(org, months=months)
+    comparison = compute_revenue_comparison(org)
+
+    # Pré-formata cada card comparativo — evita arit. de string no template.
+    def _fmt_metric(value: float, fmt: str) -> str:
+        return _fmt_brl(value) if fmt == "brl" else f"{int(round(value)):,}".replace(",", ".")
+
+    comparison_cards = [
+        {
+            "label": m["label"],
+            "current_str": _fmt_metric(m["current"], m["fmt"]),
+            "previous_str": _fmt_metric(m["previous"], m["fmt"]),
+            "delta_pct": m["delta_pct"],
+            "delta_positive": (m["delta_pct"] >= 0) == m["higher_is_better"],
+            "delta_abs_str": _fmt_metric(m["delta_abs"], m["fmt"]),
+        }
+        for m in comparison
+    ]
 
     arpu = (
         kpis["mrr_now"] / kpis["active_contracts"]
@@ -218,6 +236,7 @@ def revenue(request: HttpRequest) -> HttpResponse:
             "kpis": kpis,
             "arpu_data": arpu_data_enriched,
             "churn_plan": churn_plan,
+            "comparison_cards": comparison_cards,
             "mrr_now_str": _fmt_brl(kpis["mrr_now"]),
             "arpu_str": _fmt_brl(arpu),
             "churn_pct_str": f"{kpis['churn_pct']:.1f}%",

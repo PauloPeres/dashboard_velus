@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 import statistics
 from datetime import date as date_cls
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -347,6 +347,113 @@ def compute_arpu_by_plan(organization: Organization) -> list[dict[str, Any]]:
             "arpu": float(row["revenue"] / row["count"]) if row["count"] > 0 else 0.0,
         }
         for row in by_plan
+    ]
+
+
+def _mrr_active_at(organization: Organization, sample_date: date_cls) -> tuple[float, int]:
+    """(MRR, contratos ativos) num dia — base de snapshot do FactContractStatusDaily."""
+    agg = FactContractStatusDaily.objects.filter(
+        organization=organization, date=sample_date, is_active=True
+    ).aggregate(
+        mrr=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()),
+        active=Count("id"),
+    )
+    return float(agg["mrr"] or 0), agg["active"] or 0
+
+
+def _pct_delta(current: float, previous: float) -> float:
+    """Variação percentual; 0.0 quando não há base anterior."""
+    return (current - previous) / previous * 100 if previous else 0.0
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_revenue_comparison(organization: Organization) -> list[dict[str, Any]]:
+    """Métricas mês atual × mês anterior pra cards comparativos em /revenue/.
+
+    Cobre MRR, ARPU (MRR ÷ contratos ativos), net adds (novos − cancelados) e
+    receita recebida (caixa). Cada item traz valor atual, valor do mês anterior,
+    variação absoluta e percentual, além de metadados de formatação/cor.
+
+    `higher_is_better` define a cor do delta no card (verde = bom). Para todas as
+    métricas aqui crescer é positivo.
+    """
+    from apps.customers.infrastructure.models import Contract
+
+    today = timezone.now().date()
+    month_first = today.replace(day=1)
+    prev_month_last = month_first - timedelta(days=1)
+    prev_month_first = prev_month_last.replace(day=1)
+
+    # MRR / ARPU: snapshot de hoje vs último dia do mês anterior.
+    mrr_now, active_now = _mrr_active_at(organization, today)
+    mrr_prev, active_prev = _mrr_active_at(organization, prev_month_last)
+    arpu_now = mrr_now / active_now if active_now else 0.0
+    arpu_prev = mrr_prev / active_prev if active_prev else 0.0
+
+    # Net adds: novos − cancelados, dentro de cada janela mensal.
+    # `activated_at`/`canceled_at` são DateTimeField → usa bounds tz-aware.
+    def _aware(d: date_cls) -> Any:
+        return timezone.make_aware(datetime.combine(d, time.min))
+
+    def _net_adds(start: date_cls, end: date_cls | None) -> int:
+        start_dt = _aware(start)
+        new_q = Contract.objects.filter(organization=organization, activated_at__gte=start_dt)
+        can_q = Contract.objects.filter(organization=organization, canceled_at__gte=start_dt)
+        if end is not None:
+            end_dt = _aware(end)
+            new_q = new_q.filter(activated_at__lt=end_dt)
+            can_q = can_q.filter(canceled_at__lt=end_dt)
+        return new_q.count() - can_q.count()
+
+    net_now = _net_adds(month_first, None)
+    net_prev = _net_adds(prev_month_first, month_first)
+
+    # Receita recebida (caixa) por mês de pagamento.
+    received = {r["month"]: r["amount"] for r in compute_cash_received_series(organization, months=3)}
+    recv_now = float(received.get(month_first.strftime("%Y-%m"), 0.0))
+    recv_prev = float(received.get(prev_month_first.strftime("%Y-%m"), 0.0))
+
+    return [
+        {
+            "key": "mrr",
+            "label": "MRR",
+            "current": round(mrr_now, 2),
+            "previous": round(mrr_prev, 2),
+            "delta_abs": round(mrr_now - mrr_prev, 2),
+            "delta_pct": round(_pct_delta(mrr_now, mrr_prev), 1),
+            "fmt": "brl",
+            "higher_is_better": True,
+        },
+        {
+            "key": "arpu",
+            "label": "ARPU (ticket médio)",
+            "current": round(arpu_now, 2),
+            "previous": round(arpu_prev, 2),
+            "delta_abs": round(arpu_now - arpu_prev, 2),
+            "delta_pct": round(_pct_delta(arpu_now, arpu_prev), 1),
+            "fmt": "brl",
+            "higher_is_better": True,
+        },
+        {
+            "key": "net_adds",
+            "label": "Net Adds (novos − cancelados)",
+            "current": net_now,
+            "previous": net_prev,
+            "delta_abs": net_now - net_prev,
+            "delta_pct": round(_pct_delta(net_now, net_prev), 1),
+            "fmt": "int",
+            "higher_is_better": True,
+        },
+        {
+            "key": "received",
+            "label": "Receita Recebida (caixa)",
+            "current": round(recv_now, 2),
+            "previous": round(recv_prev, 2),
+            "delta_abs": round(recv_now - recv_prev, 2),
+            "delta_pct": round(_pct_delta(recv_now, recv_prev), 1),
+            "fmt": "brl",
+            "higher_is_better": True,
+        },
     ]
 
 
