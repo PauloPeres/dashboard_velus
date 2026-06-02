@@ -1070,9 +1070,11 @@ class TestIxcEquipmentToDto:
     @pytest.mark.parametrize(
         ("ixc_status", "expected"),
         [
+            ("E", "ACTIVE"),   # status_comodato real: Entregue/em campo
             ("A", "ACTIVE"),
             ("S", "ACTIVE"),
             ("D", "RETURNED"),
+            ("B", "RETURNED"),  # status_comodato real: Baixado/fora de campo
             ("N", "RETURNED"),
             ("ZZ", "UNKNOWN"),  # desconhecido → fallback UNKNOWN
             ("", "UNKNOWN"),
@@ -1140,6 +1142,63 @@ class TestIxcEquipmentToDto:
         dtos = list(source.list_equipment())
         assert len(dtos) == 1
         assert dtos[0].external_id == "2"
+
+
+def _sample_ixc_comodato_real(**overrides: Any) -> dict[str, Any]:
+    """Fixture com os nomes de campo REAIS do `cliente_contrato_comodato`.
+
+    O endpoint IXC não usa os nomes canônicos: o contrato vem em `id_contrato`,
+    o serial em `numero_serie`, o valor em `valor_total` e o status em
+    `status_comodato` (E/D/B). Antes do AliasChoices (#29) o schema lia tudo
+    como default → todo equipamento virava UNKNOWN sem contrato/serial/valor.
+    """
+    base = {
+        "id": "473056",
+        "id_contrato": "2331",
+        "id_produto": "108",
+        "descricao": "MODEM OPTICO HG6145F3",
+        "numero_serie": "FHTTFE01DA9E",
+        "mac": "546CAC12AB6A",
+        "valor_total": "218.81",
+        "valor_unitario": "218.810000000",
+        "status_comodato": "B",
+        "tipo": "E",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestIxcEquipmentRealFieldNames:
+    """Garante que o schema lê os nomes de campo reais da API IXC (#29)."""
+
+    def test_parses_real_field_names(self) -> None:
+        schema = IxcEquipmentSchema.model_validate(_sample_ixc_comodato_real())
+        assert schema.id_cliente_contrato == "2331"  # ← id_contrato
+        assert schema.serial == "FHTTFE01DA9E"  # ← numero_serie
+        assert schema.valor == "218.81"  # ← valor_total
+        assert schema.status == "B"  # ← status_comodato
+
+    def test_valor_falls_back_to_valor_unitario(self) -> None:
+        raw = _sample_ixc_comodato_real()
+        del raw["valor_total"]
+        schema = IxcEquipmentSchema.model_validate(raw)
+        assert schema.valor == "218.810000000"
+
+    def test_real_record_maps_to_returned_dto(self) -> None:
+        # status_comodato="B" (baixado) → RETURNED, com contrato/serial/valor.
+        schema = IxcEquipmentSchema.model_validate(_sample_ixc_comodato_real())
+        dto = IxcEquipmentSource._to_dto(schema)
+        assert dto.contract_external_id == "2331"
+        assert dto.serial == "FHTTFE01DA9E"
+        assert dto.value == Decimal("218.81")
+        assert dto.status == "RETURNED"
+
+    def test_real_entregue_record_maps_to_active(self) -> None:
+        schema = IxcEquipmentSchema.model_validate(
+            _sample_ixc_comodato_real(status_comodato="E")
+        )
+        dto = IxcEquipmentSource._to_dto(schema)
+        assert dto.status == "ACTIVE"
 
 
 # =============================================================================
