@@ -70,6 +70,16 @@ class TestIxcBlockedSince:
     def test_ignores_empty_and_blank(self) -> None:
         assert _ixc_blocked_since({"dt_ult_bloq_manual": "", "dt_ult_bloq_auto": "  "}) is None
 
+    def test_ignores_ixc_null_date_sentinel(self) -> None:
+        # IXC envia '0000-00-00' como data nula — não pode virar blocked_since.
+        extras = {"dt_ult_bloq_manual": "0000-00-00", "dt_ult_bloq_auto": "0000-00-00"}
+        assert _ixc_blocked_since(extras) is None
+
+    def test_falls_back_to_data_inicial_suspensao(self) -> None:
+        # Bloqueio automático: dt_ult_bloq_* vazios, suspensão marca o início.
+        extras = {"dt_ult_bloq_manual": "", "data_inicial_suspensao": "2026-05-15"}
+        assert _ixc_blocked_since(extras) == date(2026, 5, 15)
+
     def test_tolerates_datetime_suffix(self) -> None:
         assert _ixc_blocked_since({"dt_ult_bloq_manual": "2026-04-14 17:18:39"}) == date(2026, 4, 14)
 
