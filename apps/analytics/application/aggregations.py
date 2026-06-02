@@ -3541,3 +3541,121 @@ def compute_top_risk_customers(
         }
         for r in rows
     ]
+
+
+# Sinais de natureza financeira → ação de cobrança; o resto → retenção.
+_PAYMENT_SIGNAL_CODES = {"LATE_PAYMENTS", "CONTRACT_BLOCKED"}
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_priority_customers(
+    organization: Organization, limit: int = 15
+) -> dict[str, Any]:
+    """Clientes a focar — prioriza por valor × risco e sugere a ação (#28).
+
+    A página de clientes era só busca plana. Aqui combinamos o score de churn já
+    materializado (`ChurnRiskScore`) com o valor do cliente (MRR líquido) num
+    **índice de foco** = (valor norm.) × (risco norm.) — quem é caro E arriscado
+    sobe ao topo. O pool de foco são os níveis HIGH/MEDIUM (os acionáveis p/
+    retenção, mesma base de `revenue_at_risk`).
+
+    A ação sai dos sinais: sinal financeiro (atraso/bloqueio) → **COBRAR**; senão
+    → **RETER**. Em paralelo, listamos candidatos a **UPSELL**: clientes ACTIVE
+    de maior MRR que NÃO estão no radar de risco (saudáveis, com espaço p/ crescer).
+    Tudo JSON-friendly pra alimentar o template.
+    """
+    scores = list(
+        ChurnRiskScore.objects.filter(
+            organization=organization, level__in=("HIGH", "MEDIUM")
+        )
+        .select_related("customer")
+        .order_by("-score", "-monthly_amount")
+    )
+
+    max_value = max((float(s.monthly_amount or 0) for s in scores), default=0.0) or 1.0
+    max_score = max((s.score for s in scores), default=0) or 1
+
+    focus: list[dict[str, Any]] = []
+    cobrar_count = 0
+    reter_count = 0
+    revenue_in_focus = 0.0
+    for s in scores:
+        value = float(s.monthly_amount or 0)
+        value_norm = value / max_value
+        risk_norm = s.score / max_score
+        focus_index = round(value_norm * risk_norm * 100, 1)
+
+        sigs = sorted(
+            s.signals or [], key=lambda x: x.get("weight", 0), reverse=True
+        )
+        codes = {sig.get("code") for sig in sigs}
+        action = "COBRAR" if codes & _PAYMENT_SIGNAL_CODES else "RETER"
+        if action == "COBRAR":
+            cobrar_count += 1
+        else:
+            reter_count += 1
+        revenue_in_focus += value
+
+        reason_labels = [sig.get("label", "") for sig in sigs[:2] if sig.get("label")]
+        focus.append(
+            {
+                "customer_id": s.customer_id,
+                "name": s.customer.name,
+                "document": s.customer.document,
+                "status": s.customer.status,
+                "level": s.level,
+                "score": s.score,
+                "monthly_amount": value,
+                "focus_index": focus_index,
+                "action": action,
+                "reason": " · ".join(reason_labels) or "Risco elevado",
+                "ml_probability_pct": (
+                    int(round(float(s.ml_probability) * 100))
+                    if s.ml_probability is not None
+                    else None
+                ),
+            }
+        )
+
+    focus.sort(key=lambda r: r["focus_index"], reverse=True)
+
+    # UPSELL: clientes ACTIVE de maior MRR fora do radar de risco.
+    risk_ids = set(
+        ChurnRiskScore.objects.filter(organization=organization).values_list(
+            "customer_id", flat=True
+        )
+    )
+    today = timezone.now().date()
+    upsell_rows = (
+        FactContractStatusDaily.objects.filter(
+            organization=organization, date=today, is_active=True, status="ACTIVE"
+        )
+        .values("contract__customer_id", "contract__customer__name")
+        .annotate(mrr=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()))
+        .order_by("-mrr")
+    )
+    upsell: list[dict[str, Any]] = []
+    for row in upsell_rows:
+        cid = row["contract__customer_id"]
+        if cid is None or cid in risk_ids:
+            continue
+        upsell.append(
+            {
+                "customer_id": cid,
+                "name": row["contract__customer__name"] or "—",
+                "monthly_amount": float(row["mrr"] or 0),
+                "action": "UPSELL",
+            }
+        )
+        if len(upsell) >= limit:
+            break
+
+    return {
+        "focus": focus[:limit],
+        "upsell": upsell,
+        "focus_count": len(focus),
+        "cobrar_count": cobrar_count,
+        "reter_count": reter_count,
+        "upsell_count": len(upsell),
+        "revenue_in_focus": revenue_in_focus,
+    }

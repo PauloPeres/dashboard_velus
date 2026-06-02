@@ -53,6 +53,7 @@ from apps.analytics.application.aggregations import (
     compute_lead_origin,
     compute_net_adds_series,
     compute_pipeline_aging,
+    compute_priority_customers,
     compute_recovery_rate,
     compute_revenue_comparison,
     compute_revenue_forecast,
@@ -1267,6 +1268,9 @@ def customers(request: HttpRequest) -> HttpResponse:
     query = request.GET.get("q", "").strip()
     results = search_customers(org, query=query, limit=100)
 
+    # Painel "clientes a focar" só na visão padrão — em busca, mostra só resultados.
+    priority = compute_priority_customers(org, limit=15) if not query else None
+
     return render(
         request,
         "dashboards/customers_list.html",
@@ -1274,6 +1278,10 @@ def customers(request: HttpRequest) -> HttpResponse:
             "query": query,
             "results": results,
             "result_count": len(results),
+            "priority": priority,
+            "revenue_in_focus_str": (
+                _fmt_brl(priority["revenue_in_focus"]) if priority else ""
+            ),
         },
     )
 
