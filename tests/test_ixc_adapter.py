@@ -920,6 +920,62 @@ class TestIxcPaymentToDto:
         assert dtos[0].external_id == "2"
 
 
+def _sample_ixc_baixa_real(**overrides: Any) -> dict[str, Any]:
+    """Fixture com os nomes REAIS do endpoint fn_areceber_baixas (#26).
+
+    O endpoint entrega id_receber/data/valor_liquido_recebido/tipo_recebimento
+    em vez dos nomes canônicos — o que zerava Payment antes do fix.
+    """
+    base = {
+        "id": "354461",
+        "id_receber": "100692",
+        "data": "2026-06-02",
+        "valor_liquido_recebido": "63.92",
+        "credito": "63.92",
+        "tipo_recebimento": "P",
+        "historico": "Liquidado por 7AZ - [100692] - [Peres Telecom - Pix - Sicredi] - [FULANO]",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestIxcPaymentRealFieldNames:
+    """Regressão #26: o endpoint real usa nomes de campo diferentes."""
+
+    def test_parses_real_field_names(self) -> None:
+        schema = IxcPaymentSchema.model_validate(_sample_ixc_baixa_real())
+        assert schema.id == "354461"
+        assert schema.id_areceber == "100692"  # via alias id_receber
+        assert schema.valor == "63.92"  # via alias valor_liquido_recebido
+        assert schema.data_baixa is not None  # via alias data (date-only)
+        assert schema.data_baixa.tzinfo is not None
+
+    def test_real_record_yields_dto(self) -> None:
+        schema = IxcPaymentSchema.model_validate(_sample_ixc_baixa_real())
+        dto = IxcPaymentSource._to_dto(schema)
+        assert dto is not None
+        assert dto.external_id == "354461"
+        assert dto.invoice_external_id == "100692"
+        assert dto.amount == Decimal("63.92")
+
+    def test_method_resolved_from_historico(self) -> None:
+        # tipo_recebimento="P" é código contábil; método vem do histórico.
+        schema = IxcPaymentSchema.model_validate(_sample_ixc_baixa_real())
+        dto = IxcPaymentSource._to_dto(schema)
+        assert dto is not None
+        assert dto.method == "PIX"
+
+    def test_method_boleto_from_historico(self) -> None:
+        schema = IxcPaymentSchema.model_validate(
+            _sample_ixc_baixa_real(
+                historico="Liquidado - [Peres Telecom - Boleto - Sicredi]"
+            )
+        )
+        dto = IxcPaymentSource._to_dto(schema)
+        assert dto is not None
+        assert dto.method == "BOLETO"
+
+
 # =============================================================================
 # Equipment — schema cliente_contrato_comodato + _to_dto
 # =============================================================================
