@@ -23,6 +23,7 @@ class IxcAdapterConfig(AppConfig):
         from .customers import IxcCustomerSource
         from .expenses import IxcExpenseSource
         from .invoices import IxcInvoiceSource
+        from .payments import IxcPaymentSource
         from .tickets import IxcTicketSource
 
         # Idempotência — evita duplicação em reload do dev server
@@ -30,6 +31,7 @@ class IxcAdapterConfig(AppConfig):
             (Capability.CUSTOMERS, IxcCustomerSource),
             (Capability.CONTRACTS, IxcContractSource),
             (Capability.INVOICES, IxcInvoiceSource),
+            (Capability.PAYMENTS, IxcPaymentSource),
             (Capability.EXPENSES, IxcExpenseSource),
             (Capability.TICKETS, IxcTicketSource),
             (Capability.CONNECTIONS, IxcConnectionSource),

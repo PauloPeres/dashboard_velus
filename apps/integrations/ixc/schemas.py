@@ -573,3 +573,59 @@ class IxcRadUserSchema(BaseModel):
 
     def get_extras(self) -> dict[str, Any]:
         return dict(self.model_extra or {})
+
+
+class IxcPaymentSchema(BaseModel):
+    """Schema do registro `fn_areceber_baixas` (baixas de recebíveis) na API IXC.
+
+    Cada baixa é um recebimento efetivo de uma fatura (`id_areceber`). Suporta
+    pagamentos parciais e múltiplas baixas por fatura. `juros`, `multa` e
+    `desconto` detalham a composição do valor recebido — preservados em
+    raw_extras pra análise de recuperação de inadimplência.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    id_areceber: str = Field(default="")  # FK pra fatura (fn_areceber)
+    id_cliente: str = Field(default="")
+    valor: str = Field(default="0")  # valor recebido na baixa
+    data_baixa: datetime | None = Field(default=None)
+    forma_pagamento: str = Field(default="")  # texto/código IXC do meio de pagamento
+    juros: str = Field(default="0")
+    multa: str = Field(default="0")
+    desconto: str = Field(default="0")
+
+    @field_validator(
+        "id", "id_areceber", "id_cliente", "forma_pagamento", mode="before"
+    )
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("valor", "juros", "multa", "desconto", mode="before")
+    @classmethod
+    def _coerce_amount(cls, v: Any) -> str:
+        if v in (None, "", "0.00"):
+            return "0"
+        return str(v).replace(",", ".")
+
+    @field_validator("data_baixa", mode="before")
+    @classmethod
+    def _parse_ixc_datetime(cls, v: Any) -> datetime | None:
+        if v in (None, "", "0000-00-00 00:00:00", "0000-00-00"):
+            return None
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            from zoneinfo import ZoneInfo
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    naive = datetime.strptime(v, fmt)
+                    return naive.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+                except ValueError:
+                    continue
+        return None
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})
