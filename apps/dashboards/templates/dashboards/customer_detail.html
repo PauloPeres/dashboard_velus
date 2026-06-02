@@ -26,8 +26,17 @@
         <span>Fonte: {{ c.source_type }}:{{ c.external_id }}</span>
       </div>
     </div>
-    <div class="text-right text-xs text-gray-400">
-      {% if c.created_at_source %}Cliente desde {{ c.created_at_source|date:"d/m/Y" }}{% endif %}
+    <div class="flex flex-col items-end gap-2">
+      {% if c.whatsapp_url %}
+      <a href="{{ c.whatsapp_url }}" target="_blank" rel="noopener"
+         class="inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
+        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M.057 24l1.687-6.163a11.867 11.867 0 01-1.587-5.945C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 018.413 3.488 11.824 11.824 0 013.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 01-5.688-1.448L.057 24zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884a9.86 9.86 0 001.51 5.26l-.999 3.648 3.739-.985-.999-.985zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/></svg>
+        WhatsApp
+      </a>
+      {% endif %}
+      <span class="text-xs text-gray-400">
+        {% if c.created_at_source %}Cliente desde {{ c.created_at_source|date:"d/m/Y" }}{% endif %}
+      </span>
     </div>
   </div>
 
@@ -51,6 +60,54 @@
     </div>
   </div>
 </div>
+
+<!-- ═══════════ RISCO DE CHURN ═══════════ -->
+{% if churn %}
+<div class="bg-white rounded-xl shadow-sm border mb-6 overflow-hidden
+  {% if churn.level == 'HIGH' %}border-red-200{% elif churn.level == 'MEDIUM' %}border-orange-200{% else %}border-gray-200{% endif %}">
+  <div class="px-6 py-4 flex items-center justify-between
+    {% if churn.level == 'HIGH' %}bg-red-50{% elif churn.level == 'MEDIUM' %}bg-orange-50{% else %}bg-gray-50{% endif %}">
+    <div class="flex items-center gap-3">
+      <h2 class="text-sm font-semibold text-gray-800">Risco de churn</h2>
+      {% if churn.level == 'HIGH' %}<span class="inline-flex px-2.5 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-medium">Alto</span>
+      {% elif churn.level == 'MEDIUM' %}<span class="inline-flex px-2.5 py-0.5 text-xs rounded-full bg-orange-100 text-orange-700 font-medium">Médio</span>
+      {% else %}<span class="inline-flex px-2.5 py-0.5 text-xs rounded-full bg-gray-200 text-gray-600 font-medium">Baixo</span>{% endif %}
+      {% if churn.ml_probability_pct is not None %}<span class="text-xs text-gray-500">ML {{ churn.ml_probability_pct }}%</span>{% endif %}
+    </div>
+    <span class="text-xs text-gray-500">Score {{ churn.score }}/100 · atualizado {{ churn.computed_at|date:"d/m/Y" }}</span>
+  </div>
+  <div class="grid md:grid-cols-2 gap-px bg-gray-100">
+    <!-- Por que está em risco -->
+    <div class="bg-white p-5">
+      <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Por que está em risco</h3>
+      <ul class="space-y-2.5">
+        {% for s in churn.signals %}
+        <li class="flex items-start gap-2 text-sm">
+          <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-gray-300 shrink-0"></span>
+          <span><span class="font-medium text-gray-800">{{ s.label }}</span>{% if s.detail %}<span class="text-gray-500"> — {{ s.detail }}</span>{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    <!-- Recomendações -->
+    <div class="bg-white p-5">
+      <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Recomendações</h3>
+      {% if churn.recommendations %}
+      <ul class="space-y-2.5">
+        {% for r in churn.recommendations %}
+        <li class="flex items-start gap-2 text-sm text-gray-700">
+          <span class="mt-0.5 text-blue-500 shrink-0">→</span>
+          <span>{{ r.text }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="text-sm text-gray-400">Sem recomendações específicas.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <!-- ═══════════ CONTRATOS ═══════════ -->
 <details open class="bg-white rounded-lg shadow-sm border border-gray-200 mb-4 overflow-hidden">

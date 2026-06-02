@@ -3213,6 +3213,52 @@ def search_customers(
     ]
 
 
+# Recomendação de ação por sinal de risco — orienta o atendimento no 360.
+_CHURN_RECOMMENDATIONS: dict[str, str] = {
+    "CONTRACT_BLOCKED": (
+        "Negociar desbloqueio: contato para acordo de pagamento e religação."
+    ),
+    "LATE_PAYMENTS": (
+        "Acionar cobrança ativa: oferecer renegociação ou parcelamento do débito."
+    ),
+    "FREQUENT_TICKETS": (
+        "Revisar qualidade técnica: agendar diagnóstico de rede para resolver a "
+        "recorrência de chamados."
+    ),
+    "OFFLINE": (
+        "Verificar conexão: cliente offline com contrato ativo — checar "
+        "equipamento e rede."
+    ),
+    "PLAN_DOWNGRADE": (
+        "Entender o downgrade: sondar insatisfação e oferecer plano de retenção."
+    ),
+    "BANDWIDTH_DROP": (
+        "Investigar queda de uso: possível migração para concorrente — fazer "
+        "contato proativo."
+    ),
+    "ML_HIGH_RISK": (
+        "Risco previsto pelo modelo: priorizar contato de relacionamento e retenção."
+    ),
+}
+
+
+def _whatsapp_link(phone: str | None) -> str | None:
+    """Monta um link wa.me a partir do telefone do cliente (formato BR).
+
+    Mantém só os dígitos e garante o DDI 55: números com 10–11 dígitos (DDD +
+    assinante) recebem o 55; números já com 12–13 dígitos são usados como estão.
+    Fora dessas faixas, retorna None (não dá pra montar um link confiável).
+    """
+    if not phone:
+        return None
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    if len(digits) in (10, 11):
+        digits = "55" + digits
+    elif len(digits) not in (12, 13):
+        return None
+    return f"https://wa.me/{digits}"
+
+
 @allow_cross_tenant(reason="agregação cross-app roda no escopo da org/cliente passados")
 def compute_customer_360(
     organization: Organization, customer: Any
@@ -3412,6 +3458,36 @@ def compute_customer_360(
     timeline.sort(key=lambda ev: ev["at"], reverse=True)
     timeline = timeline[:30]
 
+    # ── Risco de churn (lê o score materializado) ──────────────────────
+    risk_row = ChurnRiskScore.objects.filter(
+        organization=organization, customer=customer
+    ).first()
+    churn: dict[str, Any] | None = None
+    if risk_row is not None:
+        signals = risk_row.signals or []
+        recommendations = [
+            {
+                "code": s.get("code", ""),
+                "label": s.get("label", ""),
+                "text": _CHURN_RECOMMENDATIONS[s["code"]],
+            }
+            for s in signals
+            if s.get("code") in _CHURN_RECOMMENDATIONS
+        ]
+        ml_pct = (
+            int(round(float(risk_row.ml_probability) * 100))
+            if risk_row.ml_probability is not None
+            else None
+        )
+        churn = {
+            "level": risk_row.level,
+            "score": risk_row.score,
+            "signals": signals,
+            "recommendations": recommendations,
+            "ml_probability_pct": ml_pct,
+            "computed_at": risk_row.computed_at,
+        }
+
     return {
         "customer": {
             "id": customer.id,
@@ -3420,10 +3496,12 @@ def compute_customer_360(
             "document": customer.document,
             "email": customer.email,
             "phone": customer.phone,
+            "whatsapp_url": _whatsapp_link(customer.phone),
             "status": customer.status,
             "created_at_source": customer.created_at_source,
             "source_type": customer.source_type,
         },
+        "churn": churn,
         "contracts": contract_rows,
         "contracts_count": len(contract_rows),
         "mrr_active": float(mrr_active),

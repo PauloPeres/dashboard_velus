@@ -1312,6 +1312,7 @@ def customer_detail(request: HttpRequest, customer_id: int) -> HttpResponse:
         "dashboards/customer_detail.html",
         {
             "c": data["customer"],
+            "churn": data["churn"],
             "contracts": data["contracts"],
             "contracts_count": data["contracts_count"],
             "mrr_active_str": _fmt_brl(data["mrr_active"]),
