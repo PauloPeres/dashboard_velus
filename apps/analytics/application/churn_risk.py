@@ -5,7 +5,8 @@ sincronizados (sem ML, sem fontes novas) e persiste em `ChurnRiskScore`:
 
     1. Contrato bloqueado há ≥ 30 dias consecutivos        peso 40
     2. Atraso recorrente (≥ 3 faturas vencidas em 6 meses)  peso 25
-    3. Chamados frequentes (≥ 3 nos últimos 30 dias)        peso 20
+    3. Chamados de suporte frequentes (≥ 3 em 30d, só tipos
+       de problema técnico/rede/suporte — exclui rotina)    peso 20
     4. Downgrade de plano (valor mensal caiu vs anterior)   peso 20
     5. Offline com contrato ativo                           peso 15
     6. Queda brusca de consumo de banda (≥ 70% em 30d)      peso 15
@@ -33,6 +34,8 @@ from apps.analytics.infrastructure.models import (
     ChurnRiskScore,
     FactContractStatusDaily,
 )
+from apps.helpdesk.application.os_classification import churn_relevant_subject_ids
+from apps.helpdesk.application.os_lookups import load_os_lookups
 from apps.shared.decorators import allow_cross_tenant
 from apps.tenancy.models import Organization
 
@@ -142,13 +145,22 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
             "weight": W_LATE_PAYMENTS,
         })
 
-    # ── Sinal 3: chamados frequentes (≥ 3 nos últimos 30 dias) ──────────
+    # ── Sinal 3: chamados de suporte frequentes (≥ 3 nos últimos 30 dias) ─
+    # Conta só chamados que indicam insatisfação com o serviço (problema
+    # técnico/rede/suporte). Instalação, troca de equipamento, financeiro e
+    # titularidade são rotina e não sinalizam churn — antes inflavam o número.
     ticket_cutoff = now - timedelta(days=TICKETS_WINDOW_DAYS)
+    lookups = load_os_lookups(organization)
+    relevant_subject_ids = churn_relevant_subject_ids(lookups.subject_map)
+    ticket_qs = Ticket.objects.filter(
+        organization=organization, opened_at__gte=ticket_cutoff
+    )
+    if relevant_subject_ids is not None:
+        # Org com lookups sincronizados: restringe a assuntos de suporte.
+        ticket_qs = ticket_qs.filter(subject_id__in=relevant_subject_ids)
+    # Sem lookups (None): mantém comportamento antigo (conta todos) — fallback.
     ticket_rows = (
-        Ticket.objects.filter(
-            organization=organization, opened_at__gte=ticket_cutoff
-        )
-        .values("customer_id")
+        ticket_qs.values("customer_id")
         .annotate(n=Count("id"))
         .filter(n__gte=TICKETS_MIN)
     )
@@ -158,8 +170,8 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
             continue
         signals[cid].append({
             "code": "FREQUENT_TICKETS",
-            "label": "Chamados frequentes",
-            "detail": f"{row['n']} chamados nos últimos 30 dias",
+            "label": "Chamados de suporte frequentes",
+            "detail": f"{row['n']} chamados de suporte nos últimos 30 dias",
             "weight": W_FREQUENT_TICKETS,
         })
 
