@@ -276,16 +276,49 @@ CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000  # restart periódico p/ evitar memory 
 # Filas por tenant — populadas dinamicamente; fila default 'celery' sempre existe.
 CELERY_TASK_DEFAULT_QUEUE = "celery"
 
-# Beat schedule — sync incremental a cada 3h pra TODAS as orgs ativas.
+# Beat schedule — sync incremental pra TODAS as orgs ativas.
 # Task `dispatch_incremental_for_all_orgs` itera org-by-org e enfileira
 # uma sub-task por (org, capability) na fila do tenant.
 # Rodar Beat: `uv run celery -A config beat --loglevel=info`
+#
+# Capabilities escalonadas em janelas distintas (minutos/horas diferentes) pra
+# não disparar as 11 sincronizações ao mesmo tempo e sobrecarregar a API do IXC:
+#   - core (clientes/contratos): a cada 3h, :00 — base mais crítica
+#   - financeiro (faturas/pagamentos/despesas): a cada 3h, :20
+#   - suporte (chamados/equipamentos): a cada 3h, :40
+#   - rede (conexões/banda): a cada 6h — volume alto, menos crítico
+#   - CRM (leads/negociações): a cada 6h
 from celery.schedules import crontab  # noqa: E402
 
 CELERY_BEAT_SCHEDULE: dict = {
-    "sync-incremental-every-3h": {
+    "sync-core-every-3h": {
         "task": "apps.sync.tasks.dispatch_incremental_for_all_orgs",
         "schedule": crontab(minute=0, hour="*/3"),
+        "kwargs": {"capabilities": ["CUSTOMERS", "CONTRACTS"]},
+        "options": {"queue": "celery"},
+    },
+    "sync-financial-every-3h": {
+        "task": "apps.sync.tasks.dispatch_incremental_for_all_orgs",
+        "schedule": crontab(minute=20, hour="*/3"),
+        "kwargs": {"capabilities": ["INVOICES", "PAYMENTS", "EXPENSES"]},
+        "options": {"queue": "celery"},
+    },
+    "sync-support-every-3h": {
+        "task": "apps.sync.tasks.dispatch_incremental_for_all_orgs",
+        "schedule": crontab(minute=40, hour="*/3"),
+        "kwargs": {"capabilities": ["TICKETS", "EQUIPMENT"]},
+        "options": {"queue": "celery"},
+    },
+    "sync-network-every-6h": {
+        "task": "apps.sync.tasks.dispatch_incremental_for_all_orgs",
+        "schedule": crontab(minute=10, hour="1,7,13,19"),
+        "kwargs": {"capabilities": ["CONNECTIONS", "BANDWIDTH"]},
+        "options": {"queue": "celery"},
+    },
+    "sync-crm-every-6h": {
+        "task": "apps.sync.tasks.dispatch_incremental_for_all_orgs",
+        "schedule": crontab(minute=50, hour="2,8,14,20"),
+        "kwargs": {"capabilities": ["LEADS", "OPPORTUNITIES"]},
         "options": {"queue": "celery"},
     },
     "sync-plano-contas-daily": {

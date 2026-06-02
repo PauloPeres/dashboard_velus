@@ -61,26 +61,37 @@ _logger = structlog.get_logger(__name__)
 # Beat-scheduled task — itera todas as orgs ativas
 # =============================================================================
 @shared_task(name="apps.sync.tasks.dispatch_incremental_for_all_orgs")
-def dispatch_incremental_for_all_orgs() -> dict[str, int]:
+def dispatch_incremental_for_all_orgs(
+    capabilities: list[str] | None = None,
+) -> dict[str, int]:
     """Iterates orgs ativas + suas OrganizationDataSources e dispatcha sync
     incremental por (org, capability) na fila tenant específica.
 
-    Agendado via CELERY_BEAT_SCHEDULE a cada 3h. Cada (org, cap) vira uma
-    task separada na fila do tenant — paralelismo + isolamento.
+    Agendado via CELERY_BEAT_SCHEDULE. Cada (org, cap) vira uma task separada
+    na fila do tenant — paralelismo + isolamento.
+
+    `capabilities` (opcional) restringe o dispatch a um subconjunto de
+    capabilities. O Beat escalona grupos de capabilities em janelas distintas
+    pra não disparar as 11 sincronizações ao mesmo tempo e sobrecarregar a API
+    do IXC. Sem o filtro (None), dispatcha todas — útil pra disparo manual.
     """
-    return _dispatch_incremental()
+    return _dispatch_incremental(capabilities)
 
 
 @allow_cross_tenant(reason="beat orchestrator itera Organization (não-TenantModel)")
-def _dispatch_incremental() -> dict[str, int]:
+def _dispatch_incremental(capabilities: list[str] | None = None) -> dict[str, int]:
     from apps.tenancy.models import OrganizationDataSource
+
+    configs = OrganizationDataSource.objects.filter(
+        is_active=True, organization__is_active=True
+    )
+    if capabilities:
+        configs = configs.filter(capability__in=capabilities)
 
     n_orgs = 0
     n_tasks = 0
     seen_orgs: set[int] = set()
-    for cfg in OrganizationDataSource.objects.filter(
-        is_active=True, organization__is_active=True
-    ).select_related("organization"):
+    for cfg in configs.select_related("organization"):
         org = cfg.organization
         if org.pk not in seen_orgs:
             seen_orgs.add(org.pk)
