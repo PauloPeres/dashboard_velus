@@ -1114,6 +1114,81 @@ def technician_solution_bar(rows: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+def technician_monthly_lines(data: dict[str, Any]) -> str:
+    """Linhas — evolução da produção (OS) mês a mês dos principais técnicos.
+
+    `data` traz `labels` (eixo do tempo) e `per_tech`: cada item com `technician`
+    (nome resolvido) e `values` (OS por mês). Uma linha por técnico.
+    """
+    labels = data.get("labels", [])
+    per_tech = data.get("per_tech", [])
+    COLORS = [
+        "#2563eb", "#dc2626", "#d97706", "#16a34a", "#7c3aed",
+        "#db2777", "#0891b2", "#65a30d",
+    ]
+    traces = [
+        go.Scatter(
+            name=t["technician"],
+            x=labels,
+            y=t["values"],
+            mode="lines+markers",
+            line={"color": COLORS[i % len(COLORS)], "width": 2},
+            marker={"size": 6},
+            hovertemplate=f"<b>{t['technician']}</b><br>%{{x}}: %{{y}} OS<extra></extra>",
+        )
+        for i, t in enumerate(per_tech)
+    ]
+    fig = go.Figure(
+        data=traces,
+        layout={
+            **_LAYOUT_BASE,
+            "showlegend": True,
+            "yaxis": {"title": "OS abertas"},
+            "legend": {"orientation": "h", "y": -0.25, "font": {"size": 10}},
+            "margin": {"l": 50, "r": 20, "t": 30, "b": 80},
+        },
+    )
+    return _to_json(fig)
+
+
+def technician_category_stacked(data: dict[str, Any]) -> str:
+    """Barras horizontais empilhadas — OS por categoria de atendimento por técnico.
+
+    `data` traz `categories` (lista de {key, label}) e `rows`: cada item com
+    `technician` e `counts` (dict categoria→nº). Mostra o mix de tipos atendidos.
+    """
+    rows = data.get("rows", [])
+    categories = data.get("categories", [])
+    COLORS = [
+        "#0ea5e9", "#6366f1", "#f59e0b", "#10b981", "#ef4444",
+        "#8b5cf6", "#ec4899", "#9ca3af",
+    ]
+    names = [r["technician"] for r in rows]
+    traces = [
+        go.Bar(
+            name=cat["label"],
+            y=names,
+            x=[r["counts"].get(cat["key"], 0) for r in rows],
+            orientation="h",
+            marker_color=COLORS[i % len(COLORS)],
+            hovertemplate=f"<b>%{{y}}</b><br>{cat['label']}: %{{x}} OS<extra></extra>",
+        )
+        for i, cat in enumerate(categories)
+    ]
+    fig = go.Figure(
+        data=traces,
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "xaxis": {"title": "OS atendidas"},
+            "legend": {"orientation": "h", "y": -0.2, "font": {"size": 10}},
+            "margin": {"l": 120, "r": 20, "t": 30, "b": 70},
+        },
+    )
+    return _to_json(fig)
+
+
 def connection_status_pie(data: list[dict[str, Any]]) -> str:
     """Donut — distribuicao de conexoes por status (online/offline/bloqueado)."""
     colors_map = {

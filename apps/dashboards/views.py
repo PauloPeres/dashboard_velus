@@ -1050,9 +1050,18 @@ def os_dashboard(request: HttpRequest) -> HttpResponse:
 @login_required
 @never_cache
 def tecnicos(request: HttpRequest) -> HttpResponse:
-    """Qualidade e produção de técnicos — ranking + retorno (revisitas)."""
+    """Qualidade e produção de técnicos — ranking + retorno + perfil + evolução."""
+    from apps.helpdesk.application.os_classification import (
+        category_label,
+        classify_subject,
+    )
     from apps.helpdesk.application.os_lookups import load_os_lookups
-    from apps.helpdesk.application.technician_stats import compute_technician_stats
+    from apps.helpdesk.application.technician_stats import (
+        PROFILE_FIELD,
+        PROFILE_INTERNAL,
+        compute_technician_monthly,
+        compute_technician_stats,
+    )
     from apps.helpdesk.infrastructure.models import Ticket
 
     org_or_redirect = _require_org(request)
@@ -1061,7 +1070,15 @@ def tecnicos(request: HttpRequest) -> HttpResponse:
     org = org_or_redirect
     months = _get_months(request)
 
+    # Filtro de perfil (rua/interno) — combinável com o recorte temporal.
+    profile_f = request.GET.get("profile", "").strip().upper()
+    if profile_f not in (PROFILE_FIELD, PROFILE_INTERNAL):
+        profile_f = ""
+
     lookups = load_os_lookups(org)
+    subject_to_category = {
+        sid: classify_subject(name) for sid, name in lookups.subject_map.items()
+    }
     now = timezone.now()
     window_start = (now - relativedelta(months=months)).replace(
         hour=0, minute=0, second=0, microsecond=0
@@ -1073,10 +1090,12 @@ def tecnicos(request: HttpRequest) -> HttpResponse:
             "status", "opened_at", "closed_at",
         )
     )
-    stats = compute_technician_stats(tickets)
+    stats = compute_technician_stats(
+        tickets, subject_to_category=subject_to_category
+    )
 
     # Resolve nomes (técnico + tipo predominante) e formata tempo médio.
-    rows = []
+    all_rows = []
     for s in stats:
         avg_hours = s["avg_res_hours"]
         if avg_hours >= 24:
@@ -1085,14 +1104,24 @@ def tecnicos(request: HttpRequest) -> HttpResponse:
             avg_str = f"{avg_hours:.1f}h"
         else:
             avg_str = "—"
-        rows.append({
+        all_rows.append({
             **s,
             "technician": lookups.technician_name(s["technician_id"]),
             "top_subject": lookups.subject_name(s["top_subject_id"]),
             "avg_res_str": avg_str,
         })
 
-    # --- KPIs (agregados sobre o conjunto) ---
+    # Contagem por perfil antes de aplicar o filtro (pros KPIs de perfil).
+    field_count = sum(1 for r in all_rows if r.get("profile") == PROFILE_FIELD)
+    internal_count = sum(1 for r in all_rows if r.get("profile") == PROFILE_INTERNAL)
+
+    rows = (
+        [r for r in all_rows if r.get("profile") == profile_f]
+        if profile_f
+        else all_rows
+    )
+
+    # --- KPIs (agregados sobre o conjunto filtrado) ---
     active_techs = len(rows)
     total_os = sum(r["total"] for r in rows)
     total_closed = sum(r["closed"] for r in rows)
@@ -1110,6 +1139,34 @@ def tecnicos(request: HttpRequest) -> HttpResponse:
 
     top_rows = sorted(rows, key=lambda r: r["total"], reverse=True)[:12]
 
+    # --- Evolução temporal: produção mês a mês dos top técnicos (filtrados) ---
+    visible_ids = {r["technician_id"] for r in rows}
+    monthly = compute_technician_monthly(
+        [t for t in tickets if t["technician_id"] in visible_ids],
+        now=now,
+        months=months,
+    )
+    monthly_top = [
+        {**series, "technician": lookups.technician_name(series["technician_id"])}
+        for series in monthly["per_tech"][:6]
+    ]
+    monthly_data = {"labels": monthly["labels"], "per_tech": monthly_top}
+
+    # --- Recorte por tipo de atendimento: mix de categorias dos top técnicos ---
+    cat_keys: list[str] = []
+    for r in top_rows:
+        for cat in (r.get("category_counts") or {}):
+            if cat not in cat_keys:
+                cat_keys.append(cat)
+    category_meta = [{"key": k, "label": category_label(k)} for k in cat_keys]
+    category_data = {
+        "categories": category_meta,
+        "rows": [
+            {"technician": r["technician"], "counts": r.get("category_counts") or {}}
+            for r in top_rows
+        ],
+    }
+
     return render(
         request,
         "dashboards/tecnicos.html",
@@ -1122,8 +1179,13 @@ def tecnicos(request: HttpRequest) -> HttpResponse:
             "return_rate": return_rate,
             "rows": rows,
             "synced": bool(lookups.technician_map),
+            "profile_filter": profile_f,
+            "field_count": field_count,
+            "internal_count": internal_count,
             "production_chart_json": charts.technician_production_bar(top_rows),
             "solution_chart_json": charts.technician_solution_bar(top_rows),
+            "monthly_chart_json": charts.technician_monthly_lines(monthly_data),
+            "category_chart_json": charts.technician_category_stacked(category_data),
         },
     )
 

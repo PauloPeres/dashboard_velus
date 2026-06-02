@@ -5,11 +5,30 @@
 
 {% block content %}
 <!-- Cabeçalho -->
-<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-4">
   <div>
     <h1 class="text-2xl font-bold text-gray-900">Técnicos — qualidade e produção</h1>
-    <p class="text-xs text-gray-400 mt-0.5">Produção · Taxa de solução · Tempo de resolução · Retorno (revisitas)</p>
+    <p class="text-xs text-gray-400 mt-0.5">Produção · Taxa de solução · Tempo de resolução · Retorno (revisitas) · Perfil</p>
   </div>
+</div>
+
+<!-- Filtro de perfil (rua/interno) -->
+<div class="flex items-center gap-2 mb-6">
+  <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider mr-1">Perfil</span>
+  {% with m=request.GET.months %}
+  <a href="?{% if m %}months={{ m }}{% endif %}"
+     class="px-3 py-1 text-sm rounded-full border {% if not profile_filter %}bg-blue-600 text-white border-blue-600{% else %}bg-white text-gray-600 border-gray-200 hover:bg-gray-50{% endif %}">
+    Todos
+  </a>
+  <a href="?profile=FIELD{% if m %}&months={{ m }}{% endif %}"
+     class="px-3 py-1 text-sm rounded-full border {% if profile_filter == 'FIELD' %}bg-blue-600 text-white border-blue-600{% else %}bg-white text-gray-600 border-gray-200 hover:bg-gray-50{% endif %}">
+    Rua ({{ field_count }})
+  </a>
+  <a href="?profile=INTERNAL{% if m %}&months={{ m }}{% endif %}"
+     class="px-3 py-1 text-sm rounded-full border {% if profile_filter == 'INTERNAL' %}bg-blue-600 text-white border-blue-600{% else %}bg-white text-gray-600 border-gray-200 hover:bg-gray-50{% endif %}">
+    Interno ({{ internal_count }})
+  </a>
+  {% endwith %}
 </div>
 
 {% if not synced %}
@@ -109,6 +128,25 @@
   </div>
 </div>
 
+<!-- Evolução temporal + mix por tipo de atendimento -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Produção no tempo — mês a mês</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">OS abertas por mês dos 6 técnicos mais produtivos do recorte</p>
+    <div id="monthly-chart" style="height:360px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Mix por tipo de atendimento</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">OS por categoria (Manutenção, Instalação, ...) por técnico (top 12)</p>
+    <div id="category-chart" style="height:360px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+</div>
+
 <!-- Tabela: ranking de técnicos -->
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
   <div class="p-5 pb-0 flex items-baseline justify-between">
@@ -123,6 +161,7 @@
       <tr>
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">#</th>
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Técnico</th>
+        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Perfil</th>
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tipo predominante</th>
         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">OS</th>
         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Fechadas</th>
@@ -137,6 +176,15 @@
       <tr class="hover:bg-gray-50">
         <td class="px-4 py-3 text-gray-400 tabular-nums">{{ forloop.counter }}</td>
         <td class="px-4 py-3 font-medium text-gray-900 truncate max-w-[180px]">{{ r.technician }}</td>
+        <td class="px-4 py-3 text-center">
+          {% if r.profile == 'FIELD' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-sky-100 text-sky-700 font-medium">{{ r.profile_label }}</span>
+          {% elif r.profile == 'INTERNAL' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-violet-100 text-violet-700 font-medium">{{ r.profile_label }}</span>
+          {% else %}
+            <span class="text-gray-300">—</span>
+          {% endif %}
+        </td>
         <td class="px-4 py-3 text-gray-500 truncate max-w-[200px]">{{ r.top_subject }}</td>
         <td class="px-4 py-3 text-right tabular-nums text-gray-900">{{ r.total|intcomma }}</td>
         <td class="px-4 py-3 text-right tabular-nums text-emerald-700">{{ r.closed|intcomma }}</td>
@@ -151,7 +199,7 @@
       </tr>
       {% empty %}
       <tr>
-        <td colspan="9" class="px-6 py-8 text-center text-gray-500">
+        <td colspan="10" class="px-6 py-8 text-center text-gray-500">
           Nenhuma OS com técnico atribuído no período
         </td>
       </tr>
@@ -164,8 +212,12 @@
 {% block scripts %}
 {{ production_chart_json|json_script:"production-data" }}
 {{ solution_chart_json|json_script:"solution-data" }}
+{{ monthly_chart_json|json_script:"monthly-data" }}
+{{ category_chart_json|json_script:"category-data" }}
 <script>
   renderChart("production-chart", "production-data");
   renderChart("solution-chart", "solution-data");
+  renderChart("monthly-chart", "monthly-data");
+  renderChart("category-chart", "category-data");
 </script>
 {% endblock %}
