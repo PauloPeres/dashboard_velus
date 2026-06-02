@@ -1,4 +1,4 @@
-"""Scoring ML de churn — regressão logística pura-Python (v2).
+"""Scoring ML de churn — regressão logística pura-Python (v3).
 
 Treina, por organização, um classificador binário a partir de cancelamentos
 históricos e usa a probabilidade prevista pra enriquecer `ChurnRiskScore`.
@@ -11,14 +11,27 @@ Por que pura-Python (sem scikit/numpy):
 Label:
     cliente "churnou" = tem ≥ 1 contrato CANCELED e nenhum ACTIVE/BLOCKED.
 
-Features (acumulam ao longo da vida do cliente, não zeram no cancelamento, o
-que mantém algum sinal mesmo em estado pós-churn):
-    tenure_days · mrr · n_contracts · late_payments · tickets_total
+Features point-in-time (v3 — corrige o vazamento temporal do #15):
+    Cada cliente é fotografado numa **data de referência**:
+        positivos (churned) → data do cancelamento (max canceled_at);
+        negativos (ativos)  → agora.
+    Todas as features usam apenas dados observáveis ATÉ essa data — nada que só
+    existiria depois do ponto de observação:
+        tenure_days · mrr · n_contracts · late_payments · tickets_total
+    Assim os churned não têm faturas/chamados posteriores ao cancelamento
+    "vazando" pro vetor, e os ativos refletem o estado de hoje — exatamente o
+    estado em que serão pontuados em produção. A assimetria de calendário que
+    resta (churned observados no passado, ativos no presente) é inerente ao
+    snapshot e não constitui leakage.
 
-Limitação conhecida (v2): as features são computadas "como hoje", não
-point-in-time no momento do cancelamento. É um modelo complementar às regras,
-não substituto — as regras seguem como score primário. Com amostra
-insuficiente, o treino é pulado e nenhum `ml_probability` é gravado (fallback
+Validação:
+    além da acurácia in-sample, o treino estima generalização num holdout
+    determinístico (~25% por id do cliente) e grava AUC e acurácia
+    out-of-sample em `ChurnRiskModel`. Uma validação plenamente temporal
+    (cortes rolantes) segue como evolução futura.
+
+Complementar às regras: as regras seguem como score primário. Com amostra
+insuficiente o treino é pulado e nenhum `ml_probability` é gravado (fallback
 para regras).
 """
 
@@ -30,7 +43,6 @@ from decimal import Decimal
 from typing import Any
 
 import structlog
-from django.db.models import Count
 from django.utils import timezone
 
 from apps.analytics.infrastructure.models import ChurnRiskModel
@@ -51,6 +63,10 @@ LEARNING_RATE = 0.1
 ITERATIONS = 500
 L2_LAMBDA = 0.001
 
+# ── Validação ───────────────────────────────────────────────────────────
+# Holdout determinístico: clientes com id ≡ 0 (mod VAL_MODULO) viram validação.
+VAL_MODULO = 4
+
 
 def _sigmoid(z: float) -> float:
     if z < -35:
@@ -64,7 +80,10 @@ def _sigmoid(z: float) -> float:
 def compute_features(
     organization: Organization,
 ) -> tuple[dict[int, dict[str, float]], set[int], set[int]]:
-    """Computa o vetor de features por cliente da org.
+    """Computa o vetor de features point-in-time por cliente da org.
+
+    Cada cliente é fotografado numa data de referência: cancelamento (churned)
+    ou agora (ativos). Só dados observáveis até essa data entram no vetor.
 
     Retorna (features, churned, active):
         features — {customer_id → {feature → valor}}
@@ -77,12 +96,10 @@ def compute_features(
 
     now = timezone.now()
 
-    n_contracts: dict[int, int] = defaultdict(int)
-    mrr: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
-    earliest: dict[int, Any] = {}
-    last_canceled: dict[int, Any] = {}
+    contracts_by_cid: dict[int, list[dict[str, Any]]] = defaultdict(list)
     has_live: set[int] = set()
     has_canceled: set[int] = set()
+    last_canceled: dict[int, Any] = {}
 
     for c in Contract.objects.filter(organization=organization).values(
         "customer_id", "status", "monthly_amount", "monthly_amount_addons",
@@ -91,16 +108,7 @@ def compute_features(
         cid = c["customer_id"]
         if cid is None:
             continue
-        n_contracts[cid] += 1
-        net = (
-            (c["monthly_amount"] or Decimal("0"))
-            + (c["monthly_amount_addons"] or Decimal("0"))
-            - (c["monthly_amount_discounts"] or Decimal("0"))
-        )
-        mrr[cid] += net
-        act = c["activated_at"]
-        if act is not None and (cid not in earliest or act < earliest[cid]):
-            earliest[cid] = act
+        contracts_by_cid[cid].append(c)
         if c["status"] in ("ACTIVE", "BLOCKED"):
             has_live.add(cid)
         if c["status"] == "CANCELED":
@@ -109,40 +117,84 @@ def compute_features(
             if can is not None and (cid not in last_canceled or can > last_canceled[cid]):
                 last_canceled[cid] = can
 
-    late_counts = {
-        row["contract__customer_id"]: row["n"]
-        for row in Invoice.objects.filter(
-            organization=organization, status__in=("PENDING", "OVERDUE")
-        )
-        .values("contract__customer_id")
-        .annotate(n=Count("id"))
-        if row["contract__customer_id"] is not None
-    }
-    ticket_counts = {
-        row["customer_id"]: row["n"]
-        for row in Ticket.objects.filter(organization=organization)
-        .values("customer_id")
-        .annotate(n=Count("id"))
-        if row["customer_id"] is not None
-    }
-
     churned = has_canceled - has_live
     active = set(has_live)
 
+    # Data de referência por cliente: cancelamento (churned) ou agora (ativos).
+    ref: dict[int, Any] = {
+        cid: (last_canceled[cid] if (cid in churned and cid in last_canceled) else now)
+        for cid in contracts_by_cid
+    }
+
+    # Faturas por cliente: (due_date, paid_at) — pra contar atraso point-in-time.
+    invoices_by_cid: dict[int, list[tuple[Any, Any]]] = defaultdict(list)
+    for row in Invoice.objects.filter(organization=organization).values(
+        "contract__customer_id", "due_date", "paid_at"
+    ):
+        cid = row["contract__customer_id"]
+        if cid is None:
+            continue
+        invoices_by_cid[cid].append((row["due_date"], row["paid_at"]))
+
+    # Chamados por cliente: lista de opened_at.
+    tickets_by_cid: dict[int, list[Any]] = defaultdict(list)
+    for row in Ticket.objects.filter(organization=organization).values(
+        "customer_id", "opened_at"
+    ):
+        cid = row["customer_id"]
+        if cid is None:
+            continue
+        tickets_by_cid[cid].append(row["opened_at"])
+
     features: dict[int, dict[str, float]] = {}
-    for cid in n_contracts:
-        start = earliest.get(cid)
-        end = last_canceled.get(cid) if cid in churned else now
-        if start is not None and end is not None and end > start:
-            tenure_days = (end - start).days
-        else:
-            tenure_days = 0
+    for cid, clist in contracts_by_cid.items():
+        r = ref[cid]
+        r_date = r.date()
+
+        # Contratos que já existiam na data de referência.
+        existed = [
+            c for c in clist
+            if c["activated_at"] is None or c["activated_at"] <= r
+        ]
+        n_contracts = len(existed) if existed else len(clist)
+
+        # Tenure: do primeiro contrato ativado até a data de referência.
+        starts = [c["activated_at"] for c in existed if c["activated_at"] is not None]
+        tenure_days = max((r - min(starts)).days, 0) if starts else 0
+
+        # MRR: soma líquida dos contratos vivos na data de referência.
+        mrr_val = Decimal("0")
+        for c in clist:
+            act = c["activated_at"]
+            can = c["canceled_at"]
+            if act is not None and act > r:
+                continue
+            if can is not None and can < r:
+                continue
+            mrr_val += (
+                (c["monthly_amount"] or Decimal("0"))
+                + (c["monthly_amount_addons"] or Decimal("0"))
+                - (c["monthly_amount_discounts"] or Decimal("0"))
+            )
+
+        # Atraso point-in-time: faturas vencidas até `r` e ainda não pagas em `r`.
+        late = sum(
+            1
+            for due, paid in invoices_by_cid.get(cid, ())
+            if due is not None and due <= r_date and (paid is None or paid > r)
+        )
+
+        # Chamados abertos até a data de referência.
+        tickets_total = sum(
+            1 for opened in tickets_by_cid.get(cid, ()) if opened is not None and opened <= r
+        )
+
         features[cid] = {
             "tenure_days": float(tenure_days),
-            "mrr": float(mrr[cid]),
-            "n_contracts": float(n_contracts[cid]),
-            "late_payments": float(late_counts.get(cid, 0)),
-            "tickets_total": float(ticket_counts.get(cid, 0)),
+            "mrr": float(mrr_val),
+            "n_contracts": float(n_contracts),
+            "late_payments": float(late),
+            "tickets_total": float(tickets_total),
         }
 
     return features, churned, active
@@ -168,6 +220,107 @@ def _standardize(
     return std_rows, means, stds
 
 
+def _apply_standardize(
+    rows: list[list[float]], means: list[float], stds: list[float]
+) -> list[list[float]]:
+    """Aplica padronização pré-computada (means/stds do treino) a novas linhas."""
+    f = len(FEATURES)
+    return [
+        [(r[j] - means[j]) / (stds[j] or 1.0) for j in range(f)] for r in rows
+    ]
+
+
+def _train_weights(
+    std_rows: list[list[float]], labels: list[float]
+) -> tuple[list[float], float]:
+    """Gradiente descendente da regressão logística com regularização L2."""
+    f = len(FEATURES)
+    n = len(std_rows)
+    w = [0.0] * f
+    b = 0.0
+    for _ in range(ITERATIONS):
+        grad_w = [0.0] * f
+        grad_b = 0.0
+        for i, x in enumerate(std_rows):
+            z = b + sum(w[j] * x[j] for j in range(f))
+            err = _sigmoid(z) - labels[i]
+            for j in range(f):
+                grad_w[j] += err * x[j]
+            grad_b += err
+        for j in range(f):
+            grad_w[j] = grad_w[j] / n + L2_LAMBDA * w[j]
+            w[j] -= LEARNING_RATE * grad_w[j]
+        b -= LEARNING_RATE * (grad_b / n)
+    return w, b
+
+
+def _predict_std(
+    std_rows: list[list[float]], w: list[float], b: float
+) -> list[float]:
+    f = len(FEATURES)
+    return [_sigmoid(b + sum(w[j] * x[j] for j in range(f))) for x in std_rows]
+
+
+def _accuracy(preds: list[float], labels: list[float]) -> float:
+    correct = sum(
+        1 for p, lbl in zip(preds, labels, strict=True) if (1.0 if p >= 0.5 else 0.0) == lbl
+    )
+    return correct / len(labels)
+
+
+def _auc(scores: list[float], labels: list[float]) -> float | None:
+    """AUC ROC via estatística de Mann-Whitney (média de ranks com empates).
+
+    Retorna None quando uma das classes está ausente (AUC indefinida).
+    """
+    n_pos = sum(1 for lbl in labels if lbl == 1.0)
+    n_neg = len(labels) - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return None
+
+    order = sorted(range(len(scores)), key=lambda i: scores[i])
+    ranks = [0.0] * len(scores)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and scores[order[j + 1]] == scores[order[i]]:
+            j += 1
+        avg_rank = (i + j) / 2.0 + 1.0  # ranks 1-based, média nos empates
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg_rank
+        i = j + 1
+
+    sum_pos = sum(ranks[idx] for idx in range(len(labels)) if labels[idx] == 1.0)
+    return (sum_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+
+
+def _holdout_validation(
+    rows: list[list[float]], labels: list[float], cids: list[int]
+) -> tuple[float | None, float | None]:
+    """Estima generalização num holdout determinístico (~25% por id).
+
+    Treina nas linhas de treino, padroniza a validação com as estatísticas do
+    treino (sem leakage de padronização) e retorna (auc, acurácia) out-of-sample.
+    Retorna (None, None) quando o split não tem as duas classes em ambos os lados.
+    """
+    train_idx = [i for i, cid in enumerate(cids) if cid % VAL_MODULO != 0]
+    val_idx = [i for i, cid in enumerate(cids) if cid % VAL_MODULO == 0]
+    if not train_idx or not val_idx:
+        return None, None
+
+    tr_labels = [labels[i] for i in train_idx]
+    va_labels = [labels[i] for i in val_idx]
+    if len(set(tr_labels)) < 2 or len(set(va_labels)) < 2:
+        return None, None
+
+    tr_rows = [rows[i] for i in train_idx]
+    va_rows = [rows[i] for i in val_idx]
+    std_tr, means, stds = _standardize(tr_rows)
+    w, b = _train_weights(std_tr, tr_labels)
+    preds = _predict_std(_apply_standardize(va_rows, means, stds), w, b)
+    return _auc(preds, va_labels), _accuracy(preds, va_labels)
+
+
 @allow_cross_tenant(reason="treino de churn ML roda em Celery, escopo é a org passada")
 def train_churn_model(organization: Organization) -> dict[str, Any] | None:
     """Treina e persiste o modelo de churn da org. Retorna resumo ou None
@@ -189,33 +342,16 @@ def train_churn_model(organization: Organization) -> dict[str, Any] | None:
 
     rows = [[features[cid][name] for name in FEATURES] for cid in cids]
     labels = [1.0 if cid in churned else 0.0 for cid in cids]
+
+    # Estima generalização antes de treinar o modelo final em toda a amostra.
+    val_auc, val_accuracy = _holdout_validation(rows, labels, cids)
+
+    # Modelo final usa toda a amostra (dado escasso — aproveita todo o sinal).
     std_rows, means, stds = _standardize(rows)
+    w, b = _train_weights(std_rows, labels)
+    accuracy = _accuracy(_predict_std(std_rows, w, b), labels)
 
     f = len(FEATURES)
-    w = [0.0] * f
-    b = 0.0
-    for _ in range(ITERATIONS):
-        grad_w = [0.0] * f
-        grad_b = 0.0
-        for i, x in enumerate(std_rows):
-            z = b + sum(w[j] * x[j] for j in range(f))
-            err = _sigmoid(z) - labels[i]
-            for j in range(f):
-                grad_w[j] += err * x[j]
-            grad_b += err
-        for j in range(f):
-            grad_w[j] = grad_w[j] / n_samples + L2_LAMBDA * w[j]
-            w[j] -= LEARNING_RATE * grad_w[j]
-        b -= LEARNING_RATE * (grad_b / n_samples)
-
-    correct = 0
-    for i, x in enumerate(std_rows):
-        z = b + sum(w[j] * x[j] for j in range(f))
-        pred = 1.0 if _sigmoid(z) >= 0.5 else 0.0
-        if pred == labels[i]:
-            correct += 1
-    accuracy = correct / n_samples
-
     now = timezone.now()
     ChurnRiskModel.objects.update_or_create(
         organization=organization,
@@ -228,6 +364,8 @@ def train_churn_model(organization: Organization) -> dict[str, Any] | None:
             "n_samples": n_samples,
             "n_positive": n_positive,
             "train_accuracy": accuracy,
+            "val_auc": val_auc,
+            "val_accuracy": val_accuracy,
             "trained_at": now,
         },
     )
@@ -235,6 +373,8 @@ def train_churn_model(organization: Organization) -> dict[str, Any] | None:
         "n_samples": n_samples,
         "n_positive": n_positive,
         "accuracy": round(accuracy, 4),
+        "val_auc": round(val_auc, 4) if val_auc is not None else None,
+        "val_accuracy": round(val_accuracy, 4) if val_accuracy is not None else None,
     }
     _logger.info("churn_ml_trained", org=organization.slug, **summary)
     return summary

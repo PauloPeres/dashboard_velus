@@ -324,6 +324,10 @@ class ChurnRiskModel(TenantModel):
     n_samples = models.PositiveIntegerField(default=0)
     n_positive = models.PositiveIntegerField(default=0)
     train_accuracy = models.FloatField(default=0.0)
+    # Métricas out-of-sample do holdout determinístico (~25%). Null quando o
+    # split não tem as duas classes em ambos os lados.
+    val_auc = models.FloatField(null=True, blank=True)
+    val_accuracy = models.FloatField(null=True, blank=True)
 
     trained_at = models.DateTimeField()
 
