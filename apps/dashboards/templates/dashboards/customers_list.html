@@ -115,9 +115,9 @@
 </div>
 {% endif %}
 
-<!-- Busca -->
-<form method="get" class="mb-6">
-  <div class="flex gap-2 max-w-xl">
+<!-- Busca + filtros de segmentação -->
+<form method="get" class="mb-6 bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+  <div class="flex gap-2 max-w-xl mb-3">
     <input
       type="text" name="q" value="{{ query }}"
       placeholder="Buscar por nome, documento ou ID externo…"
@@ -129,13 +129,71 @@
       Buscar
     </button>
   </div>
+
+  <div class="flex flex-wrap items-end gap-3 text-xs">
+    <div class="flex flex-col gap-1">
+      <label class="text-gray-500 font-medium">Status</label>
+      <select name="status" class="border border-gray-200 rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <option value="">Todos</option>
+        <option value="ACTIVE" {% if filters.status == 'ACTIVE' %}selected{% endif %}>Ativo</option>
+        <option value="BLOCKED" {% if filters.status == 'BLOCKED' %}selected{% endif %}>Bloqueado</option>
+        <option value="CANCELED" {% if filters.status == 'CANCELED' %}selected{% endif %}>Cancelado</option>
+      </select>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-gray-500 font-medium">Risco de churn</label>
+      <select name="risk" class="border border-gray-200 rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <option value="">Todos</option>
+        <option value="HIGH" {% if filters.risk == 'HIGH' %}selected{% endif %}>Alto</option>
+        <option value="MEDIUM" {% if filters.risk == 'MEDIUM' %}selected{% endif %}>Médio</option>
+        <option value="LOW" {% if filters.risk == 'LOW' %}selected{% endif %}>Baixo</option>
+        <option value="NONE" {% if filters.risk == 'NONE' %}selected{% endif %}>Sem risco</option>
+      </select>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-gray-500 font-medium">MRR (R$)</label>
+      <div class="flex items-center gap-1">
+        <input type="number" step="0.01" min="0" name="mrr_min" value="{{ filters.mrr_min }}" placeholder="mín"
+               class="w-20 border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <span class="text-gray-300">–</span>
+        <input type="number" step="0.01" min="0" name="mrr_max" value="{{ filters.mrr_max }}" placeholder="máx"
+               class="w-20 border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400">
+      </div>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-gray-500 font-medium">Chamado recente</label>
+      <select name="ticket_days" class="border border-gray-200 rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <option value="">Qualquer</option>
+        <option value="7" {% if filters.ticket_days == 7 %}selected{% endif %}>Últimos 7 dias</option>
+        <option value="30" {% if filters.ticket_days == 30 %}selected{% endif %}>Últimos 30 dias</option>
+        <option value="90" {% if filters.ticket_days == 90 %}selected{% endif %}>Últimos 90 dias</option>
+      </select>
+    </div>
+    <label class="flex items-center gap-1.5 text-gray-600 pb-1.5">
+      <input type="checkbox" name="overdue" value="1" {% if filters.overdue %}checked{% endif %}
+             class="rounded border-gray-300 text-blue-600 focus:ring-blue-400">
+      Inadimplente
+    </label>
+    <label class="flex items-center gap-1.5 text-gray-600 pb-1.5">
+      <input type="checkbox" name="equip" value="1" {% if filters.equip %}checked{% endif %}
+             class="rounded border-gray-300 text-blue-600 focus:ring-blue-400">
+      Com equipamento
+    </label>
+    <button type="submit"
+      class="text-xs font-medium px-3 py-1.5 bg-gray-800 text-white rounded hover:bg-gray-900 transition-colors">
+      Filtrar
+    </button>
+    {% if has_filters or query %}
+    <a href="{% url 'dashboards:customers' %}" class="text-xs text-gray-400 hover:text-blue-600 pb-1.5">Limpar</a>
+    {% endif %}
+  </div>
 </form>
 
 <!-- Resultados -->
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
   <div class="p-5 pb-0 flex items-baseline justify-between">
     <h2 class="text-sm font-semibold text-gray-700">
-      {% if query %}Resultados para "{{ query }}"{% else %}Clientes{% endif %}
+      {% if query %}Resultados para "{{ query }}"{% elif has_filters %}Clientes filtrados{% else %}Clientes{% endif %}
     </h2>
     <span class="text-xs text-gray-400">{{ result_count|intcomma }} cliente{{ result_count|pluralize }}</span>
   </div>
@@ -145,6 +203,8 @@
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nome</th>
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Documento</th>
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Risco</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">MRR</th>
         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Contratos</th>
         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase"></th>
       </tr>
@@ -160,6 +220,13 @@
           {% elif r.status == 'CANCELED' %}<span class="inline-flex px-2 py-0.5 text-xs rounded-full bg-red-50 text-red-700">Cancelado</span>
           {% else %}<span class="inline-flex px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500">—</span>{% endif %}
         </td>
+        <td class="px-4 py-3">
+          {% if r.risk_level == 'HIGH' %}<span class="inline-flex px-2 py-0.5 text-xs rounded-full bg-red-50 text-red-700">Alto</span>
+          {% elif r.risk_level == 'MEDIUM' %}<span class="inline-flex px-2 py-0.5 text-xs rounded-full bg-orange-50 text-orange-700">Médio</span>
+          {% elif r.risk_level == 'LOW' %}<span class="inline-flex px-2 py-0.5 text-xs rounded-full bg-yellow-50 text-yellow-700">Baixo</span>
+          {% else %}<span class="text-xs text-gray-300">—</span>{% endif %}
+        </td>
+        <td class="px-4 py-3 text-right tabular-nums text-gray-700">R$ {{ r.mrr|floatformat:0|intcomma }}</td>
         <td class="px-4 py-3 text-right tabular-nums text-gray-600">
           {{ r.active_contracts }}<span class="text-gray-300">/{{ r.contract_count }}</span>
         </td>
@@ -169,8 +236,8 @@
       </tr>
       {% empty %}
       <tr>
-        <td colspan="5" class="px-6 py-8 text-center text-gray-500">
-          {% if query %}Nenhum cliente encontrado para "{{ query }}"{% else %}Nenhum cliente cadastrado{% endif %}
+        <td colspan="7" class="px-6 py-8 text-center text-gray-500">
+          {% if query or has_filters %}Nenhum cliente encontrado{% else %}Nenhum cliente cadastrado{% endif %}
         </td>
       </tr>
       {% endfor %}

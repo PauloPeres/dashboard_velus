@@ -1266,10 +1266,57 @@ def customers(request: HttpRequest) -> HttpResponse:
     org = org_or_redirect
 
     query = request.GET.get("q", "").strip()
-    results = search_customers(org, query=query, limit=100)
 
-    # Painel "clientes a focar" só na visão padrão — em busca, mostra só resultados.
-    priority = compute_priority_customers(org, limit=15) if not query else None
+    # --- Filtros de segmentação (combináveis com a busca) ---
+    _STATUS_OPTS = {"ACTIVE", "BLOCKED", "CANCELED"}
+    _RISK_OPTS = {"HIGH", "MEDIUM", "LOW", "NONE"}
+    status_f = request.GET.get("status", "").strip().upper()
+    status_f = status_f if status_f in _STATUS_OPTS else ""
+    risk_f = request.GET.get("risk", "").strip().upper()
+    risk_f = risk_f if risk_f in _RISK_OPTS else ""
+
+    def _parse_float(name: str) -> float | None:
+        raw = request.GET.get(name, "").strip().replace(",", ".")
+        try:
+            return float(raw) if raw else None
+        except ValueError:
+            return None
+
+    mrr_min = _parse_float("mrr_min")
+    mrr_max = _parse_float("mrr_max")
+    overdue_f = request.GET.get("overdue") == "1"
+    equip_f = request.GET.get("equip") == "1"
+
+    def _parse_int(name: str) -> int | None:
+        raw = request.GET.get(name, "").strip()
+        try:
+            return int(raw) if raw else None
+        except ValueError:
+            return None
+
+    ticket_days = _parse_int("ticket_days")
+
+    has_filters = any(
+        [status_f, risk_f, mrr_min is not None, mrr_max is not None,
+         overdue_f, equip_f, ticket_days is not None]
+    )
+
+    results = search_customers(
+        org,
+        query=query,
+        limit=100,
+        status=status_f or None,
+        risk_level=risk_f or None,
+        mrr_min=mrr_min,
+        mrr_max=mrr_max,
+        overdue=overdue_f,
+        has_equipment=equip_f,
+        recent_ticket_days=ticket_days,
+    )
+
+    # Painel "clientes a focar" só na visão padrão — em busca/filtro, só resultados.
+    show_priority = not query and not has_filters
+    priority = compute_priority_customers(org, limit=15) if show_priority else None
 
     return render(
         request,
@@ -1282,6 +1329,16 @@ def customers(request: HttpRequest) -> HttpResponse:
             "revenue_in_focus_str": (
                 _fmt_brl(priority["revenue_in_focus"]) if priority else ""
             ),
+            "filters": {
+                "status": status_f,
+                "risk": risk_f,
+                "mrr_min": request.GET.get("mrr_min", "").strip(),
+                "mrr_max": request.GET.get("mrr_max", "").strip(),
+                "overdue": overdue_f,
+                "equip": equip_f,
+                "ticket_days": ticket_days,
+            },
+            "has_filters": has_filters,
         },
     )
 

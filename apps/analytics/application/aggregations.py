@@ -16,7 +16,17 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
-from django.db.models import Count, DecimalField, Max, OuterRef, Q, Subquery, Sum
+from django.db.models import (
+    Count,
+    DecimalField,
+    Exists,
+    F,
+    Max,
+    OuterRef,
+    Q,
+    Subquery,
+    Sum,
+)
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
@@ -3229,14 +3239,40 @@ _OPEN_TICKET_STATUSES = ("OPEN", "SCHEDULED", "IN_PROGRESS", "FORWARDED")
 
 @allow_cross_tenant(reason="busca de clientes roda no escopo da org passada explicitamente")
 def search_customers(
-    organization: Organization, query: str = "", limit: int = 50
+    organization: Organization,
+    query: str = "",
+    limit: int = 50,
+    *,
+    status: str | None = None,
+    risk_level: str | None = None,
+    mrr_min: float | None = None,
+    mrr_max: float | None = None,
+    overdue: bool = False,
+    has_equipment: bool = False,
+    recent_ticket_days: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Lista clientes da org, filtrando por nome, documento ou external_id.
+    """Lista clientes da org com busca textual + filtros de segmentação.
 
-    Busca substring case-insensitive em name/document/external_id. Sem query,
-    retorna os primeiros `limit` clientes por nome — base pra navegação inicial.
+    Busca substring case-insensitive em name/document/external_id. Filtros
+    combináveis (todos opcionais, somam-se à busca):
+      - status: status do cliente (ACTIVE/BLOCKED/CANCELED).
+      - risk_level: nível de risco de churn (HIGH/MEDIUM/LOW) ou "NONE" (sem
+        ChurnRiskScore).
+      - mrr_min/mrr_max: faixa de MRR líquido (soma dos contratos ATIVOS).
+      - overdue: só clientes com fatura vencida em aberto (inadimplência).
+      - has_equipment: só clientes com equipamento ativo em campo.
+      - recent_ticket_days: só clientes com chamado aberto nos últimos N dias.
+
+    Filtros booleanos usam EXISTS (subquery) p/ evitar multiplicação de joins;
+    MRR usa subquery agregada. Mantém a anotação de MRR/risco no retorno.
     """
-    from apps.customers.infrastructure.models import Customer
+    from apps.customers.infrastructure.models import Contract, Customer
+    from apps.financial.infrastructure.models import Invoice
+    from apps.helpdesk.infrastructure.models import Ticket
+    from apps.inventory.infrastructure.models import ContractEquipment
+    from apps.analytics.infrastructure.models import ChurnRiskScore
+
+    today = timezone.now().date()
 
     qs = Customer.objects.filter(organization=organization)
     q = (query or "").strip()
@@ -3247,15 +3283,79 @@ def search_customers(
             | Q(external_id__icontains=q)
         )
 
-    rows = (
-        qs.annotate(
-            contract_count=Count("contracts", distinct=True),
-            active_contracts=Count(
-                "contracts", filter=Q(contracts__status="ACTIVE"), distinct=True
-            ),
+    if status:
+        qs = qs.filter(status=status)
+
+    # --- MRR líquido por cliente (soma de contratos ATIVOS) ---
+    mrr_sq = (
+        Contract.objects.filter(
+            organization=organization, customer=OuterRef("pk"), status="ACTIVE"
         )
-        .order_by("name")[:limit]
+        .values("customer")
+        .annotate(
+            total=Sum(
+                F("monthly_amount")
+                + F("monthly_amount_addons")
+                - F("monthly_amount_discounts")
+            )
+        )
+        .values("total")
     )
+    # Subquery de nível de risco p/ exibição
+    risk_sq = ChurnRiskScore.objects.filter(
+        organization=organization, customer=OuterRef("pk")
+    ).values("level")[:1]
+
+    qs = qs.annotate(
+        contract_count=Count("contracts", distinct=True),
+        active_contracts=Count(
+            "contracts", filter=Q(contracts__status="ACTIVE"), distinct=True
+        ),
+        mrr=Coalesce(Subquery(mrr_sq, output_field=DecimalField()), _ZERO),
+        risk_level=Subquery(risk_sq),
+    )
+
+    if mrr_min is not None:
+        qs = qs.filter(mrr__gte=Decimal(str(mrr_min)))
+    if mrr_max is not None:
+        qs = qs.filter(mrr__lte=Decimal(str(mrr_max)))
+
+    if risk_level:
+        risk_match = ChurnRiskScore.objects.filter(
+            organization=organization, customer=OuterRef("pk")
+        )
+        if risk_level == "NONE":
+            qs = qs.filter(~Exists(risk_match))
+        else:
+            qs = qs.filter(Exists(risk_match.filter(level=risk_level)))
+
+    if overdue:
+        overdue_sq = Invoice.objects.filter(
+            organization=organization,
+            contract__customer=OuterRef("pk"),
+            status__in=["PENDING", "OVERDUE"],
+            due_date__lt=today,
+        )
+        qs = qs.filter(Exists(overdue_sq))
+
+    if has_equipment:
+        equip_sq = ContractEquipment.objects.filter(
+            organization=organization,
+            contract__customer=OuterRef("pk"),
+            status="ACTIVE",
+        )
+        qs = qs.filter(Exists(equip_sq))
+
+    if recent_ticket_days is not None:
+        threshold = timezone.now() - timedelta(days=recent_ticket_days)
+        ticket_sq = Ticket.objects.filter(
+            organization=organization,
+            customer=OuterRef("pk"),
+            opened_at__gte=threshold,
+        )
+        qs = qs.filter(Exists(ticket_sq))
+
+    rows = qs.order_by("name")[:limit]
 
     return [
         {
@@ -3266,6 +3366,8 @@ def search_customers(
             "status": c.status,
             "contract_count": c.contract_count,
             "active_contracts": c.active_contracts,
+            "mrr": float(c.mrr or 0),
+            "risk_level": c.risk_level,
         }
         for c in rows
     ]
