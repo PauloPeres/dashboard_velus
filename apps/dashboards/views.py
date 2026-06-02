@@ -33,11 +33,13 @@ from apps.analytics.application.aggregations import (
     compute_churn_plan_detail,
     compute_churn_risk_summary,
     compute_churn_summary,
+    compute_contract_kpi_trend,
     compute_contract_status_trend,
     compute_customer_360,
     compute_delinquency_trend,
     compute_dre,
     compute_dre_by_account,
+    compute_equipment_field_trend,
     compute_equipment_summary,
     compute_expense_anomalies,
     compute_expense_by_category,
@@ -491,6 +493,8 @@ def contracts(request: HttpRequest) -> HttpResponse:
     at_risk_summary = compute_blocked_at_risk_summary(org, min_days=30)
     at_risk_list = compute_at_risk_contracts(org, min_days=30, limit=50)
     equipment = compute_equipment_summary(org)
+    kpi_trend = compute_contract_kpi_trend(org, months=months)
+    equipment_trend = compute_equipment_field_trend(org, months=months)
 
     arpu = (
         kpis["mrr_now"] / kpis["active_contracts"]
@@ -539,6 +543,11 @@ def contracts(request: HttpRequest) -> HttpResponse:
             "arpu_chart_json": charts.arpu_bar_chart(arpu_data),
             "churn_plan_json": charts.churn_by_plan_bar(churn_plan),
             "blocked_dist_json": charts.blocked_duration_histogram(blocked_dist),
+            # séries temporais (#42)
+            "arpu_trend_json": charts.contract_arpu_trend_line(kpi_trend),
+            "churn_trend_json": charts.contract_churn_trend_line(kpi_trend),
+            "equipment_trend_json": charts.equipment_field_trend_line(equipment_trend),
+            "equipment_trend_has_data": bool(equipment_trend and equipment_trend[-1]["count"] > 0),
         },
     )
 

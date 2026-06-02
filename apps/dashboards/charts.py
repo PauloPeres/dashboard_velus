@@ -393,6 +393,62 @@ def mrr_contracts_dual_axis(series: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+def contract_arpu_trend_line(series: list[dict[str, Any]]) -> str:
+    """Linha — evolução do ARPU (ticket médio) mês a mês."""
+    labels = [p["label"] for p in series]
+    values = [p["arpu"] for p in series]
+    fig = go.Figure(
+        data=[
+            go.Scatter(
+                x=labels, y=values, mode="lines+markers",
+                line={"color": "#7c3aed", "width": 3},
+                marker={"size": 7, "color": "#7c3aed"},
+                hovertemplate="<b>%{x}</b><br>ARPU: R$ %{y:,.2f}<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f"}},
+    )
+    return _to_json(fig)
+
+
+def contract_churn_trend_line(series: list[dict[str, Any]]) -> str:
+    """Linha — taxa de churn (%) mensal."""
+    labels = [p["label"] for p in series]
+    values = [p["churn_pct"] for p in series]
+    fig = go.Figure(
+        data=[
+            go.Scatter(
+                x=labels, y=values, mode="lines+markers",
+                line={"color": "#ef4444", "width": 3},
+                marker={"size": 7, "color": "#ef4444"},
+                hovertemplate="<b>%{x}</b><br>Churn: %{y:.2f}%<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "yaxis": {"ticksuffix": "%", "tickformat": ",.1f"}},
+    )
+    return _to_json(fig)
+
+
+def equipment_field_trend_line(series: list[dict[str, Any]]) -> str:
+    """Área — parque de equipamentos em campo (acumulado) por mês."""
+    labels = [p["label"] for p in series]
+    values = [p["count"] for p in series]
+    fig = go.Figure(
+        data=[
+            go.Scatter(
+                x=labels, y=values, mode="lines+markers",
+                fill="tozeroy",
+                line={"color": "#0891b2", "width": 3},
+                marker={"size": 6, "color": "#0891b2"},
+                fillcolor="rgba(8,145,178,0.12)",
+                hovertemplate="<b>%{x}</b><br>%{y:,d} equipamentos<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "yaxis": {"tickformat": ",d"}},
+    )
+    return _to_json(fig)
+
+
 def churn_by_plan_bar(data: list[dict[str, Any]]) -> str:
     """Barras horizontais — cancelamentos e receita perdida por plano."""
     labels = [d["plan"] for d in data]

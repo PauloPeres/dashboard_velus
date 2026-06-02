@@ -1227,6 +1227,137 @@ def compute_contract_status_trend(
     return result
 
 
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_contract_kpi_trend(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Evolução mensal de ARPU (ticket médio) e churn % por mês.
+
+    Para cada mês: snapshot do último dia (FactContractStatusDaily) dá MRR e
+    contratos ativos → ARPU = MRR / ativos. Churn = cancelados no mês (por
+    `canceled_at`) / base ativa no início do mês. Tudo a partir das Fact* +
+    Contract, sem queries pesadas (1 snapshot por mês).
+    """
+    from apps.customers.infrastructure.models import Contract
+
+    today = timezone.now().date()
+    result: list[dict[str, Any]] = []
+
+    for i in range(months - 1, -1, -1):
+        month_first = _first_of_month_n_ago(today, i)
+        if i > 0:
+            month_end = _first_of_month_n_ago(today, i - 1) - timedelta(days=1)
+        else:
+            month_end = today
+
+        snap = FactContractStatusDaily.objects.filter(
+            organization=organization,
+            date__gte=month_first,
+            date__lte=month_end,
+            is_active=True,
+        ).aggregate(latest=Max("date"))["latest"]
+
+        if snap:
+            agg = FactContractStatusDaily.objects.filter(
+                organization=organization, date=snap, is_active=True
+            ).aggregate(
+                mrr=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()),
+                active=Count("id"),
+            )
+            mrr = float(agg["mrr"] or 0)
+            active = agg["active"] or 0
+        else:
+            mrr, active = 0.0, 0
+
+        arpu = mrr / active if active else 0.0
+
+        # Base ativa no início do mês (último dia do mês anterior) para a taxa de churn.
+        active_at_start = FactContractStatusDaily.objects.filter(
+            organization=organization,
+            date=month_first - timedelta(days=1),
+            is_active=True,
+        ).count()
+        canceled = Contract.objects.filter(
+            organization=organization,
+            canceled_at__date__gte=month_first,
+            canceled_at__date__lte=month_end,
+        ).count()
+        churn_pct = (canceled / active_at_start * 100) if active_at_start else 0.0
+
+        result.append({
+            "month": month_first.strftime("%Y-%m"),
+            "label": month_first.strftime("%b/%y"),
+            "arpu": round(arpu, 2),
+            "mrr": round(mrr, 2),
+            "active": active,
+            "canceled": canceled,
+            "churn_pct": round(churn_pct, 2),
+        })
+
+    return result
+
+
+def _cumulative_equipment_by_month(
+    install_dates: list[date_cls], *, today: date_cls, months: int
+) -> list[dict[str, Any]]:
+    """Conta cumulativa de equipamentos por mês a partir das datas de instalação (função pura).
+
+    Para cada um dos últimos `months` meses, conta quantos equipamentos já
+    tinham sido instalados até o fim daquele mês. Datas após `today` são
+    ignoradas. Resultado: série crescente do parque acumulado.
+    """
+    result: list[dict[str, Any]] = []
+    for i in range(months - 1, -1, -1):
+        month_first = _first_of_month_n_ago(today, i)
+        if i > 0:
+            month_end = _first_of_month_n_ago(today, i - 1) - timedelta(days=1)
+        else:
+            month_end = today
+        count = sum(1 for d in install_dates if d <= month_end)
+        result.append({
+            "month": month_first.strftime("%Y-%m"),
+            "label": month_first.strftime("%b/%y"),
+            "count": count,
+        })
+    return result
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_equipment_field_trend(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Evolução do parque de equipamentos em campo por mês (acumulado).
+
+    O comodato do IXC não tem histórico de status no nosso modelo, mas o
+    `raw_extras['data']` traz a data real de movimentação (instalação). Mede o
+    parque ATIVO atual acumulado por mês de instalação — mostra o crescimento
+    dos equipamentos hoje em campo ao longo do tempo. Uma query (raw_extras dos
+    ativos) + agregação em memória — sem N+1 nem join pesado.
+
+    Fallback gracioso: equipamentos sem data válida em `raw_extras` são ignorados.
+    """
+    from apps.inventory.infrastructure.models import ContractEquipment
+
+    today = timezone.now().date()
+    rows = ContractEquipment.objects.filter(
+        organization=organization, status="ACTIVE"
+    ).values_list("raw_extras", flat=True)
+
+    install_dates: list[date_cls] = []
+    for extras in rows:
+        if not isinstance(extras, dict):
+            continue
+        raw = str(extras.get("data") or "")[:10]
+        try:
+            install_dates.append(date_cls.fromisoformat(raw))
+        except ValueError:
+            continue
+
+    return _cumulative_equipment_by_month(
+        install_dates, today=today, months=months
+    )
+
+
 # Recovery Rate — efetividade de recuperação de inadimplência.
 # Janela de maturação: só consideramos coortes de vencimento com >=90 dias de
 # idade, para dar tempo de a fatura ser paga em atraso antes de medir.

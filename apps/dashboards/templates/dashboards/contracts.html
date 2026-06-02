@@ -93,6 +93,32 @@
   <div id="status-trend-chart" style="height:280px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
 </div>
 
+<!-- Séries temporais (#42): ARPU + churn por mês -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <h2 class="text-sm font-semibold text-gray-700">Evolução do ARPU — últimos 12 meses</h2>
+    <p class="text-xs text-gray-400 mb-3">Ticket médio mensal (MRR ÷ contratos ativos) — tendência de valor por cliente</p>
+    <div id="arpu-trend-chart" style="height:260px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <h2 class="text-sm font-semibold text-gray-700">Taxa de churn mensal — últimos 12 meses</h2>
+    <p class="text-xs text-gray-400 mb-3">Cancelamentos no mês ÷ base ativa no início — tendência de perda de clientes</p>
+    <div id="churn-trend-chart" style="height:260px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+</div>
+
+<!-- Parque de equipamentos em campo (acumulado) -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <h2 class="text-sm font-semibold text-gray-700">Equipamentos em campo — evolução do parque ativo</h2>
+  <p class="text-xs text-gray-400 mb-3">Acumulado por mês de instalação (data real do comodato no IXC) — crescimento da base instalada hoje em campo</p>
+  {% if equipment_trend_has_data %}
+  <div id="equipment-trend-chart" style="height:260px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  {% else %}
+  <div class="h-40 flex items-center justify-center text-sm text-gray-400">Sem datas de instalação disponíveis para montar a série.</div>
+  {% endif %}
+</div>
+
 <!-- Gráficos linha 2 -->
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
@@ -163,10 +189,16 @@
 {{ arpu_chart_json|json_script:"arpu-data" }}
 {{ churn_plan_json|json_script:"churn-plan-data" }}
 {{ blocked_dist_json|json_script:"blocked-dist-data" }}
+{{ arpu_trend_json|json_script:"arpu-trend-data" }}
+{{ churn_trend_json|json_script:"churn-trend-data" }}
+{{ equipment_trend_json|json_script:"equipment-trend-data" }}
 <script>
   renderChart("status-trend-chart", "status-trend-data");
   renderChart("arpu-chart", "arpu-data");
   renderChart("churn-plan-chart", "churn-plan-data");
   renderChart("blocked-dist-chart", "blocked-dist-data");
+  renderChart("arpu-trend-chart", "arpu-trend-data");
+  renderChart("churn-trend-chart", "churn-trend-data");
+  {% if equipment_trend_has_data %}renderChart("equipment-trend-chart", "equipment-trend-data");{% endif %}
 </script>
 {% endblock %}
