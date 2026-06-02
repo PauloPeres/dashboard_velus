@@ -336,6 +336,8 @@ def dre(request: HttpRequest) -> HttpResponse:
             "dre": dre_data,
             # Pré-formatados — evita bug de |add: string+Decimal no template
             "cur_receita_str": _fmt_brl(cur["receita_bruta"]),
+            "cur_recebida_str": _fmt_brl(cur["receita_recebida"]),
+            "cur_em_aberto_str": _fmt_brl(cur["receita_em_aberto"]),
             "cur_despesas_str": _fmt_brl(cur["despesas"]),
             "cur_ebitda_str": _fmt_brl(cur["ebitda"]),
             "cur_margin_str": f"{cur['ebitda_margin_pct']:.1f}%",

@@ -362,6 +362,44 @@ def compute_cash_received_series(
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_open_revenue_series(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Receita NÃO recebida (em aberto) por mês de vencimento.
+
+    Faturas com status PENDING/OVERDUE agrupadas pelo mês de `due_date` — o
+    período em que a receita deveria ter entrado mas segue em aberto. Espelha
+    `compute_cash_received_series` (recebido) pra montar o split do DRE.
+    """
+    today = timezone.now().date()
+    cutoff = _first_of_month_n_ago(today, months)
+
+    by_month = (
+        FactInvoice.objects.filter(
+            organization=organization,
+            status__in=("PENDING", "OVERDUE"),
+            due_date__gte=cutoff,
+        )
+        .annotate(month=TruncMonth("due_date"))
+        .values("month")
+        .annotate(
+            total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            count=Count("id"),
+        )
+        .order_by("month")
+    )
+    return [
+        {
+            "month": row["month"].strftime("%Y-%m"),
+            "label": row["month"].strftime("%b/%y"),
+            "amount": float(row["total"]),
+            "count": row["count"],
+        }
+        for row in by_month
+    ]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_expense_series(
     organization: Organization, months: int = 12
 ) -> list[dict[str, Any]]:
@@ -574,12 +612,31 @@ def compute_dre(
     mrr_series = compute_mrr_series(organization, months=months)
     expense_series = compute_expense_series(organization, months=months)
     cashflow_series = compute_cashflow_series(organization, months=months)
+    received_series = compute_cash_received_series(organization, months=months)
+    open_series = compute_open_revenue_series(organization, months=months)
+
+    received_by_month = {r["month"]: r["amount"] for r in received_series}
+    open_by_month = {o["month"]: o["amount"] for o in open_series}
+
+    # Série combinada de receita: contratada (MRR) × recebida × em aberto, por mês.
+    revenue_series = [
+        {
+            "month": m["month"],
+            "label": m["label"],
+            "mrr": m["mrr"],
+            "received": received_by_month.get(m["month"], 0.0),
+            "open": open_by_month.get(m["month"], 0.0),
+        }
+        for m in mrr_series
+    ]
 
     # Current month (last entry)
     current_mrr = mrr_series[-1]["mrr"] if mrr_series else 0.0
     exp_by_month = {e["month"]: e["expenses"] for e in expense_series}
     current_month_key = mrr_series[-1]["month"] if mrr_series else ""
     current_expenses = exp_by_month.get(current_month_key, 0.0)
+    current_received = received_by_month.get(current_month_key, 0.0)
+    current_open = open_by_month.get(current_month_key, 0.0)
     current_ebitda = current_mrr - current_expenses
     current_margin = (
         float(current_ebitda / current_mrr * 100) if current_mrr > 0 else 0.0
@@ -589,20 +646,29 @@ def compute_dre(
     current_year = str(timezone.now().year)
     ytd_revenue = sum(m["mrr"] for m in mrr_series if m["month"].startswith(current_year))
     ytd_expenses = sum(e["expenses"] for e in expense_series if e["month"].startswith(current_year))
+    ytd_received = sum(r["amount"] for r in received_series if r["month"].startswith(current_year))
+    ytd_open = sum(o["amount"] for o in open_series if o["month"].startswith(current_year))
     ytd_ebitda = ytd_revenue - ytd_expenses
 
     return {
         "mrr_series": mrr_series,
         "expense_series": expense_series,
         "cashflow_series": cashflow_series,
+        "received_series": received_series,
+        "open_series": open_series,
+        "revenue_series": revenue_series,
         "current_month": {
             "receita_bruta": current_mrr,
+            "receita_recebida": current_received,
+            "receita_em_aberto": current_open,
             "despesas": current_expenses,
             "ebitda": current_ebitda,
             "ebitda_margin_pct": current_margin,
         },
         "ytd": {
             "receita_bruta": ytd_revenue,
+            "receita_recebida": ytd_received,
+            "receita_em_aberto": ytd_open,
             "despesas": ytd_expenses,
             "ebitda": ytd_ebitda,
         },
