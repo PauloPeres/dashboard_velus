@@ -150,3 +150,51 @@ def _run_plano_sync(*, organization_id: int) -> dict[str, Any]:
         conta_count=count_conta,
     )
     return {"plano": count_plano, "conta": count_conta}
+
+
+# =============================================================================
+# Churn risk — recomputa scores de risco de cancelamento (Beat diário)
+# =============================================================================
+@shared_task(name="apps.analytics.tasks.dispatch_churn_risk_for_all_orgs")
+def dispatch_churn_risk_for_all_orgs() -> dict[str, int]:
+    """Enfileira o recompute de churn risk para cada org ativa."""
+    return _dispatch_churn_risk()
+
+
+@allow_cross_tenant(reason="dispatch_churn_risk itera Organization (não-TenantModel)")
+def _dispatch_churn_risk() -> dict[str, int]:
+    from apps.tenancy.models import Organization
+
+    n = 0
+    for org in Organization.objects.filter(is_active=True):
+        compute_churn_risk_for_org.apply_async(
+            kwargs={"organization_id": org.pk},
+            queue=org.celery_queue_name,
+        )
+        n += 1
+        _logger.info("churn_risk_dispatched", org=org.slug)
+
+    return {"dispatched": n}
+
+
+@shared_task(
+    name="apps.analytics.tasks.compute_churn_risk_for_org",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    max_retries=2,
+    acks_late=True,
+)
+def compute_churn_risk_for_org(*, organization_id: int) -> dict[str, Any]:
+    """Recomputa e persiste os scores de risco de churn de uma org."""
+    return _run_churn_risk(organization_id=organization_id)
+
+
+@allow_cross_tenant(reason="churn risk opera fora de request HTTP")
+def _run_churn_risk(*, organization_id: int) -> dict[str, Any]:
+    from apps.analytics.application.churn_risk import compute_churn_risk_scores
+    from apps.tenancy.models import Organization
+
+    org = Organization.objects.get(pk=organization_id)
+    set_current_organization(org)
+    return compute_churn_risk_scores(org)

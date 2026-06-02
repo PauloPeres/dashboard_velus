@@ -20,6 +20,7 @@ from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
 
 from apps.analytics.infrastructure.models import (
+    ChurnRiskScore,
     DimContract,
     FactContractStatusDaily,
     FactExpense,
@@ -2994,3 +2995,87 @@ def compute_customer_360(
         "equipment": equipment,
         "timeline": timeline,
     }
+
+
+# =============================================================================
+# Churn risk — resumo + top clientes em risco (lê ChurnRiskScore)
+# =============================================================================
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_churn_risk_summary(organization: Organization) -> dict[str, Any]:
+    """KPIs de risco de churn — contagem por nível, receita em risco e sinais.
+
+    Lê os scores já materializados por `compute_churn_risk_scores` (Celery
+    diário). `revenue_at_risk` soma a mensalidade líquida dos clientes
+    HIGH+MEDIUM — os acionáveis pra retenção.
+    """
+    qs = ChurnRiskScore.objects.filter(organization=organization)
+
+    by_level = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    for row in qs.values("level").annotate(n=Count("id")):
+        by_level[row["level"]] = row["n"]
+
+    revenue_at_risk = float(
+        qs.filter(level__in=("HIGH", "MEDIUM")).aggregate(
+            s=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField())
+        )["s"] or 0
+    )
+    revenue_total = float(
+        qs.aggregate(
+            s=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField())
+        )["s"] or 0
+    )
+
+    # Distribuição de sinais — itera os JSON (lista pequena por cliente)
+    signal_counts: dict[str, dict[str, Any]] = {}
+    for sig_list in qs.values_list("signals", flat=True):
+        for s in sig_list or []:
+            code = s.get("code", "?")
+            entry = signal_counts.setdefault(
+                code, {"code": code, "label": s.get("label", code), "count": 0}
+            )
+            entry["count"] += 1
+    signal_distribution = sorted(
+        signal_counts.values(), key=lambda e: e["count"], reverse=True
+    )
+
+    last_computed = qs.aggregate(m=Max("computed_at"))["m"]
+
+    return {
+        "total_at_risk": by_level["HIGH"] + by_level["MEDIUM"] + by_level["LOW"],
+        "high": by_level["HIGH"],
+        "medium": by_level["MEDIUM"],
+        "low": by_level["LOW"],
+        "revenue_at_risk": revenue_at_risk,
+        "revenue_total": revenue_total,
+        "signal_distribution": signal_distribution,
+        "computed_at": last_computed,
+    }
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_top_risk_customers(
+    organization: Organization, limit: int = 20
+) -> list[dict[str, Any]]:
+    """Top clientes em risco de churn, ordenados por score desc.
+
+    Junta o score materializado com o cliente (nome/documento/status) pra
+    alimentar a tabela do dashboard de alertas, com link pro Customer 360.
+    """
+    rows = (
+        ChurnRiskScore.objects.filter(organization=organization)
+        .select_related("customer")
+        .order_by("-score", "-monthly_amount")[:limit]
+    )
+    return [
+        {
+            "customer_id": r.customer_id,
+            "name": r.customer.name,
+            "document": r.customer.document,
+            "status": r.customer.status,
+            "score": r.score,
+            "level": r.level,
+            "monthly_amount": float(r.monthly_amount or 0),
+            "signals": r.signals or [],
+        }
+        for r in rows
+    ]

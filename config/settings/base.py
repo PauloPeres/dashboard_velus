@@ -293,6 +293,11 @@ CELERY_BEAT_SCHEDULE: dict = {
         "schedule": crontab(minute=30, hour=3),  # 03:30 todo dia
         "options": {"queue": "celery"},
     },
+    "compute-churn-risk-daily": {
+        "task": "apps.analytics.tasks.dispatch_churn_risk_for_all_orgs",
+        "schedule": crontab(minute=0, hour=4),  # 04:00 todo dia
+        "options": {"queue": "celery"},
+    },
 }
 
 # =============================================================================

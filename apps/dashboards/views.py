@@ -31,6 +31,7 @@ from apps.analytics.application.aggregations import (
     compute_churn_by_plan,
     compute_churn_by_reason,
     compute_churn_plan_detail,
+    compute_churn_risk_summary,
     compute_churn_summary,
     compute_contract_status_trend,
     compute_customer_360,
@@ -56,6 +57,7 @@ from apps.analytics.application.aggregations import (
     compute_revenue_forecast,
     compute_sales_funnel,
     compute_top_delinquent_invoices,
+    compute_top_risk_customers,
     search_customers,
 )
 from apps.shared.context import get_current_organization
@@ -106,6 +108,7 @@ def executive(request: HttpRequest) -> HttpResponse:
     aging = compute_aging_distribution(org)
     delinquency_trend = compute_delinquency_trend(org, months=months)
     contract_status_trend = compute_contract_status_trend(org, months=months)
+    risk_summary = compute_churn_risk_summary(org)
 
     # ARPU = MRR ÷ contratos ativos
     arpu = (
@@ -170,6 +173,9 @@ def executive(request: HttpRequest) -> HttpResponse:
             "over_90_value": over_90_value,
             "over_90_subtitle": over_90_subtitle,
             "aging_alert": aging_alert,
+            "risk_high": risk_summary["high"],
+            "risk_medium": risk_summary["medium"],
+            "risk_revenue_str": _fmt_brl(risk_summary["revenue_at_risk"]),
             "last_sync": last_sync,
             "mrr_chart_json": charts.mrr_line_chart(mrr_series),
             "aging_chart_json": charts.aging_bar_chart(aging),
@@ -1063,5 +1069,29 @@ def customer_detail(request: HttpRequest, customer_id: int) -> HttpResponse:
             "network_total_gb_str": f"{data['network']['total_gb']:,.2f}".replace(",", "."),
             "equipment": data["equipment"],
             "timeline": data["timeline"],
+        },
+    )
+
+
+@login_required
+@never_cache
+def risk(request: HttpRequest) -> HttpResponse:
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    summary = compute_churn_risk_summary(org)
+    top = compute_top_risk_customers(org, limit=20)
+
+    return render(
+        request,
+        "dashboards/risk.html",
+        {
+            "summary": summary,
+            "top": top,
+            "revenue_at_risk_str": _fmt_brl(summary["revenue_at_risk"]),
+            "risk_level_json": charts.churn_risk_level_pie(summary),
+            "risk_signal_json": charts.churn_risk_signal_bar(summary["signal_distribution"]),
         },
     )

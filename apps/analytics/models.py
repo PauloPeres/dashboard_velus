@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .infrastructure.models import (
+    ChurnRiskScore,
     DimContract,
     DimCustomer,
     DimPlan,
@@ -13,6 +14,7 @@ from .infrastructure.models import (
 )
 
 __all__ = (
+    "ChurnRiskScore",
     "DimContract",
     "DimCustomer",
     "DimPlan",

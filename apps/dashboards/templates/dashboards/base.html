@@ -76,6 +76,12 @@
                 Churn
             </a>
 
+            <a href="{% url 'dashboards:risk' %}"
+               class="flex items-center px-3 py-2 rounded-md
+                      {% if u == 'risk' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
+                Risco de Churn
+            </a>
+
             <a href="{% url 'dashboards:operations' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'operations' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">

@@ -1088,3 +1088,43 @@ def bandwidth_top_consumers_bar(data: list[dict[str, Any]]) -> str:
         },
     )
     return _to_json(fig)
+
+
+def churn_risk_level_pie(summary: dict[str, Any]) -> str:
+    """Donut — distribuição de clientes em risco por nível (alto/médio/baixo)."""
+    labels = ["Alto", "Médio", "Baixo"]
+    values = [summary["high"], summary["medium"], summary["low"]]
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.5,
+                marker={"colors": ["#dc2626", "#f97316", "#fbbf24"]},
+                hovertemplate="<b>%{label}</b><br>%{value} clientes (%{percent})<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "showlegend": True},
+    )
+    return _to_json(fig)
+
+
+def churn_risk_signal_bar(distribution: list[dict[str, Any]]) -> str:
+    """Barras horizontais — quantos clientes disparam cada sinal de risco."""
+    labels = [d["label"] for d in distribution]
+    values = [d["count"] for d in distribution]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=values, y=labels, orientation="h",
+                marker_color="#ef4444",
+                hovertemplate="<b>%{y}</b><br>%{x} clientes<extra></extra>",
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "yaxis": {"autorange": "reversed"},
+            "xaxis": {"title": "Clientes"},
+        },
+    )
+    return _to_json(fig)

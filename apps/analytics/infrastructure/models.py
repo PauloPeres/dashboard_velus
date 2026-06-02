@@ -242,6 +242,63 @@ class FactExpense(TenantModel):
 
 
 # =============================================================================
+# Churn risk — score de risco de cancelamento por cliente
+# =============================================================================
+class ChurnRiskScore(TenantModel):
+    """Score de risco de churn por cliente — recomputado diariamente.
+
+    Engine baseada em regras (`apps.analytics.application.churn_risk`) avalia
+    sinais derivados dos dados já sincronizados (bloqueio prolongado, atraso
+    recorrente, chamados frequentes, offline) e grava 1 linha por cliente
+    em risco. Clientes sem risco não têm linha (upsert/delete idempotente).
+
+    `signals` é a lista de sinais disparados, cada um:
+        {code, label, detail, weight}
+    `monthly_amount` = receita líquida em risco (contratos ACTIVE/BLOCKED).
+    Puramente analítico — alimenta alertas no dashboard, não dispara ações.
+    """
+
+    LEVEL_HIGH = "HIGH"
+    LEVEL_MEDIUM = "MEDIUM"
+    LEVEL_LOW = "LOW"
+    LEVEL_CHOICES = [
+        (LEVEL_HIGH, _("Alto")),
+        (LEVEL_MEDIUM, _("Médio")),
+        (LEVEL_LOW, _("Baixo")),
+    ]
+
+    customer = models.ForeignKey(
+        "customers.Customer",
+        on_delete=models.PROTECT,
+        related_name="churn_risk_scores",
+    )
+    score = models.PositiveSmallIntegerField(default=0)
+    level = models.CharField(max_length=8, choices=LEVEL_CHOICES, db_index=True)
+    signals = models.JSONField(default=list)
+    monthly_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0
+    )
+    computed_at = models.DateTimeField()
+
+    class Meta:
+        verbose_name = _("Score de risco de churn")
+        verbose_name_plural = _("Scores de risco de churn")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "customer"],
+                name="unique_churn_risk_per_customer",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "-score"]),
+            models.Index(fields=["organization", "level"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"ChurnRisk {self.customer_id} · {self.level} ({self.score})"
+
+
+# =============================================================================
 # Plano de Contas IXC — cache sincronizado via `sync_planejamento`
 # =============================================================================
 class PlanoContasCache(models.Model):
