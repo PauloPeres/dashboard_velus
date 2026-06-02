@@ -51,6 +51,24 @@ def _first_of_month_n_ago(base: date_cls, n: int) -> date_cls:
     return base.replace(year=year, month=month, day=1)
 
 
+def _full_month_keys(cutoff: date_cls, until: date_cls) -> list[str]:
+    """Lista contígua de 'YYYY-MM' do mês de `cutoff` até o mês de `until`.
+
+    Garante eixo temporal completo mesmo em meses sem lançamento — quem consome
+    preenche os buracos com 0.0.
+    """
+    keys: list[str] = []
+    y, m = cutoff.year, cutoff.month
+    end_y, end_m = until.year, until.month
+    while (y, m) <= (end_y, end_m):
+        keys.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    return keys
+
+
 def _ixc_blocked_since(raw_extras: dict[str, Any] | None) -> date_cls | None:
     """Data em que o contrato foi bloqueado, segundo o ERP IXC.
 
@@ -2495,7 +2513,9 @@ def compute_mao_de_obra_detail(
             cat_monthly[label][mk] = cat_monthly[label].get(mk, 0.0) + amt
         cat_counts[label] += 1
 
-    sorted_months = sorted(all_months_set)
+    # Padding: janela completa de meses (cutoff → mês atual), mesmo os zerados.
+    # União com os meses observados protege contra lançamentos fora do range.
+    sorted_months = sorted(set(_full_month_keys(cutoff, today)) | all_months_set)
     month_labels: list[str] = []
     for mk in sorted_months:
         try:
