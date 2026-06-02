@@ -1,0 +1,188 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Ordens de Serviço · Velus{% endblock %}
+
+{% block content %}
+<!-- Cabeçalho -->
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Ordens de Serviço — análise por tipo</h1>
+    <p class="text-xs text-gray-400 mt-0.5">Volume por assunto · Taxa de solução · Tempo de resolução · Tendência</p>
+  </div>
+</div>
+
+{% if not synced %}
+<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+  <p class="text-sm text-yellow-800">
+    Nomes de assunto ainda não sincronizados — exibindo IDs.
+    Rode <code class="bg-yellow-100 px-1 rounded">python manage.py sync_os_lookups</code> para resolver os tipos.
+  </p>
+</div>
+{% endif %}
+
+<!-- KPI Cards -->
+<h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Indicadores</h2>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+
+  <!-- Total de OS -->
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
+      Total de OS
+      <span class="relative inline-block group/tip shrink-0">
+        <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
+        <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
+          Ordens de serviço abertas dentro do período selecionado.
+          <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+        </span>
+      </span>
+    </p>
+    <p class="text-2xl font-bold text-gray-900">{{ total_os|intcomma }}</p>
+    <p class="text-xs text-gray-500 mt-1">no período</p>
+  </div>
+
+  <!-- Tipos distintos -->
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
+      Tipos de OS
+      <span class="relative inline-block group/tip shrink-0">
+        <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
+        <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
+          Quantidade de assuntos distintos (tipos de OS) no período.
+          <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+        </span>
+      </span>
+    </p>
+    <p class="text-2xl font-bold text-gray-900">{{ distinct_types|intcomma }}</p>
+    <p class="text-xs text-gray-500 mt-1">assuntos distintos</p>
+  </div>
+
+  <!-- Taxa de solução -->
+  <div class="bg-white rounded-lg shadow-sm border {% if solution_rate < 70 %}border-orange-300{% else %}border-emerald-200{% endif %} p-5">
+    <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
+      Taxa de solução
+      <span class="relative inline-block group/tip shrink-0">
+        <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
+        <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
+          Percentual de OS fechadas (status Fechado) sobre o total do período.
+          <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+        </span>
+      </span>
+    </p>
+    <p class="text-2xl font-bold {% if solution_rate < 70 %}text-orange-600{% else %}text-emerald-700{% endif %}">{{ solution_rate_str }}</p>
+    <p class="text-xs text-gray-500 mt-1">OS fechadas / total</p>
+  </div>
+
+  <!-- Tempo médio de resolução -->
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
+      Tempo médio resolução
+      <span class="relative inline-block group/tip shrink-0">
+        <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
+        <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
+          Média de (data_fechamento - data_abertura) das OS fechadas no período.
+          <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+        </span>
+      </span>
+    </p>
+    <p class="text-2xl font-bold text-gray-900">{{ avg_resolution_str }}</p>
+    <p class="text-xs text-gray-500 mt-1">OS fechadas no período</p>
+  </div>
+</div>
+
+<!-- Gráficos: volume por tipo + status -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Volume por tipo de OS</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Top 12 assuntos mais frequentes no período</p>
+    <div id="os-volume-chart" style="height:340px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Distribuição por status</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Proporção de OS por status no período</p>
+    <div id="os-status-chart" style="height:340px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+</div>
+
+<!-- Gráficos: tendência + tempo de resolução -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Tendência mensal de OS abertas</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Volume de OS abertas mês a mês</p>
+    <div id="os-trend-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Tempo médio de resolução por tipo</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Horas médias entre abertura e fechamento (top 12 por volume)</p>
+    <div id="os-resolution-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+</div>
+
+<!-- Tabela: estudo de cada tipo de OS -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+  <div class="p-5 pb-0 flex items-baseline justify-between">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-700">Estudo por tipo de OS</h2>
+      <p class="text-xs text-gray-400 mt-0.5">Volume, taxa de solução e tempo médio de cada assunto</p>
+    </div>
+    <span class="text-xs text-gray-400">{{ type_rows|length }} tipo{{ type_rows|length|pluralize }}</span>
+  </div>
+  <table class="min-w-full text-sm mt-4">
+    <thead class="bg-gray-50 border-t border-gray-200">
+      <tr>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tipo de OS</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">% do total</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Abertas</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Fechadas</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Taxa solução</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Tempo médio</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for r in type_rows %}
+      <tr class="hover:bg-gray-50">
+        <td class="px-4 py-3 font-medium text-gray-900 truncate max-w-[260px]">{{ r.subject }}</td>
+        <td class="px-4 py-3 text-right tabular-nums text-gray-900">{{ r.total|intcomma }}</td>
+        <td class="px-4 py-3 text-right tabular-nums text-gray-500">{{ r.pct_of_total }}%</td>
+        <td class="px-4 py-3 text-right tabular-nums text-gray-700">{{ r.open|intcomma }}</td>
+        <td class="px-4 py-3 text-right tabular-nums text-emerald-700">{{ r.closed|intcomma }}</td>
+        <td class="px-4 py-3 text-right tabular-nums">
+          <span class="font-semibold {% if r.solution_rate < 70 %}text-orange-600{% else %}text-emerald-700{% endif %}">{{ r.solution_rate }}%</span>
+        </td>
+        <td class="px-4 py-3 text-right tabular-nums text-gray-700">{{ r.avg_res_str }}</td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="7" class="px-6 py-8 text-center text-gray-500">
+          Nenhuma OS no período
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ volume_chart_json|json_script:"os-volume-data" }}
+{{ status_chart_json|json_script:"os-status-data" }}
+{{ trend_chart_json|json_script:"os-trend-data" }}
+{{ resolution_chart_json|json_script:"os-resolution-data" }}
+<script>
+  renderChart("os-volume-chart", "os-volume-data");
+  renderChart("os-status-chart", "os-status-data");
+  renderChart("os-trend-chart", "os-trend-data");
+  renderChart("os-resolution-chart", "os-resolution-data");
+</script>
+{% endblock %}

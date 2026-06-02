@@ -876,6 +876,151 @@ def operations(request: HttpRequest) -> HttpResponse:
 
 @login_required
 @never_cache
+def os_dashboard(request: HttpRequest) -> HttpResponse:
+    """Dashboard de Ordens de Serviço — análise por tipo de OS (assunto)."""
+    from django.db.models import DurationField, ExpressionWrapper, Q
+
+    from apps.helpdesk.application.os_lookups import load_os_lookups
+    from apps.helpdesk.infrastructure.models import Ticket
+
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+    months = _get_months(request)
+
+    lookups = load_os_lookups(org)
+    now = timezone.now()
+    window_start = (now - relativedelta(months=months)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    # OS abertas dentro da janela do período selecionado.
+    qs = Ticket.objects.filter(organization=org, opened_at__gte=window_start)
+
+    # --- KPIs ---
+    total_os = qs.count()
+    closed_os = qs.filter(status="CLOSED").count()
+    solution_rate = round(closed_os / total_os * 100, 1) if total_os else 0.0
+    distinct_types = qs.exclude(subject_id="").values("subject_id").distinct().count()
+
+    avg_resolution = qs.filter(
+        status="CLOSED", opened_at__isnull=False, closed_at__isnull=False,
+    ).aggregate(avg=Avg(F("closed_at") - F("opened_at")))["avg"]
+    avg_resolution_hours = avg_resolution.total_seconds() / 3600 if avg_resolution else 0.0
+    if avg_resolution_hours >= 24:
+        avg_res_str = f"{avg_resolution_hours / 24:.1f} dias"
+    else:
+        avg_res_str = f"{avg_resolution_hours:.1f}h"
+
+    # --- Agregação por tipo de OS (subject_id → assunto) ---
+    by_type = (
+        qs.values("subject_id")
+        .annotate(
+            total=Count("id"),
+            closed=Count("id", filter=Q(status="CLOSED")),
+            avg_res=Avg(
+                ExpressionWrapper(
+                    F("closed_at") - F("opened_at"),
+                    output_field=DurationField(),
+                ),
+                filter=Q(
+                    status="CLOSED",
+                    opened_at__isnull=False,
+                    closed_at__isnull=False,
+                ),
+            ),
+        )
+        .order_by("-total")
+    )
+
+    type_rows = []
+    for row in by_type:
+        avg_res = row["avg_res"]
+        avg_hours = avg_res.total_seconds() / 3600 if avg_res else 0.0
+        if avg_hours >= 24:
+            row_avg_str = f"{avg_hours / 24:.1f} dias"
+        elif avg_hours > 0:
+            row_avg_str = f"{avg_hours:.1f}h"
+        else:
+            row_avg_str = "—"
+        row_total = row["total"]
+        type_rows.append({
+            "subject": lookups.subject_name(row["subject_id"]),
+            "subject_id": row["subject_id"],
+            "total": row_total,
+            "closed": row["closed"],
+            "open": row_total - row["closed"],
+            "solution_rate": round(row["closed"] / row_total * 100, 1) if row_total else 0.0,
+            "avg_res_hours": avg_hours,
+            "avg_res_str": row_avg_str,
+            "pct_of_total": round(row_total / total_os * 100, 1) if total_os else 0.0,
+        })
+
+    # Top 12 tipos por volume — pros gráficos (a tabela mostra todos).
+    top_types = type_rows[:12]
+
+    # --- Tendência mensal de OS abertas ---
+    trend_series = []
+    for i in range(months):
+        m_start = (now - relativedelta(months=months - 1 - i)).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        if i < months - 1:
+            m_end = (now - relativedelta(months=months - 2 - i)).replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+        else:
+            m_end = now
+        opened_m = Ticket.objects.filter(
+            organization=org, opened_at__gte=m_start, opened_at__lt=m_end
+        ).count()
+        trend_series.append({
+            "month": m_start.strftime("%Y-%m"),
+            "label": m_start.strftime("%b/%y"),
+            "opened": opened_m,
+        })
+
+    # --- Distribuição por status ---
+    status_labels = {
+        "OPEN": "Aberto",
+        "SCHEDULED": "Agendado",
+        "IN_PROGRESS": "Em execução",
+        "CLOSED": "Fechado",
+        "FORWARDED": "Encaminhado",
+        "UNKNOWN": "Desconhecido",
+    }
+    status_qs = qs.values("status").annotate(count=Count("id")).order_by("-count")
+    status_dist = [
+        {
+            "status": status_labels.get(s["status"], s["status"]),
+            "status_key": s["status"],
+            "count": s["count"],
+        }
+        for s in status_qs
+    ]
+
+    return render(
+        request,
+        "dashboards/os.html",
+        {
+            "total_os": total_os,
+            "distinct_types": distinct_types,
+            "solution_rate": solution_rate,
+            "solution_rate_str": f"{solution_rate:.1f}%",
+            "avg_resolution_str": avg_res_str,
+            "type_rows": type_rows,
+            "synced": bool(lookups.subject_map),
+            "volume_chart_json": charts.os_volume_by_type(top_types),
+            "resolution_chart_json": charts.os_avg_resolution_by_type(top_types),
+            "trend_chart_json": charts.os_monthly_trend(trend_series),
+            "status_chart_json": charts.os_status_pie(status_dist),
+        },
+    )
+
+
+@login_required
+@never_cache
 def network(request: HttpRequest) -> HttpResponse:
     from apps.network.infrastructure.models import Connection
 

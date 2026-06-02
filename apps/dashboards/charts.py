@@ -959,6 +959,91 @@ def ticket_priority_pie(data: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+def os_volume_by_type(rows: list[dict[str, Any]]) -> str:
+    """Barras horizontais — volume de OS por tipo (assunto)."""
+    # Ordena ascendente pra barra mais longa ficar no topo do gráfico.
+    ordered = sorted(rows, key=lambda r: r["total"])
+    labels = [r["subject"] for r in ordered]
+    values = [r["total"] for r in ordered]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=values, y=labels, orientation="h",
+                marker_color="#6366f1",
+                hovertemplate="<b>%{y}</b><br>%{x} OS<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "xaxis": {"title": "OS"}},
+    )
+    return _to_json(fig)
+
+
+def os_avg_resolution_by_type(rows: list[dict[str, Any]]) -> str:
+    """Barras horizontais — tempo médio de resolução (horas) por tipo de OS."""
+    # Só tipos com resolução medida; ordena ascendente.
+    measured = [r for r in rows if r["avg_res_hours"] > 0]
+    ordered = sorted(measured, key=lambda r: r["avg_res_hours"])
+    labels = [r["subject"] for r in ordered]
+    values = [round(r["avg_res_hours"], 1) for r in ordered]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=values, y=labels, orientation="h",
+                marker_color="#f59e0b",
+                hovertemplate="<b>%{y}</b><br>%{x:.1f}h em média<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "xaxis": {"title": "Horas", "tickformat": ",.0f"}},
+    )
+    return _to_json(fig)
+
+
+def os_monthly_trend(series: list[dict[str, Any]]) -> str:
+    """Linha — OS abertas por mês."""
+    labels = [s["label"] for s in series]
+    values = [s["opened"] for s in series]
+    fig = go.Figure(
+        data=[
+            go.Scatter(
+                x=labels, y=values, mode="lines+markers",
+                line={"color": "#6366f1", "width": 3},
+                marker={"size": 8},
+                hovertemplate="<b>%{x}</b><br>%{y} OS abertas<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "yaxis": {"title": "OS abertas"}},
+    )
+    return _to_json(fig)
+
+
+def os_status_pie(data: list[dict[str, Any]]) -> str:
+    """Donut — distribuição de OS por status."""
+    colors_map = {
+        "OPEN": "#2563eb",
+        "SCHEDULED": "#8b5cf6",
+        "IN_PROGRESS": "#f59e0b",
+        "CLOSED": "#10b981",
+        "FORWARDED": "#06b6d4",
+        "UNKNOWN": "#9ca3af",
+    }
+    labels = [d["status"] for d in data]
+    values = [d["count"] for d in data]
+    colors = [colors_map.get(d.get("status_key", ""), "#6b7280") for d in data]
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.4,
+                marker={"colors": colors},
+                hovertemplate="<b>%{label}</b><br>%{value} OS (%{percent})<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "showlegend": True},
+    )
+    return _to_json(fig)
+
+
 def connection_status_pie(data: list[dict[str, Any]]) -> str:
     """Donut — distribuicao de conexoes por status (online/offline/bloqueado)."""
     colors_map = {
