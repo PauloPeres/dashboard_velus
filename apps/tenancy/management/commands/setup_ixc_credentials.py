@@ -1,9 +1,14 @@
 """Setup interativo de credenciais IXC pra uma org — seguro (token escondido).
 
 Uso:
+    # Informando as credenciais (interativo, token oculto):
     docker compose exec web python manage.py setup_ixc_credentials velus
 
-Vai pedir:
+    # Reaproveitando credenciais já salvas no DB (sem digitar o token de novo) —
+    # útil pra preencher capabilities que faltam pra uma org já configurada:
+    kubectl exec deploy/web -- python manage.py setup_ixc_credentials velus --reuse-credentials
+
+Vai pedir (modo interativo):
 - Base URL (ex: https://erp.empresa.com.br)
 - User ID
 - API Token (input escondido via getpass)
@@ -40,6 +45,14 @@ class Command(BaseCommand):
             action="store_true",
             help="Lê de env vars IXC_BASE_URL / IXC_USER_ID / IXC_API_TOKEN (use só em CI).",
         )
+        parser.add_argument(
+            "--reuse-credentials",
+            action="store_true",
+            help=(
+                "Reaproveita as credenciais já salvas numa datasource IXC da org "
+                "(não pede token). Use pra preencher capabilities que faltam."
+            ),
+        )
 
     @allow_cross_tenant(reason="setup_ixc_credentials opera fora de request HTTP")
     def handle(self, *args: Any, **opts: Any) -> None:  # noqa: ARG002
@@ -56,7 +69,26 @@ class Command(BaseCommand):
         set_current_organization(org)
         self.stdout.write(self.style.SUCCESS(f"\nConfigurando IXC para '{org.slug}'\n"))
 
-        if opts.get("non_interactive"):
+        if opts.get("reuse_credentials"):
+            existing = (
+                OrganizationDataSource.objects.filter(
+                    organization=org, source_type=SourceType.IXC.value
+                )
+                .exclude(credentials_encrypted="")
+                .order_by("-is_active", "-priority")
+                .first()
+            )
+            if existing is None:
+                raise CommandError(
+                    "Nenhuma datasource IXC com credenciais existe pra essa org. "
+                    "Rode sem --reuse-credentials pra informar as credenciais."
+                )
+            creds = existing.get_credentials()
+            base_url = str(creds.get("base_url", "")).strip().rstrip("/")
+            user_id = str(creds.get("user_id", "")).strip()
+            api_token = str(creds.get("api_token", "")).strip()
+            self.stdout.write("  Reaproveitando credenciais já salvas no DB.")
+        elif opts.get("non_interactive"):
             import os
             base_url = os.environ.get("IXC_BASE_URL", "").strip().rstrip("/")
             user_id = os.environ.get("IXC_USER_ID", "").strip()
