@@ -2183,6 +2183,16 @@ _DRE_SECTION_MAP: dict[str, tuple[str, int]] = {
     "1":   ("Movimentações de Ativo",           9),
 }
 
+# Overrides por cod COMPLETO: contas cuja classificação por prefixo no plano
+# IXC não reflete a natureza real do lançamento. Têm prioridade sobre o
+# mapa de prefixos em `_get_dre_section`.
+#   - "5.1.03.0001" Empréstimos e financiamentos: o IXC pendura sob 5.1
+#     (Comerciais), mas são parcelas de empréstimo/financiamento → Financeiras.
+#     (vide #39: parcelamentos dominam o fluxo de caixa programado)
+_DRE_ACCOUNT_OVERRIDES: dict[str, tuple[str, int]] = {
+    "5.1.03.0001": ("Despesas Financeiras", 4),
+}
+
 # Fornecedores que são pessoas físicas ou PJ individuais (não empresas grandes)
 # Mapeados a partir do endpoint `fornecedor` da API IXC.
 # Formato: supplier_external_id → (nome_display, tipo)
@@ -2311,12 +2321,17 @@ def _get_planeja_label(
 def _get_dre_section(cod: str) -> tuple[str, int]:
     """Mapeia cod contábil para (seção DRE, ordem).
 
-    Verifica prefixo de dois segmentos antes de um — ex: "5.2" tem prioridade
-    sobre "5". Usado para montar a estrutura de linhas da DRE.
+    Primeiro consulta overrides por cod completo (`_DRE_ACCOUNT_OVERRIDES`);
+    depois verifica prefixo de dois segmentos antes de um — ex: "5.2" tem
+    prioridade sobre "5". Usado para montar a estrutura de linhas da DRE.
     """
     if not cod:
         return ("Sem Categoria", 99)
-    parts = cod.strip().rstrip(".").split(".")
+    cod_clean = cod.strip().rstrip(".")
+    override = _DRE_ACCOUNT_OVERRIDES.get(cod_clean)
+    if override:
+        return override
+    parts = cod_clean.split(".")
     top = parts[0]
     two_prefix = f"{top}.{parts[1]}" if len(parts) > 1 else ""
     entry = _DRE_SECTION_MAP.get(two_prefix) or _DRE_SECTION_MAP.get(top)

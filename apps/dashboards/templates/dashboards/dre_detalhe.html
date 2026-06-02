@@ -1,13 +1,13 @@
 {% extends "dashboards/base.html" %}
 {% load humanize %}
 
-{% block title %}DRE por Conta IXC · Velus{% endblock %}
+{% block title %}Fluxo de Caixa por Conta · Velus{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-bold mb-2">DRE por Conta IXC</h1>
+<h1 class="text-2xl font-bold mb-2">Fluxo de Caixa por Conta</h1>
 <p class="text-sm text-gray-500 mb-4">
-    Demonstração de Resultado estruturada pelo plano de contas do IXC (<code>id_contas</code>).
-    Selecione o período e veja a DRE completa mês a mês.
+    Fluxo de caixa (regime de caixa — valores pagos por <code>paid_at</code>) estruturado
+    pelo plano de contas do IXC. Selecione o período e veja a movimentação mês a mês.
 </p>
 
 <!-- Seletor de período -->
@@ -58,7 +58,7 @@
 {% if dre_rows %}
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
     <div class="flex items-start justify-between gap-4 mb-1">
-        <h2 class="text-lg font-semibold">DRE — Demonstração de Resultado</h2>
+        <h2 class="text-lg font-semibold">Fluxo de Caixa por Conta — Mensal</h2>
         <div class="flex items-center gap-2 flex-shrink-0">
             <button
                 id="expand-all-btn"
@@ -83,7 +83,7 @@
         <table class="w-full text-xs border-collapse" style="min-width:600px;">
             <thead>
                 <tr class="border-b-2 border-gray-300 text-gray-500 uppercase tracking-wide">
-                    <th class="text-left py-2 pr-4 w-48 sticky left-0 bg-white">Linha DRE</th>
+                    <th class="text-left py-2 pr-4 w-48 sticky left-0 bg-white">Linha</th>
                     {% for lbl in month_labels %}
                     <th class="text-right py-2 px-2 whitespace-nowrap">{{ lbl }}</th>
                     {% endfor %}
