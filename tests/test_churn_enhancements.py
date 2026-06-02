@@ -25,6 +25,7 @@ from apps.analytics.application.churn_digest import (
 )
 from apps.analytics.application.churn_ml import (
     FEATURES,
+    _os_signals,
     _payment_profile,
     compute_features,
     get_current_model,
@@ -443,6 +444,51 @@ class TestPaymentProfile:
         assert baseline == 0.0
         # Atraso acumulado até `r_date`: (2026-06-01 - 2026-05-01) = 31 dias.
         assert recent_dev == pytest.approx(31.0)
+
+
+# =============================================================================
+# Sinais operacionais de OS (#20) — função pura
+# =============================================================================
+class TestOsSignals:
+    """`_os_signals` mede recência e recorrência de OS, point-in-time até `r`."""
+
+    R = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+
+    def _os(self, days_before: int, subject: str = "10") -> tuple[datetime, str]:
+        return (self.R - timedelta(days=days_before), subject)
+
+    def test_no_tickets_returns_zero(self) -> None:
+        recent, recurrence = _os_signals([], self.R)
+        assert recent == 0.0
+        assert recurrence == 0.0
+
+    def test_recent_window_counts_last_90d(self) -> None:
+        tickets = [self._os(10), self._os(80), self._os(120)]  # 120d fora da janela
+        recent, _recurrence = _os_signals(tickets, self.R)
+        assert recent == 2.0
+
+    def test_future_tickets_ignored(self) -> None:
+        # OS aberta DEPOIS da data de referência não conta (sem vazamento).
+        tickets = [self._os(5), (self.R + timedelta(days=10), "10")]
+        recent, _recurrence = _os_signals(tickets, self.R)
+        assert recent == 1.0
+
+    def test_recurrence_same_subject_within_window(self) -> None:
+        # Duas OS do mesmo assunto a 5 dias → 1 recorrência.
+        tickets = [self._os(20, "10"), self._os(15, "10")]
+        _recent, recurrence = _os_signals(tickets, self.R)
+        assert recurrence == 1.0
+
+    def test_recurrence_different_subjects_not_counted(self) -> None:
+        tickets = [self._os(20, "10"), self._os(15, "99")]
+        _recent, recurrence = _os_signals(tickets, self.R)
+        assert recurrence == 0.0
+
+    def test_recurrence_outside_window_not_counted(self) -> None:
+        # Mesmo assunto, mas 40 dias de intervalo (> 30d) → não é recorrência.
+        tickets = [self._os(60, "10"), self._os(20, "10")]
+        _recent, recurrence = _os_signals(tickets, self.R)
+        assert recurrence == 0.0
 
 
 # =============================================================================
