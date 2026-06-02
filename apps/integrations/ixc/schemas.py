@@ -670,3 +670,109 @@ class IxcEquipmentSchema(BaseModel):
 
     def get_extras(self) -> dict[str, Any]:
         return dict(self.model_extra or {})
+
+
+# =============================================================================
+# CRM — leads (crm_canditados) e negociações (crm_negociacoes)
+# =============================================================================
+class IxcLeadSchema(BaseModel):
+    """Schema do registro `crm_canditados` na API IXC (leads/prospects).
+
+    Campos centrais do CRM IXC. `status_prospeccao` é o estágio do lead no
+    funil (mapeado pro status canônico no adapter). `origem` quando presente
+    indica o canal (indicação, site, redes sociais).
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    nome: str = Field(default="")
+    telefone: str = Field(default="")
+    email: str = Field(default="")
+    status_prospeccao: str = Field(default="")
+    origem: str = Field(default="")
+    id_vendedor: str = Field(default="")
+    data_cadastro: datetime | None = Field(default=None)
+
+    @field_validator(
+        "id", "nome", "telefone", "email", "status_prospeccao",
+        "origem", "id_vendedor", mode="before",
+    )
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("data_cadastro", mode="before")
+    @classmethod
+    def _parse_ixc_datetime(cls, v: Any) -> datetime | None:
+        if v in (None, "", "0000-00-00 00:00:00", "0000-00-00"):
+            return None
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            from zoneinfo import ZoneInfo
+
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    naive = datetime.strptime(v, fmt)
+                    return naive.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+                except ValueError:
+                    continue
+        return None
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})
+
+
+class IxcOpportunitySchema(BaseModel):
+    """Schema do registro `crm_negociacoes` na API IXC (negociações).
+
+    `id_candidato` é a FK pro lead. `status` indica o estado da negociação
+    (mapeado pro status canônico no adapter). `valor` vem string formato
+    "150.00" ou "150,00".
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    id_candidato: str = Field(default="")
+    valor: str = Field(default="0")
+    status: str = Field(default="")
+    motivo_perda: str = Field(default="")
+    data_criacao: datetime | None = Field(default=None)
+    data_fechamento: datetime | None = Field(default=None)
+
+    @field_validator(
+        "id", "id_candidato", "status", "motivo_perda", mode="before",
+    )
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("valor", mode="before")
+    @classmethod
+    def _coerce_amount(cls, v: Any) -> str:
+        if v in (None, "", "0.00"):
+            return "0"
+        return str(v).replace(",", ".")
+
+    @field_validator("data_criacao", "data_fechamento", mode="before")
+    @classmethod
+    def _parse_ixc_datetime(cls, v: Any) -> datetime | None:
+        if v in (None, "", "0000-00-00 00:00:00", "0000-00-00"):
+            return None
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            from zoneinfo import ZoneInfo
+
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    naive = datetime.strptime(v, fmt)
+                    return naive.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+                except ValueError:
+                    continue
+        return None
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})

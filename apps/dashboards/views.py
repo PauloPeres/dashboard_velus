@@ -47,8 +47,12 @@ from apps.analytics.application.aggregations import (
     compute_mao_de_obra_detail,
     compute_people_expenses,
     compute_pipeline_by_status,
+    compute_lead_origin,
+    compute_net_adds_series,
+    compute_pipeline_aging,
     compute_recovery_rate,
     compute_revenue_forecast,
+    compute_sales_funnel,
     compute_top_delinquent_invoices,
 )
 from apps.shared.context import get_current_organization
@@ -943,5 +947,43 @@ def network(request: HttpRequest) -> HttpResponse:
             "top_consumers": top_consumers,
             "status_chart_json": charts.connection_status_pie(status_dist),
             "nas_chart_json": charts.connections_by_nas_bar(nas_dist),
+        },
+    )
+
+
+@login_required
+@never_cache
+def sales(request: HttpRequest) -> HttpResponse:
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    months = _get_months(request)
+    funnel = compute_sales_funnel(org)
+    origin = compute_lead_origin(org)
+    net_adds = compute_net_adds_series(org, months=months)
+    pipeline = compute_pipeline_aging(org)
+
+    net_adds_total = sum(p["net"] for p in net_adds)
+
+    return render(
+        request,
+        "dashboards/sales.html",
+        {
+            "funnel": funnel,
+            "leads_new_month_str": f"{funnel['leads_new_month']:,}".replace(",", "."),
+            "conversion_str": f"{funnel['lead_to_won_pct']:.1f}%",
+            "conversion_subtitle": (
+                f"{funnel['won_count']} ganhos de {funnel['total_leads']} leads"
+            ),
+            "pipeline_value_str": _fmt_brl(funnel["pipeline_value"]),
+            "pipeline_subtitle": f"{funnel['open_count']} negociações em andamento",
+            "net_adds_total": net_adds_total,
+            "net_adds_total_str": f"{net_adds_total:+,}".replace(",", "."),
+            "pipeline_list": pipeline,
+            "funnel_chart_json": charts.sales_funnel_chart(funnel["funnel_stages"]),
+            "net_adds_chart_json": charts.net_adds_bar_chart(net_adds),
+            "lead_origin_chart_json": charts.lead_origin_pie(origin),
         },
     )

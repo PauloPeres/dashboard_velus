@@ -25,6 +25,8 @@ class FakeAdapterConfig(AppConfig):
         from .equipment import FakeEquipmentSource
         from .expenses import FakeExpenseSource
         from .invoices import FakeInvoiceSource, FakePaymentSource
+        from .leads import FakeLeadSource
+        from .opportunities import FakeOpportunitySource
         from .tickets import FakeTicketSource
 
         # Idempotência: AppConfig.ready() pode rodar 2x em dev reload.
@@ -37,6 +39,8 @@ class FakeAdapterConfig(AppConfig):
             (Capability.TICKETS, FakeTicketSource),
             (Capability.CONNECTIONS, FakeConnectionSource),
             (Capability.EQUIPMENT, FakeEquipmentSource),
+            (Capability.LEADS, FakeLeadSource),
+            (Capability.OPPORTUNITIES, FakeOpportunitySource),
         ]:
             if registry.get_factory(SourceType.FAKE, cap) is None:
                 registry.register(SourceType.FAKE, cap, cls)

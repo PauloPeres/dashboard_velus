@@ -1000,3 +1000,62 @@ def connections_by_nas_bar(data: list[dict[str, Any]]) -> str:
         layout={**_LAYOUT_BASE, "xaxis": {"title": "Conexões"}},
     )
     return _to_json(fig)
+
+
+def sales_funnel_chart(stages: list[dict[str, Any]]) -> str:
+    """Funil de vendas — leads → negociações → ganhos (barras horizontais)."""
+    labels = [s["stage"] for s in stages]
+    values = [s["count"] for s in stages]
+    colors = ["#3b82f6", "#6366f1", "#10b981"]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=values, y=labels, orientation="h",
+                marker_color=colors[: len(labels)],
+                text=values, textposition="auto",
+                hovertemplate="<b>%{y}</b><br>%{x}<extra></extra>",
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "yaxis": {"autorange": "reversed"},
+            "xaxis": {"title": ""},
+        },
+    )
+    return _to_json(fig)
+
+
+def net_adds_bar_chart(series: list[dict[str, Any]]) -> str:
+    """Barras — net adds por mês (verde positivo, vermelho negativo)."""
+    labels = [p["label"] for p in series]
+    values = [p["net"] for p in series]
+    colors = ["#10b981" if v >= 0 else "#ef4444" for v in values]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=labels, y=values,
+                marker_color=colors,
+                hovertemplate="<b>%{x}</b><br>Net: %{y}<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "yaxis": {"title": "Net adds"}},
+    )
+    return _to_json(fig)
+
+
+def lead_origin_pie(data: list[dict[str, Any]]) -> str:
+    """Donut — distribuição de leads por canal de origem."""
+    labels = [d["origin"] for d in data]
+    values = [d["count"] for d in data]
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.4,
+                hovertemplate="<b>%{label}</b><br>%{value} leads (%{percent})<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "showlegend": True},
+    )
+    return _to_json(fig)

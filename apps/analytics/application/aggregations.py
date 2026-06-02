@@ -2478,3 +2478,162 @@ def compute_top_delinquent_invoices(
         }
         for r in rows
     ]
+
+
+# =============================================================================
+# Sales / CRM — funil de vendas, origem de leads, net adds, pipeline
+# =============================================================================
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_sales_funnel(organization: Organization) -> dict[str, Any]:
+    """Funil de vendas: leads → negociações → ganhos.
+
+    Conversão lead→ganho = negociações WON ÷ total de leads. Pipeline aberto =
+    soma do valor das negociações OPEN (receita potencial em andamento).
+    """
+    from apps.sales.infrastructure.models import Lead, Opportunity
+
+    today = timezone.now().date()
+    month_start = today.replace(day=1)
+
+    total_leads = Lead.objects.filter(organization=organization).count()
+    leads_new_month = Lead.objects.filter(
+        organization=organization, created_at_source__date__gte=month_start
+    ).count()
+
+    opp_by_status = (
+        Opportunity.objects.filter(organization=organization)
+        .values("status")
+        .annotate(
+            count=Count("id"),
+            total=Coalesce(Sum("value"), _ZERO, output_field=DecimalField()),
+        )
+    )
+    counts: dict[str, int] = {}
+    values: dict[str, Decimal] = {}
+    for row in opp_by_status:
+        counts[row["status"]] = row["count"]
+        values[row["status"]] = row["total"]
+
+    total_opps = sum(counts.values())
+    won_count = counts.get("WON", 0)
+    lost_count = counts.get("LOST", 0)
+    open_count = counts.get("OPEN", 0)
+    pipeline_value = values.get("OPEN", _ZERO)
+    won_value = values.get("WON", _ZERO)
+
+    # Taxas de conversão entre estágios do funil.
+    lead_to_opp = round(total_opps / total_leads * 100, 1) if total_leads else 0.0
+    opp_to_won = round(won_count / total_opps * 100, 1) if total_opps else 0.0
+    lead_to_won = round(won_count / total_leads * 100, 1) if total_leads else 0.0
+
+    funnel_stages = [
+        {"stage": "Leads", "count": total_leads},
+        {"stage": "Negociações", "count": total_opps},
+        {"stage": "Ganhos", "count": won_count},
+    ]
+
+    return {
+        "total_leads": total_leads,
+        "leads_new_month": leads_new_month,
+        "total_opportunities": total_opps,
+        "won_count": won_count,
+        "lost_count": lost_count,
+        "open_count": open_count,
+        "pipeline_value": float(pipeline_value),
+        "won_value": float(won_value),
+        "lead_to_opp_pct": lead_to_opp,
+        "opp_to_won_pct": opp_to_won,
+        "lead_to_won_pct": lead_to_won,
+        "funnel_stages": funnel_stages,
+    }
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_lead_origin(organization: Organization) -> list[dict[str, Any]]:
+    """Distribuição de leads por canal de origem (indicação, site, redes...).
+
+    Leads sem origem informada são agrupados em "Não informado".
+    """
+    from apps.sales.infrastructure.models import Lead
+
+    rows = (
+        Lead.objects.filter(organization=organization)
+        .values("origin")
+        .annotate(count=Count("id"))
+        .order_by("-count")
+    )
+    return [
+        {"origin": (row["origin"] or "Não informado"), "count": row["count"]}
+        for row in rows
+    ]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_net_adds_series(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Série mensal de net adds = contratos ativados - cancelados no mês.
+
+    Net adds positivo = base crescendo; negativo = base encolhendo. Usa
+    `activated_at` (gross adds) e `canceled_at` (gross churn) do contrato.
+    """
+    from apps.customers.infrastructure.models import Contract
+
+    today = timezone.now().date()
+    series: list[dict[str, Any]] = []
+    for i in range(months - 1, -1, -1):
+        month_first = _first_of_month_n_ago(today, i)
+        next_month_first = _first_of_month_n_ago(today, i - 1) if i > 0 else None
+
+        adds_qs = Contract.objects.filter(
+            organization=organization, activated_at__date__gte=month_first
+        )
+        churn_qs = Contract.objects.filter(
+            organization=organization, canceled_at__date__gte=month_first
+        )
+        if next_month_first is not None:
+            adds_qs = adds_qs.filter(activated_at__date__lt=next_month_first)
+            churn_qs = churn_qs.filter(canceled_at__date__lt=next_month_first)
+
+        adds = adds_qs.count()
+        churn = churn_qs.count()
+        series.append({
+            "month": month_first.strftime("%Y-%m"),
+            "label": month_first.strftime("%b/%y"),
+            "adds": adds,
+            "churn": churn,
+            "net": adds - churn,
+        })
+    return series
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_pipeline_aging(
+    organization: Organization, limit: int = 50
+) -> list[dict[str, Any]]:
+    """Negociações abertas (OPEN) ordenadas por tempo em aberto (aging).
+
+    Negociações paradas há muito tempo indicam gargalo no funil — base pra
+    ação comercial.
+    """
+    from apps.sales.infrastructure.models import Opportunity
+
+    today = timezone.now().date()
+    rows = (
+        Opportunity.objects.filter(organization=organization, status="OPEN")
+        .select_related("lead")
+        .order_by("created_at_source")[:limit]
+    )
+    result: list[dict[str, Any]] = []
+    for opp in rows:
+        created = opp.created_at_source.date() if opp.created_at_source else None
+        days_open = (today - created).days if created else 0
+        result.append({
+            "external_id": opp.external_id,
+            "lead_name": (opp.lead.name if opp.lead else "")
+            or f"Lead #{opp.lead_external_id}",
+            "value": float(opp.value),
+            "created_at": created.isoformat() if created else "—",
+            "days_open": days_open,
+        })
+    return result

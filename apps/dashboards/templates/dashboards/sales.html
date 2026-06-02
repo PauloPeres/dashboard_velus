@@ -1,0 +1,103 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Vendas / CRM · Velus{% endblock %}
+
+{% block content %}
+<!-- Cabeçalho -->
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Vendas / CRM</h1>
+    <p class="text-xs text-gray-400 mt-0.5">Funil de leads · Conversão · Pipeline aberto · Net adds</p>
+  </div>
+</div>
+
+<!-- KPI Cards -->
+<h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Indicadores</h2>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+
+  {% include "dashboards/_kpi_card.html" with label="Leads novos no mês" value=leads_new_month_str subtitle="entrada de prospects no mês corrente" tooltip="Leads com data de cadastro no mês calendário atual." variant="border-blue-200" value_color="text-blue-700" %}
+
+  {% include "dashboards/_kpi_card.html" with label="Conversão lead→ganho" value=conversion_str subtitle=conversion_subtitle tooltip="Negociações ganhas dividido pelo total de leads. Mede a eficiência do funil de ponta a ponta." variant="border-emerald-200" value_color="text-emerald-700" %}
+
+  {% include "dashboards/_kpi_card.html" with label="Pipeline aberto" value=pipeline_value_str subtitle=pipeline_subtitle tooltip="Soma do valor das negociações em andamento (status aberto). Representa a receita potencial em negociação." variant="border-indigo-200" value_color="text-indigo-700" %}
+
+  {% include "dashboards/_kpi_card.html" with label="Net adds" value=net_adds_total_str subtitle="adições líquidas de contratos no período" tooltip="Contratos ativados menos cancelados no período selecionado. Positivo = crescimento da base." variant="border-gray-200" %}
+
+</div>
+
+<!-- Gráficos -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Funil de vendas</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Leads → Negociações → Ganhos</p>
+    <div id="funnel-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Origem dos leads</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Distribuição por canal de aquisição</p>
+    <div id="lead-origin-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+</div>
+
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Net adds por mês</h2>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">Contratos ativados menos cancelados, mês a mês</p>
+  <div id="net-adds-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+</div>
+
+<!-- Tabela: Pipeline aberto (aging) -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+  <div class="p-5 pb-0 flex items-baseline justify-between">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-700">Negociações em andamento</h2>
+      <p class="text-xs text-gray-400 mt-0.5">Pipeline aberto ordenado por tempo de abertura</p>
+    </div>
+    <span class="text-xs text-gray-400">{{ funnel.open_count|intcomma }} abertas</span>
+  </div>
+  <table class="min-w-full text-sm mt-4">
+    <thead class="bg-gray-50 border-t border-gray-200">
+      <tr>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Lead</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Valor</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Aberta em</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Dias aberta</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for o in pipeline_list %}
+      <tr class="hover:bg-gray-50">
+        <td class="px-4 py-3 font-medium text-gray-900 truncate max-w-[280px]">{{ o.lead_name|default:"—" }}</td>
+        <td class="px-4 py-3 text-right tabular-nums font-semibold text-gray-700">R$ {{ o.value|floatformat:2 }}</td>
+        <td class="px-4 py-3 text-gray-500 text-xs">{{ o.created_at|default:"—" }}</td>
+        <td class="px-4 py-3 text-right tabular-nums {% if o.days_open > 60 %}text-red-600 font-semibold{% elif o.days_open > 30 %}text-orange-600{% else %}text-gray-500{% endif %}">{{ o.days_open }}</td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="4" class="px-6 py-8 text-center text-gray-500">
+          Nenhuma negociação em andamento
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ funnel_chart_json|json_script:"funnel-data" }}
+{{ net_adds_chart_json|json_script:"net-adds-data" }}
+{{ lead_origin_chart_json|json_script:"lead-origin-data" }}
+<script>
+  renderChart("funnel-chart", "funnel-data");
+  renderChart("net-adds-chart", "net-adds-data");
+  renderChart("lead-origin-chart", "lead-origin-data");
+</script>
+{% endblock %}

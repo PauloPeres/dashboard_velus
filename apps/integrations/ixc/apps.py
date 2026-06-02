@@ -24,6 +24,8 @@ class IxcAdapterConfig(AppConfig):
         from .equipment import IxcEquipmentSource
         from .expenses import IxcExpenseSource
         from .invoices import IxcInvoiceSource
+        from .leads import IxcLeadSource
+        from .opportunities import IxcOpportunitySource
         from .payments import IxcPaymentSource
         from .tickets import IxcTicketSource
 
@@ -37,6 +39,8 @@ class IxcAdapterConfig(AppConfig):
             (Capability.TICKETS, IxcTicketSource),
             (Capability.CONNECTIONS, IxcConnectionSource),
             (Capability.EQUIPMENT, IxcEquipmentSource),
+            (Capability.LEADS, IxcLeadSource),
+            (Capability.OPPORTUNITIES, IxcOpportunitySource),
         ]:
             if registry.get_factory(SourceType.IXC, cap) is None:
                 registry.register(SourceType.IXC, cap, cls)

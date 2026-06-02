@@ -35,6 +35,11 @@ from apps.inventory.domain.dto import EquipmentDTO
 from apps.inventory.infrastructure.repositories import EquipmentRepository
 from apps.network.domain.dto import ConnectionDTO
 from apps.network.infrastructure.repositories import ConnectionRepository
+from apps.sales.domain.dto import LeadDTO, OpportunityDTO
+from apps.sales.infrastructure.repositories import (
+    LeadRepository,
+    OpportunityRepository,
+)
 from apps.integrations.shared.registry import registry
 from apps.shared.context import (
     reset_current_organization,
@@ -133,6 +138,14 @@ def _equipment_port_call(source: Any, since: datetime | None) -> Iterator[Equipm
     return source.list_equipment(since=since)
 
 
+def _lead_port_call(source: Any, since: datetime | None) -> Iterator[LeadDTO]:
+    return source.list_leads(since=since)
+
+
+def _opportunity_port_call(source: Any, since: datetime | None) -> Iterator[OpportunityDTO]:
+    return source.list_opportunities(since=since)
+
+
 def _repo_upsert(repository: Any, dto: Any, source_type: SourceType) -> None:
     """Genérico: todos os repositories expõem o mesmo upsert_from_dto."""
     repository.upsert_from_dto(dto, source_type=source_type)
@@ -154,6 +167,8 @@ _DISPATCH: dict[
     Capability.TICKETS: (_ticket_port_call, TicketRepository, _repo_upsert),
     Capability.CONNECTIONS: (_connection_port_call, ConnectionRepository, _repo_upsert),
     Capability.EQUIPMENT: (_equipment_port_call, EquipmentRepository, _repo_upsert),
+    Capability.LEADS: (_lead_port_call, LeadRepository, _repo_upsert),
+    Capability.OPPORTUNITIES: (_opportunity_port_call, OpportunityRepository, _repo_upsert),
 }
 
 

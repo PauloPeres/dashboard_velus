@@ -34,6 +34,8 @@ class Capability(models.TextChoices):
         TICKETS    → apps.helpdesk.domain.ports.TicketSourcePort
         CONNECTIONS → apps.network.domain.ports.ConnectionSourcePort
         EQUIPMENT  → apps.inventory.domain.ports.EquipmentSourcePort
+        LEADS         → apps.sales.domain.ports.LeadSourcePort
+        OPPORTUNITIES → apps.sales.domain.ports.OpportunitySourcePort
     """
 
     CUSTOMERS = "CUSTOMERS", "Clientes"
@@ -44,3 +46,5 @@ class Capability(models.TextChoices):
     TICKETS = "TICKETS", "Chamados"
     CONNECTIONS = "CONNECTIONS", "Conexões"
     EQUIPMENT = "EQUIPMENT", "Equipamentos em comodato"
+    LEADS = "LEADS", "Leads (CRM)"
+    OPPORTUNITIES = "OPPORTUNITIES", "Negociações (CRM)"
