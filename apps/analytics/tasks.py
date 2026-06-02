@@ -79,8 +79,9 @@ def sync_plano_contas_for_org(*, organization_id: int) -> dict[str, Any]:
 
 @allow_cross_tenant(reason="sync_plano_contas opera fora de request HTTP")
 def _run_plano_sync(*, organization_id: int) -> dict[str, Any]:
-    from apps.analytics.infrastructure.models import PlanoContasCache
+    from apps.analytics.infrastructure.models import FornecedorCache, PlanoContasCache
     from apps.integrations.ixc.client import IxcHttpClient
+    from apps.integrations.ixc.expenses import IxcSupplierCache
     from apps.integrations.shared.enums import Capability, SourceType
     from apps.tenancy.models import Organization, OrganizationDataSource
 
@@ -132,6 +133,9 @@ def _run_plano_sync(*, organization_id: int) -> dict[str, Any]:
             conta_map[id_conta] = id_plano
             count_conta += 1
 
+        # Fornecedores — mesma cadência/credenciais; resolve nomes no DRE-Contas.
+        supplier_map = IxcSupplierCache(client).load_all()
+
     plano_map["0"] = {"cod": "", "nome": "(Sem categoria)", "tipo": "?"}
     conta_map["0"] = "0"
 
@@ -143,13 +147,21 @@ def _run_plano_sync(*, organization_id: int) -> dict[str, Any]:
             "synced_at": timezone.now(),
         },
     )
+    FornecedorCache.objects.update_or_create(
+        organization=org,
+        defaults={
+            "supplier_map": supplier_map,
+            "synced_at": timezone.now(),
+        },
+    )
 
     log.info(
         "sync_plano_contas_done",
         plano_count=count_plano,
         conta_count=count_conta,
+        supplier_count=len(supplier_map),
     )
-    return {"plano": count_plano, "conta": count_conta}
+    return {"plano": count_plano, "conta": count_conta, "fornecedor": len(supplier_map)}
 
 
 # =============================================================================

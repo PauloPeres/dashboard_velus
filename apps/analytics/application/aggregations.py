@@ -1827,6 +1827,42 @@ def _load_plano_maps(organization: "Organization") -> "tuple[dict, dict]":
     return _CONTA_TO_PLANO, _PLANEJAMENTO
 
 
+def _load_supplier_map(organization: "Organization") -> dict[str, str]:
+    """Carrega {id_fornecedor → nome} do FornecedorCache do banco.
+
+    Retorna dict vazio se a org ainda não tiver sido sincronizada via
+    `python manage.py sync_fornecedores <slug>`.
+    """
+    try:
+        from apps.analytics.infrastructure.models import FornecedorCache
+        cache = FornecedorCache.objects.get(organization=organization)
+        return cache.supplier_map or {}
+    except Exception:
+        return {}
+
+
+def _resolve_supplier_name(
+    supplier_external_id: str | None,
+    stored_name: str | None,
+    supplier_map: dict[str, str],
+) -> str:
+    """Resolve o nome de exibição de um fornecedor.
+
+    Prioriza o nome do FornecedorCache (mais atual) — corrige inclusive
+    despesas gravadas com o fallback antigo `Fornecedor #X`. Cai para o
+    `supplier_name` gravado e, por fim, para `(Sem fornecedor)`.
+    """
+    sid = str(supplier_external_id or "").strip()
+    if sid and sid != "0":
+        cached = (supplier_map.get(sid) or "").strip()
+        if cached and not cached.startswith("Fornecedor #"):
+            return cached
+    stored = (stored_name or "").strip()
+    if stored:
+        return stored
+    return "(Sem fornecedor)"
+
+
 def _resolve_conta(
     id_conta: str | None,
     conta_map: dict | None = None,
@@ -1899,6 +1935,7 @@ def compute_dre_by_account(
     from apps.financial.infrastructure.models import Expense as ExpenseModel
 
     conta_map, plano_map = _load_plano_maps(organization)
+    supplier_map = _load_supplier_map(organization)
     today = timezone.now().date()
 
     # --- Intervalo de datas ---
@@ -1966,7 +2003,7 @@ def compute_dre_by_account(
             month=TruncMonth("paid_at"),
             id_conta_str=KeyTextTransform("id_conta", "raw_extras"),
         )
-        .values("month", "id_conta_str", "supplier_name")
+        .values("month", "id_conta_str", "supplier_external_id", "supplier_name")
         .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
         .order_by("id_conta_str", "supplier_name", "month")
     )
@@ -1975,7 +2012,9 @@ def compute_dre_by_account(
     for row in qs_sup:
         ic = str(row["id_conta_str"] or "0")
         id_plan = conta_map.get(ic, "0")
-        sup = (row["supplier_name"] or "").strip() or "(Sem fornecedor)"
+        sup = _resolve_supplier_name(
+            row["supplier_external_id"], row["supplier_name"], supplier_map
+        )
         mk = row["month"].strftime("%Y-%m")
         supplier_raw.setdefault(id_plan, {}).setdefault(sup, {})
         supplier_raw[id_plan][sup][mk] = supplier_raw[id_plan][sup].get(mk, 0.0) + float(row["total"])

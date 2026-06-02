@@ -386,3 +386,45 @@ class PlanoContasCache(models.Model):
     class Meta:
         verbose_name = _("Cache do plano de contas IXC")
         verbose_name_plural = _("Caches do plano de contas IXC")
+
+
+# =============================================================================
+# Fornecedores IXC — cache sincronizado via `sync_fornecedores`
+# =============================================================================
+class FornecedorCache(models.Model):
+    """Cache de fornecedores IXC para uma organização.
+
+    Armazena `supplier_map` como JSONField: {id_fornecedor (str) → nome}.
+    Alimentado pelo endpoint `fornecedor` do IXC (fantasia → razao social).
+
+    Resolve nomes no DRE-Contas em tempo de exibição, inclusive para despesas
+    gravadas com o fallback antigo `Fornecedor #X` em `Expense.supplier_name`.
+
+    Atualizado via `python manage.py sync_fornecedores <org_slug>` e pelo Beat
+    diário que sincroniza o plano de contas (mesma cadência/credenciais IXC).
+    """
+
+    organization = models.OneToOneField(
+        "tenancy.Organization",
+        on_delete=models.CASCADE,
+        related_name="fornecedor_cache",
+        verbose_name=_("Organização"),
+    )
+    # {id_fornecedor (str) → nome}
+    supplier_map = models.JSONField(
+        default=dict,
+        verbose_name=_("Mapa de fornecedores"),
+        help_text="id_fornecedor → nome — da tabela `fornecedor` do IXC",
+    )
+    synced_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Última sincronização"),
+    )
+
+    class Meta:
+        verbose_name = _("Cache de fornecedores IXC")
+        verbose_name_plural = _("Caches de fornecedores IXC")
+
+    def __str__(self) -> str:
+        return f"FornecedorCache {self.organization_id} · n={len(self.supplier_map)}"

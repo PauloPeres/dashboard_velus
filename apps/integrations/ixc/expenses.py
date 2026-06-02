@@ -82,6 +82,12 @@ class IxcSupplierCache:
             self._load()
         return self._suppliers.get(str(supplier_id), "")
 
+    def load_all(self) -> dict[str, str]:
+        """Carrega (se necessário) e retorna o mapa completo id → nome."""
+        if not self._loaded:
+            self._load()
+        return dict(self._suppliers)
+
     def _load(self) -> None:
         try:
             for raw in self._client.paginate_ixc("fornecedor", page_size=200):
