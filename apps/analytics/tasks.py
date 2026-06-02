@@ -153,6 +153,56 @@ def _run_plano_sync(*, organization_id: int) -> dict[str, Any]:
 
 
 # =============================================================================
+# Rebuild de fact financeiras — rede de segurança agendada (Beat diário)
+# =============================================================================
+@shared_task(name="apps.analytics.tasks.dispatch_fact_rebuild_for_all_orgs")
+def dispatch_fact_rebuild_for_all_orgs() -> dict[str, int]:
+    """Enfileira o rebuild das fact financeiras para cada org ativa."""
+    return _dispatch_fact_rebuild()
+
+
+@allow_cross_tenant(reason="dispatch_fact_rebuild itera Organization (não-TenantModel)")
+def _dispatch_fact_rebuild() -> dict[str, int]:
+    from apps.tenancy.models import Organization
+
+    n = 0
+    for org in Organization.objects.filter(is_active=True):
+        rebuild_financial_facts_for_org.apply_async(
+            kwargs={"organization_id": org.pk},
+            queue=org.celery_queue_name,
+        )
+        n += 1
+        _logger.info("fact_rebuild_dispatched", org=org.slug)
+
+    return {"dispatched": n}
+
+
+@shared_task(
+    name="apps.analytics.tasks.rebuild_financial_facts_for_org",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    max_retries=2,
+    acks_late=True,
+)
+def rebuild_financial_facts_for_org(*, organization_id: int) -> dict[str, Any]:
+    """Rematerializa fatura/pagamento/despesa fact de uma org."""
+    return _run_fact_rebuild(organization_id=organization_id)
+
+
+@allow_cross_tenant(reason="rebuild de fact opera fora de request HTTP")
+def _run_fact_rebuild(*, organization_id: int) -> dict[str, Any]:
+    from apps.analytics.application.rebuild import rebuild_financial_facts
+    from apps.tenancy.models import Organization
+
+    org = Organization.objects.get(pk=organization_id)
+    set_current_organization(org)
+    summary = rebuild_financial_facts(org)
+    _logger.info("fact_rebuild_done", org=org.slug, **summary)
+    return summary
+
+
+# =============================================================================
 # Churn risk — recomputa scores de risco de cancelamento (Beat diário)
 # =============================================================================
 @shared_task(name="apps.analytics.tasks.dispatch_churn_risk_for_all_orgs")

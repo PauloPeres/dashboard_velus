@@ -194,68 +194,141 @@ def _rebuild_fact_contract_status_daily(
     return count
 
 
+# Linhas por batch nos rebuilds de fact financeiras (bulk_create upsert).
+_FACT_FINANCIAL_BATCH = 5_000
+
+
 def _rebuild_fact_invoice(organization: Organization) -> int:
+    """Materializa FactInvoice a partir de Invoice (idempotente).
+
+    Usa bulk_create com update_conflicts em batches — ~100x mais rápido que
+    update_or_create individual. Crítico em ISPs com 100k+ faturas: o caminho
+    antigo (1 SELECT+UPSERT por fatura, tudo num só @transaction.atomic)
+    estourava o time-limit do worker e revertia tudo, deixando a tabela vazia.
+    """
     today = timezone.now().date()
     count = 0
-    for inv in Invoice.objects.filter(organization=organization).iterator():
-        days_overdue, bucket = _aging_bucket(inv.due_date, inv.paid_at, inv.status, today)
-        FactInvoice.objects.update_or_create(
-            organization=organization,
-            invoice=inv,
-            defaults={
-                "issued_date": (
-                    inv.issued_at.date() if inv.issued_at else inv.due_date
-                ),
-                "due_date": inv.due_date,
-                "paid_date": inv.paid_at.date() if inv.paid_at else None,
-                "amount": inv.amount,
-                "paid_amount": inv.paid_amount,
-                "status": inv.status,
-                "days_overdue": days_overdue,
-                "aging_bucket": bucket,
-            },
+    batch: list[FactInvoice] = []
+
+    def _flush(records: list[FactInvoice]) -> int:
+        if not records:
+            return 0
+        FactInvoice.objects.bulk_create(
+            records,
+            update_conflicts=True,
+            unique_fields=["organization", "invoice"],
+            update_fields=[
+                "issued_date", "due_date", "paid_date", "amount",
+                "paid_amount", "status", "days_overdue", "aging_bucket",
+            ],
+            batch_size=_FACT_FINANCIAL_BATCH,
         )
-        count += 1
+        return len(records)
+
+    invoices = Invoice.objects.filter(organization=organization)
+    for inv in invoices.iterator(chunk_size=_FACT_FINANCIAL_BATCH):
+        days_overdue, bucket = _aging_bucket(inv.due_date, inv.paid_at, inv.status, today)
+        batch.append(
+            FactInvoice(
+                organization=organization,
+                invoice=inv,
+                issued_date=inv.issued_at.date() if inv.issued_at else inv.due_date,
+                due_date=inv.due_date,
+                paid_date=inv.paid_at.date() if inv.paid_at else None,
+                amount=inv.amount,
+                paid_amount=inv.paid_amount,
+                status=inv.status,
+                days_overdue=days_overdue,
+                aging_bucket=bucket,
+            )
+        )
+        if len(batch) >= _FACT_FINANCIAL_BATCH:
+            count += _flush(batch)
+            batch = []
+
+    count += _flush(batch)
     return count
 
 
 def _rebuild_fact_payment(organization: Organization) -> int:
+    """Materializa FactPayment via bulk_create com update_conflicts."""
     count = 0
-    for pay in Payment.objects.filter(organization=organization).iterator():
-        FactPayment.objects.update_or_create(
-            organization=organization,
-            payment=pay,
-            defaults={
-                "paid_date": pay.paid_at.date(),
-                "amount": pay.amount,
-                "method": pay.method,
-            },
+    batch: list[FactPayment] = []
+
+    def _flush(records: list[FactPayment]) -> int:
+        if not records:
+            return 0
+        FactPayment.objects.bulk_create(
+            records,
+            update_conflicts=True,
+            unique_fields=["organization", "payment"],
+            update_fields=["paid_date", "amount", "method"],
+            batch_size=_FACT_FINANCIAL_BATCH,
         )
-        count += 1
+        return len(records)
+
+    payments = Payment.objects.filter(organization=organization)
+    for pay in payments.iterator(chunk_size=_FACT_FINANCIAL_BATCH):
+        batch.append(
+            FactPayment(
+                organization=organization,
+                payment=pay,
+                paid_date=pay.paid_at.date(),
+                amount=pay.amount,
+                method=pay.method,
+            )
+        )
+        if len(batch) >= _FACT_FINANCIAL_BATCH:
+            count += _flush(batch)
+            batch = []
+
+    count += _flush(batch)
     return count
 
 
 def _rebuild_fact_expense(organization: Organization) -> int:
+    """Materializa FactExpense via bulk_create com update_conflicts."""
     count = 0
-    for exp in Expense.objects.filter(organization=organization).iterator():
-        # expense_date = paid_at se pago, otherwise due_date
-        expense_date = exp.paid_at if exp.paid_at else exp.due_date
-        FactExpense.objects.update_or_create(
-            organization=organization,
-            expense=exp,
-            defaults={
-                "expense_date": expense_date,
-                "due_date": exp.due_date,
-                "paid_date": exp.paid_at,
-                "amount": exp.amount,
-                "paid_amount": exp.paid_amount,
-                "status": exp.status,
-                "category": exp.category,
-                "supplier_name": exp.supplier_name,
-                "description": exp.description,
-            },
+    batch: list[FactExpense] = []
+
+    def _flush(records: list[FactExpense]) -> int:
+        if not records:
+            return 0
+        FactExpense.objects.bulk_create(
+            records,
+            update_conflicts=True,
+            unique_fields=["organization", "expense"],
+            update_fields=[
+                "expense_date", "due_date", "paid_date", "amount",
+                "paid_amount", "status", "category", "supplier_name", "description",
+            ],
+            batch_size=_FACT_FINANCIAL_BATCH,
         )
-        count += 1
+        return len(records)
+
+    expenses = Expense.objects.filter(organization=organization)
+    for exp in expenses.iterator(chunk_size=_FACT_FINANCIAL_BATCH):
+        batch.append(
+            FactExpense(
+                organization=organization,
+                expense=exp,
+                # expense_date = paid_at se pago, otherwise due_date
+                expense_date=exp.paid_at if exp.paid_at else exp.due_date,
+                due_date=exp.due_date,
+                paid_date=exp.paid_at,
+                amount=exp.amount,
+                paid_amount=exp.paid_amount,
+                status=exp.status,
+                category=exp.category,
+                supplier_name=exp.supplier_name,
+                description=exp.description,
+            )
+        )
+        if len(batch) >= _FACT_FINANCIAL_BATCH:
+            count += _flush(batch)
+            batch = []
+
+    count += _flush(batch)
     return count
 
 
@@ -293,3 +366,20 @@ def rebuild_for_capability(organization: Organization, capability: str) -> dict[
         summary["fact_expense"] = _rebuild_fact_expense(organization)
 
     return summary
+
+
+@allow_cross_tenant(reason="analytics rebuild itera models de domínio sem context HTTP")
+@transaction.atomic
+def rebuild_financial_facts(organization: Organization) -> dict[str, int]:
+    """Rematerializa as fact tables financeiras (fatura/pagamento/despesa).
+
+    Rede de segurança agendada (Beat): o rebuild normal roda via signal
+    `sync_completed`, mas se ele falhar/for interrompido no bootstrap as fact
+    ficam vazias (foi o caso de FactInvoice). Este rebuild idempotente recompõe
+    o que sustenta os dashboards de inadimplência/aging/DRE.
+    """
+    return {
+        "fact_invoice": _rebuild_fact_invoice(organization),
+        "fact_payment": _rebuild_fact_payment(organization),
+        "fact_expense": _rebuild_fact_expense(organization),
+    }
