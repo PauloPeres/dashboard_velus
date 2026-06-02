@@ -2704,3 +2704,293 @@ def compute_bandwidth_summary(
         "avg_per_customer_gb": round(avg_per_customer / 1024**3, 2),
         "top_consumers": top_consumers,
     }
+
+
+# =============================================================================
+# Customer 360 — visão unificada do cliente (read-only, cross-app)
+# =============================================================================
+_OPEN_TICKET_STATUSES = ("OPEN", "SCHEDULED", "IN_PROGRESS", "FORWARDED")
+
+
+@allow_cross_tenant(reason="busca de clientes roda no escopo da org passada explicitamente")
+def search_customers(
+    organization: Organization, query: str = "", limit: int = 50
+) -> list[dict[str, Any]]:
+    """Lista clientes da org, filtrando por nome, documento ou external_id.
+
+    Busca substring case-insensitive em name/document/external_id. Sem query,
+    retorna os primeiros `limit` clientes por nome — base pra navegação inicial.
+    """
+    from apps.customers.infrastructure.models import Customer
+
+    qs = Customer.objects.filter(organization=organization)
+    q = (query or "").strip()
+    if q:
+        qs = qs.filter(
+            Q(name__icontains=q)
+            | Q(document__icontains=q)
+            | Q(external_id__icontains=q)
+        )
+
+    rows = (
+        qs.annotate(
+            contract_count=Count("contracts", distinct=True),
+            active_contracts=Count(
+                "contracts", filter=Q(contracts__status="ACTIVE"), distinct=True
+            ),
+        )
+        .order_by("name")[:limit]
+    )
+
+    return [
+        {
+            "id": c.id,
+            "external_id": c.external_id,
+            "name": c.name,
+            "document": c.document,
+            "status": c.status,
+            "contract_count": c.contract_count,
+            "active_contracts": c.active_contracts,
+        }
+        for c in rows
+    ]
+
+
+@allow_cross_tenant(reason="agregação cross-app roda no escopo da org/cliente passados")
+def compute_customer_360(
+    organization: Organization, customer: Any
+) -> dict[str, Any]:
+    """Visão unificada read-only de um cliente: contratos, financeiro, suporte, rede.
+
+    Junta dados dos bounded contexts (customers, financial, helpdesk, network,
+    inventory) numa única estrutura. Puramente analítico — nenhuma ação/edição.
+    Base pra atendimento rápido, identificação de risco de churn e CLV.
+    """
+    from apps.customers.infrastructure.models import Contract
+    from apps.financial.infrastructure.models import Invoice, Payment
+    from apps.helpdesk.infrastructure.models import Ticket
+    from apps.inventory.infrastructure.models import ContractEquipment
+    from apps.network.infrastructure.models import BandwidthUsage, Connection
+
+    today = timezone.now().date()
+    timeline: list[dict[str, Any]] = []
+
+    # ── Contratos ──────────────────────────────────────────────────────
+    contracts = list(
+        Contract.objects.filter(
+            organization=organization, customer=customer
+        ).order_by("-activated_at")
+    )
+    contract_rows: list[dict[str, Any]] = []
+    mrr_active = _ZERO
+    for c in contracts:
+        net = c.monthly_amount_net
+        if c.status == "ACTIVE":
+            mrr_active += net
+        contract_rows.append({
+            "external_id": c.external_id,
+            "plan_name": c.plan_name,
+            "status": c.status,
+            "monthly_amount": float(c.monthly_amount or 0),
+            "monthly_amount_addons": float(c.monthly_amount_addons or 0),
+            "monthly_amount_discounts": float(c.monthly_amount_discounts or 0),
+            "monthly_amount_net": float(net),
+            "activated_at": c.activated_at,
+            "canceled_at": c.canceled_at,
+            "address": c.address,
+        })
+        if c.activated_at:
+            timeline.append({
+                "at": c.activated_at,
+                "type": "contract_activated",
+                "label": f"Contrato ativado · {c.plan_name}",
+            })
+        if c.canceled_at:
+            timeline.append({
+                "at": c.canceled_at,
+                "type": "contract_canceled",
+                "label": f"Contrato cancelado · {c.plan_name}",
+            })
+
+    # ── Financeiro ─────────────────────────────────────────────────────
+    invoices_qs = Invoice.objects.filter(
+        organization=organization, contract__customer=customer
+    )
+    pending_q = Q(status="PENDING") | Q(status="OVERDUE")
+    overdue_amount = invoices_qs.filter(
+        pending_q, due_date__lt=today
+    ).aggregate(
+        total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField())
+    )["total"]
+    open_amount = invoices_qs.filter(pending_q).aggregate(
+        total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField())
+    )["total"]
+    paid_total = invoices_qs.filter(status="PAID").aggregate(
+        total=Coalesce(Sum("paid_amount"), _ZERO, output_field=DecimalField())
+    )["total"]
+
+    recent_invoices = []
+    for inv in invoices_qs.order_by("-due_date")[:12]:
+        is_overdue = inv.status in ("PENDING", "OVERDUE") and inv.due_date < today
+        days_overdue = (today - inv.due_date).days if is_overdue else 0
+        recent_invoices.append({
+            "external_id": inv.external_id,
+            "amount": float(inv.amount or 0),
+            "due_date": inv.due_date,
+            "status": inv.status,
+            "paid_at": inv.paid_at,
+            "is_overdue": is_overdue,
+            "days_overdue": days_overdue,
+        })
+
+    payments_qs = Payment.objects.filter(
+        organization=organization, contract__customer=customer
+    )
+    recent_payments = [
+        {
+            "external_id": p.external_id,
+            "amount": float(p.amount or 0),
+            "paid_at": p.paid_at,
+            "method": p.method,
+        }
+        for p in payments_qs.order_by("-paid_at")[:12]
+    ]
+    for p in payments_qs.order_by("-paid_at")[:20]:
+        timeline.append({
+            "at": p.paid_at,
+            "type": "payment",
+            "label": f"Pagamento · R$ {p.amount:.2f} ({p.get_method_display()})",
+        })
+
+    delinquent = overdue_amount > _ZERO
+
+    # ── Suporte ────────────────────────────────────────────────────────
+    tickets_qs = Ticket.objects.filter(
+        organization=organization, customer=customer
+    )
+    open_tickets_qs = tickets_qs.filter(status__in=_OPEN_TICKET_STATUSES)
+    open_tickets_count = open_tickets_qs.count()
+    tickets_total = tickets_qs.count()
+
+    recent_tickets = [
+        {
+            "external_id": t.external_id,
+            "protocol": t.protocol,
+            "status": t.status,
+            "priority": t.priority,
+            "sector": t.sector,
+            "subject": (t.message or "")[:120],
+            "opened_at": t.opened_at,
+            "closed_at": t.closed_at,
+        }
+        for t in tickets_qs.order_by("-opened_at")[:10]
+    ]
+    for t in tickets_qs.order_by("-opened_at")[:20]:
+        if t.opened_at:
+            timeline.append({
+                "at": t.opened_at,
+                "type": "ticket",
+                "label": f"Chamado aberto · {t.protocol or t.external_id}",
+            })
+
+    # SLA: tempo médio de resolução (horas) dos chamados fechados
+    closed = tickets_qs.filter(
+        status="CLOSED", opened_at__isnull=False, closed_at__isnull=False
+    )
+    durations = [
+        (t.closed_at - t.opened_at).total_seconds() / 3600.0
+        for t in closed
+    ]
+    avg_resolution_hours = (
+        round(sum(durations) / len(durations), 1) if durations else None
+    )
+
+    # ── Rede ───────────────────────────────────────────────────────────
+    connections = [
+        {
+            "login": cn.login,
+            "status": cn.status,
+            "ip": cn.ip,
+            "nas_ip": cn.nas_ip,
+            "last_connection_at": cn.last_connection_at,
+        }
+        for cn in Connection.objects.filter(
+            organization=organization, customer=customer
+        ).order_by("login")
+    ]
+
+    bw_qs = BandwidthUsage.objects.filter(
+        organization=organization, customer=customer
+    )
+    bw_totals = bw_qs.aggregate(
+        download=Coalesce(Sum("download_bytes"), 0),
+        upload=Coalesce(Sum("upload_bytes"), 0),
+    )
+    bw_download = bw_totals["download"] or 0
+    bw_upload = bw_totals["upload"] or 0
+    bw_total = bw_download + bw_upload
+
+    # ── Equipamentos em comodato ───────────────────────────────────────
+    equipment = [
+        {
+            "product_name": e.product_name,
+            "serial": e.serial,
+            "mac": e.mac,
+            "status": e.status,
+            "value": float(e.value or 0),
+        }
+        for e in ContractEquipment.objects.filter(
+            organization=organization, contract__customer=customer
+        ).order_by("-status", "product_name")
+    ]
+
+    # ── Cadastro (timeline) ────────────────────────────────────────────
+    if customer.created_at_source:
+        timeline.append({
+            "at": customer.created_at_source,
+            "type": "customer_created",
+            "label": "Cliente cadastrado",
+        })
+
+    timeline.sort(key=lambda ev: ev["at"], reverse=True)
+    timeline = timeline[:30]
+
+    return {
+        "customer": {
+            "id": customer.id,
+            "external_id": customer.external_id,
+            "name": customer.name,
+            "document": customer.document,
+            "email": customer.email,
+            "phone": customer.phone,
+            "status": customer.status,
+            "created_at_source": customer.created_at_source,
+            "source_type": customer.source_type,
+        },
+        "contracts": contract_rows,
+        "contracts_count": len(contract_rows),
+        "mrr_active": float(mrr_active),
+        "financial": {
+            "overdue_amount": float(overdue_amount),
+            "open_amount": float(open_amount),
+            "paid_total": float(paid_total),
+            "delinquent": delinquent,
+            "recent_invoices": recent_invoices,
+            "recent_payments": recent_payments,
+        },
+        "support": {
+            "open_count": open_tickets_count,
+            "total_count": tickets_total,
+            "avg_resolution_hours": avg_resolution_hours,
+            "recent_tickets": recent_tickets,
+        },
+        "network": {
+            "connections": connections,
+            "download_bytes": bw_download,
+            "upload_bytes": bw_upload,
+            "total_bytes": bw_total,
+            "total_gb": round(bw_total / 1024**3, 2),
+        },
+        "equipment": equipment,
+        "timeline": timeline,
+    }

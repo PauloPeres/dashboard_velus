@@ -1,0 +1,77 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Clientes 360 · Velus{% endblock %}
+
+{% block content %}
+<!-- Cabeçalho -->
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Clientes 360</h1>
+    <p class="text-xs text-gray-400 mt-0.5">Visão unificada do cliente — contratos, financeiro, suporte e rede</p>
+  </div>
+</div>
+
+<!-- Busca -->
+<form method="get" class="mb-6">
+  <div class="flex gap-2 max-w-xl">
+    <input
+      type="text" name="q" value="{{ query }}"
+      placeholder="Buscar por nome, documento ou ID externo…"
+      class="flex-1 text-sm bg-white border border-gray-200 rounded-lg px-3 py-2
+             focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+      autofocus>
+    <button type="submit"
+      class="text-sm font-medium px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+      Buscar
+    </button>
+  </div>
+</form>
+
+<!-- Resultados -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+  <div class="p-5 pb-0 flex items-baseline justify-between">
+    <h2 class="text-sm font-semibold text-gray-700">
+      {% if query %}Resultados para "{{ query }}"{% else %}Clientes{% endif %}
+    </h2>
+    <span class="text-xs text-gray-400">{{ result_count|intcomma }} cliente{{ result_count|pluralize }}</span>
+  </div>
+  <table class="min-w-full text-sm mt-4">
+    <thead class="bg-gray-50 border-t border-gray-200">
+      <tr>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nome</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Documento</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Contratos</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase"></th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for r in results %}
+      <tr class="hover:bg-gray-50">
+        <td class="px-4 py-3 font-medium text-gray-900 truncate max-w-[320px]">{{ r.name|default:"—" }}</td>
+        <td class="px-4 py-3 text-gray-500 tabular-nums">{{ r.document|default:"—" }}</td>
+        <td class="px-4 py-3">
+          {% if r.status == 'ACTIVE' %}<span class="inline-flex px-2 py-0.5 text-xs rounded-full bg-emerald-50 text-emerald-700">Ativo</span>
+          {% elif r.status == 'BLOCKED' %}<span class="inline-flex px-2 py-0.5 text-xs rounded-full bg-orange-50 text-orange-700">Bloqueado</span>
+          {% elif r.status == 'CANCELED' %}<span class="inline-flex px-2 py-0.5 text-xs rounded-full bg-red-50 text-red-700">Cancelado</span>
+          {% else %}<span class="inline-flex px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500">—</span>{% endif %}
+        </td>
+        <td class="px-4 py-3 text-right tabular-nums text-gray-600">
+          {{ r.active_contracts }}<span class="text-gray-300">/{{ r.contract_count }}</span>
+        </td>
+        <td class="px-4 py-3 text-right">
+          <a href="{% url 'dashboards:customer_detail' r.id %}" class="text-xs text-blue-600 hover:underline font-medium">Ver 360 →</a>
+        </td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="5" class="px-6 py-8 text-center text-gray-500">
+          {% if query %}Nenhum cliente encontrado para "{{ query }}"{% else %}Nenhum cliente cadastrado{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

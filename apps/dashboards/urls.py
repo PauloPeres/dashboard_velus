@@ -24,4 +24,6 @@ urlpatterns = [
     path("operations/", views.operations, name="operations"),
     path("network/", views.network, name="network"),
     path("sales/", views.sales, name="sales"),
+    path("customers/", views.customers, name="customers"),
+    path("customers/<int:customer_id>/", views.customer_detail, name="customer_detail"),
 ]

@@ -33,6 +33,7 @@ from apps.analytics.application.aggregations import (
     compute_churn_plan_detail,
     compute_churn_summary,
     compute_contract_status_trend,
+    compute_customer_360,
     compute_delinquency_trend,
     compute_dre,
     compute_dre_by_account,
@@ -55,6 +56,7 @@ from apps.analytics.application.aggregations import (
     compute_revenue_forecast,
     compute_sales_funnel,
     compute_top_delinquent_invoices,
+    search_customers,
 )
 from apps.shared.context import get_current_organization
 
@@ -997,5 +999,69 @@ def sales(request: HttpRequest) -> HttpResponse:
             "funnel_chart_json": charts.sales_funnel_chart(funnel["funnel_stages"]),
             "net_adds_chart_json": charts.net_adds_bar_chart(net_adds),
             "lead_origin_chart_json": charts.lead_origin_pie(origin),
+        },
+    )
+
+
+@login_required
+@never_cache
+def customers(request: HttpRequest) -> HttpResponse:
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    query = request.GET.get("q", "").strip()
+    results = search_customers(org, query=query, limit=100)
+
+    return render(
+        request,
+        "dashboards/customers_list.html",
+        {
+            "query": query,
+            "results": results,
+            "result_count": len(results),
+        },
+    )
+
+
+@login_required
+@never_cache
+def customer_detail(request: HttpRequest, customer_id: int) -> HttpResponse:
+    from django.http import Http404
+
+    from apps.customers.infrastructure.models import Customer
+
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    customer = (
+        Customer.objects.filter(organization=org, pk=customer_id).first()
+    )
+    if customer is None:
+        raise Http404("Cliente não encontrado")
+
+    data = compute_customer_360(org, customer)
+    fin = data["financial"]
+
+    return render(
+        request,
+        "dashboards/customer_detail.html",
+        {
+            "c": data["customer"],
+            "contracts": data["contracts"],
+            "contracts_count": data["contracts_count"],
+            "mrr_active_str": _fmt_brl(data["mrr_active"]),
+            "financial": fin,
+            "overdue_str": _fmt_brl(fin["overdue_amount"]),
+            "open_str": _fmt_brl(fin["open_amount"]),
+            "paid_total_str": _fmt_brl(fin["paid_total"]),
+            "support": data["support"],
+            "network": data["network"],
+            "network_total_gb_str": f"{data['network']['total_gb']:,.2f}".replace(",", "."),
+            "equipment": data["equipment"],
+            "timeline": data["timeline"],
         },
     )
