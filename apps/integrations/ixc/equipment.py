@@ -4,7 +4,8 @@ Endpoint IXC: `cliente_contrato_comodato` (equipamentos em comodato por contrato
 Cada registro é um equipamento (ONT, roteador, switch) emprestado ao cliente,
 atrelado a um contrato via `id_cliente_contrato`.
 
-Status IXC mapeado: A (ativo/em campo) -> ACTIVE, D (devolvido) -> RETURNED.
+Status IXC (`status_comodato`): E (entregue/em campo) -> ACTIVE,
+D (devolvido) -> RETURNED, B (baixado/fora de campo) -> RETURNED.
 Demais valores -> UNKNOWN (valor cru preservado em raw_extras).
 """
 
@@ -26,11 +27,16 @@ from .schemas import IxcEquipmentSchema
 
 _logger = structlog.get_logger(__name__)
 
-# Mapeia o status do comodato IXC pro status canônico do EquipmentDTO.
+# Mapeia o status do comodato IXC (`status_comodato`) pro status canônico do
+# EquipmentDTO. E=Entregue (saída pro cliente, em campo) -> ACTIVE;
+# D=Devolvido e B=Baixado (de volta ao estoque / fora de campo) -> RETURNED.
+# A/S mantidos por compat com fixtures e bases que ainda usam o código antigo.
 _STATUS_MAP: dict[str, str] = {
+    "E": "ACTIVE",
     "A": "ACTIVE",
     "S": "ACTIVE",
     "D": "RETURNED",
+    "B": "RETURNED",
     "N": "RETURNED",
 }
 

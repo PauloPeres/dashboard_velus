@@ -720,13 +720,29 @@ class IxcEquipmentSchema(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
 
     id: str = Field(...)
-    id_cliente_contrato: str = Field(default="")  # FK pro contrato
+    # A API real expõe `id_contrato`; mantemos o alias canônico para fixtures.
+    id_cliente_contrato: str = Field(
+        default="",
+        validation_alias=AliasChoices("id_cliente_contrato", "id_contrato"),
+    )  # FK pro contrato
     id_produto: str = Field(default="")
     descricao: str = Field(default="")  # nome do produto, quando a API resolve
-    serial: str = Field(default="")
+    # API real: `numero_serie`.
+    serial: str = Field(
+        default="",
+        validation_alias=AliasChoices("serial", "numero_serie"),
+    )
     mac: str = Field(default="")
-    valor: str = Field(default="0")
-    status: str = Field(default="")  # A=Ativo (em campo), D=Devolvido
+    # API real: `valor_total` (cai pra `valor_unitario` quando ausente).
+    valor: str = Field(
+        default="0",
+        validation_alias=AliasChoices("valor", "valor_total", "valor_unitario"),
+    )
+    # API real: `status_comodato` — E=Entregue/em campo, D=Devolvido, B=Baixado.
+    status: str = Field(
+        default="",
+        validation_alias=AliasChoices("status", "status_comodato"),
+    )
 
     @field_validator(
         "id", "id_cliente_contrato", "id_produto", "descricao",
