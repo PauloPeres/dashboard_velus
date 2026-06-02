@@ -1379,3 +1379,154 @@ class TestIxcOpportunityToDto:
         dtos = list(source.list_opportunities())
         assert len(dtos) == 1
         assert dtos[0].external_id == "2"
+
+
+# =============================================================================
+# Bandwidth — schema radusuarios_consumo + _to_dto
+# =============================================================================
+from datetime import date as _date
+
+from apps.integrations.ixc.bandwidth import IxcBandwidthUsageSource
+from apps.integrations.ixc.schemas import IxcBandwidthSchema
+from apps.network.domain.dto import BandwidthUsageDTO
+
+
+def _sample_ixc_consumo(**overrides: Any) -> dict[str, Any]:
+    """Fixture inline de um registro `radusuarios_consumo` do IXC."""
+    base = {
+        "id": "900",
+        "id_cliente": "42",
+        "acctinputoctets": "5368709120",
+        "acctoutputoctets": "1073741824",
+        "acctsessiontime": "86400",
+        "data": "2025-05-20",
+        # Campo extra desconhecido — deve ir pra raw_extras
+        "id_filial": "1",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestIxcBandwidthSchema:
+    def test_parses_canonical_response(self) -> None:
+        schema = IxcBandwidthSchema.model_validate(_sample_ixc_consumo())
+        assert schema.id == "900"
+        assert schema.id_cliente == "42"
+        assert schema.acctinputoctets == 5368709120
+        assert schema.acctoutputoctets == 1073741824
+        assert schema.acctsessiontime == 86400
+        assert schema.data == _date(2025, 5, 20)
+
+    def test_coerces_int_id_to_string(self) -> None:
+        schema = IxcBandwidthSchema.model_validate(
+            _sample_ixc_consumo(id=900, id_cliente=42)
+        )
+        assert schema.id == "900"
+        assert schema.id_cliente == "42"
+
+    def test_coerces_numeric_octets(self) -> None:
+        schema = IxcBandwidthSchema.model_validate(
+            _sample_ixc_consumo(acctinputoctets=1024, acctoutputoctets=2048)
+        )
+        assert schema.acctinputoctets == 1024
+        assert schema.acctoutputoctets == 2048
+
+    def test_empty_octets_become_zero(self) -> None:
+        schema = IxcBandwidthSchema.model_validate(
+            _sample_ixc_consumo(acctinputoctets="", acctoutputoctets="")
+        )
+        assert schema.acctinputoctets == 0
+        assert schema.acctoutputoctets == 0
+
+    def test_parses_datetime_data_to_date(self) -> None:
+        schema = IxcBandwidthSchema.model_validate(
+            _sample_ixc_consumo(data="2025-05-20 13:45:00")
+        )
+        assert schema.data == _date(2025, 5, 20)
+
+    def test_zero_date_becomes_none(self) -> None:
+        schema = IxcBandwidthSchema.model_validate(
+            _sample_ixc_consumo(data="0000-00-00")
+        )
+        assert schema.data is None
+
+    def test_defaults_when_optional_missing(self) -> None:
+        schema = IxcBandwidthSchema.model_validate({"id": "900"})
+        assert schema.id_cliente == ""
+        assert schema.acctinputoctets == 0
+        assert schema.acctsessiontime == 0
+        assert schema.data is None
+
+    def test_extras_captured(self) -> None:
+        schema = IxcBandwidthSchema.model_validate(_sample_ixc_consumo())
+        assert schema.get_extras().get("id_filial") == "1"
+
+    def test_rejects_missing_id(self) -> None:
+        raw = _sample_ixc_consumo()
+        del raw["id"]
+        with pytest.raises(Exception):  # noqa: B017 — ValidationError
+            IxcBandwidthSchema.model_validate(raw)
+
+
+class TestIxcBandwidthSourceDeclaration:
+    def test_implements_port_contract(self) -> None:
+        assert IxcBandwidthUsageSource.source_type == SourceType.IXC
+        assert IxcBandwidthUsageSource.capabilities == frozenset(
+            {Capability.BANDWIDTH}
+        )
+
+
+class TestIxcBandwidthToDto:
+    def test_basic_mapping(self) -> None:
+        schema = IxcBandwidthSchema.model_validate(_sample_ixc_consumo())
+        dto = IxcBandwidthUsageSource._to_dto(schema)
+        assert isinstance(dto, BandwidthUsageDTO)
+        assert dto.external_id == "900"
+        assert dto.customer_external_id == "42"
+        assert dto.download_bytes == 5368709120
+        assert dto.upload_bytes == 1073741824
+        assert dto.session_time == 86400
+        assert dto.reference_date == _date(2025, 5, 20)
+
+    def test_lists_single_page_translates_to_dtos(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        respx_mock.get(f"{API_URL}/radusuarios_consumo").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        _sample_ixc_consumo(id="1"),
+                        _sample_ixc_consumo(id="2", acctinputoctets="2048"),
+                    ],
+                },
+            )
+        )
+        source = IxcBandwidthUsageSource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_bandwidth_usage())
+        assert len(dtos) == 2
+        assert all(isinstance(d, BandwidthUsageDTO) for d in dtos)
+        assert dtos[1].download_bytes == 2048
+
+    def test_invalid_record_skipped_not_raised(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        respx_mock.get(f"{API_URL}/radusuarios_consumo").mock(
+            return_value=Response(
+                200,
+                json={
+                    "page": "1",
+                    "total": "2",
+                    "registros": [
+                        {"id_cliente": "42"},  # falta id → pulado
+                        _sample_ixc_consumo(id="2"),
+                    ],
+                },
+            )
+        )
+        source = IxcBandwidthUsageSource(base_url=BASE_URL, user_id="1", api_token="t")
+        dtos = list(source.list_bandwidth_usage())
+        assert len(dtos) == 1
+        assert dtos[0].external_id == "2"

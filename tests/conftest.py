@@ -17,6 +17,7 @@ import pytest
 from apps.customers.domain.dto import ContractDTO, CustomerDTO
 from apps.financial.domain.dto import InvoiceDTO, PaymentDTO
 from apps.helpdesk.domain.dto import TicketDTO
+from apps.integrations.fake.bandwidth import FakeBandwidthUsageSource
 from apps.integrations.fake.connections import FakeConnectionSource
 from apps.integrations.fake.contracts import FakeContractSource
 from apps.integrations.fake.customers import FakeCustomerSource
@@ -28,7 +29,7 @@ from apps.integrations.fake.tickets import FakeTicketSource
 from apps.integrations.shared.enums import Capability, SourceType
 from apps.inventory.domain.dto import EquipmentDTO
 from apps.sales.domain.dto import LeadDTO, OpportunityDTO
-from apps.network.domain.dto import ConnectionDTO
+from apps.network.domain.dto import BandwidthUsageDTO, ConnectionDTO
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import (
     Organization,
@@ -51,6 +52,7 @@ def _clean_state_around_test() -> Iterator[None]:
     FakePaymentSource.reset_seed()
     FakeTicketSource.reset_seed()
     FakeConnectionSource.reset_seed()
+    FakeBandwidthUsageSource.reset_seed()
     FakeEquipmentSource.reset_seed()
     FakeLeadSource.reset_seed()
     FakeOpportunitySource.reset_seed()
@@ -64,6 +66,7 @@ def _clean_state_around_test() -> Iterator[None]:
         FakePaymentSource.reset_seed()
         FakeTicketSource.reset_seed()
         FakeConnectionSource.reset_seed()
+        FakeBandwidthUsageSource.reset_seed()
         FakeEquipmentSource.reset_seed()
         FakeLeadSource.reset_seed()
         FakeOpportunitySource.reset_seed()
@@ -288,6 +291,30 @@ def sample_connection_dtos() -> list[ConnectionDTO]:
 
 
 @pytest.fixture
+def sample_bandwidth_dtos() -> list[BandwidthUsageDTO]:
+    from datetime import date
+
+    return [
+        BandwidthUsageDTO(
+            external_id="bw-1",
+            customer_external_id="ext-1",
+            download_bytes=5_368_709_120,  # 5 GB
+            upload_bytes=1_073_741_824,  # 1 GB
+            session_time=86_400,
+            reference_date=date(2025, 5, 20),
+        ),
+        BandwidthUsageDTO(
+            external_id="bw-2",
+            customer_external_id="ext-2",
+            download_bytes=1_073_741_824,  # 1 GB
+            upload_bytes=268_435_456,  # 256 MB
+            session_time=3_600,
+            reference_date=date(2025, 5, 18),
+        ),
+    ]
+
+
+@pytest.fixture
 def sample_equipment_dtos() -> list[EquipmentDTO]:
     from decimal import Decimal
 
@@ -383,6 +410,7 @@ datasource_fake_invoices_a = _make_datasource_factory(Capability.INVOICES)
 datasource_fake_payments_a = _make_datasource_factory(Capability.PAYMENTS)
 datasource_fake_tickets_a = _make_datasource_factory(Capability.TICKETS)
 datasource_fake_connections_a = _make_datasource_factory(Capability.CONNECTIONS)
+datasource_fake_bandwidth_a = _make_datasource_factory(Capability.BANDWIDTH)
 datasource_fake_equipment_a = _make_datasource_factory(Capability.EQUIPMENT)
 datasource_fake_leads_a = _make_datasource_factory(Capability.LEADS)
 datasource_fake_opportunities_a = _make_datasource_factory(Capability.OPPORTUNITIES)
