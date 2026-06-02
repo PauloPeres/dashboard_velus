@@ -57,11 +57,13 @@ def _ixc_blocked_since(raw_extras: dict[str, Any] | None) -> date_cls | None:
     O `FactContractStatusDaily` só sabe quando o contrato ficou bloqueado se há
     histórico de um dia NÃO bloqueado anterior. Contratos já bloqueados antes do
     início dos snapshots não têm essa âncora — caem no sentinela 999 dias.
-    O IXC guarda a data real em `dt_ult_bloq_manual`/`dt_ult_bloq_auto`; usamos
-    a mais recente como fallback autoritativo.
+    O IXC guarda a data real em `dt_ult_bloq_manual`/`dt_ult_bloq_auto`; quando
+    o bloqueio é automático esses campos vêm vazios, mas `data_inicial_suspensao`
+    marca o início da suspensão. Usamos a mais recente como fallback autoritativo.
+    Datas nulas do IXC chegam como ''/'0000-00-00' e são descartadas.
     """
     candidates: list[date_cls] = []
-    for key in ("dt_ult_bloq_manual", "dt_ult_bloq_auto"):
+    for key in ("dt_ult_bloq_manual", "dt_ult_bloq_auto", "data_inicial_suspensao"):
         value = str((raw_extras or {}).get(key) or "").strip()
         if not value:
             continue
