@@ -1,0 +1,17 @@
+Velus — Digest {{ period_label }} de risco de churn
+{{ organization.name }} · {{ generated_at|date:"d/m/Y H:i" }}
+
+RESUMO
+  Clientes em risco: {{ summary.total_at_risk }}
+  Alto risco: {{ summary.high }}
+  Médio risco: {{ summary.medium }}
+  Baixo risco: {{ summary.low }}
+  Receita em risco (alto+médio): {{ revenue_at_risk_str }}
+
+CLIENTES EM MAIOR RISCO
+{% for r in top %}  {{ forloop.counter }}. {{ r.name|default:"—" }} — nível {{ r.level }}, score {{ r.score }}, MRR R$ {{ r.monthly_amount|floatformat:0 }}{% if r.ml_probability_pct is not None %}, ML {{ r.ml_probability_pct }}%{% endif %}
+{% empty %}  Nenhum cliente em risco identificado.
+{% endfor %}
+—
+Você recebe este email porque ativou o digest {{ period_label }} no seu perfil.
+Para deixar de receber, desative a preferência em Configurações.

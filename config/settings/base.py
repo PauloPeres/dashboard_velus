@@ -298,6 +298,21 @@ CELERY_BEAT_SCHEDULE: dict = {
         "schedule": crontab(minute=0, hour=4),  # 04:00 todo dia
         "options": {"queue": "celery"},
     },
+    "train-churn-ml-weekly": {
+        "task": "apps.analytics.tasks.dispatch_churn_ml_train_for_all_orgs",
+        "schedule": crontab(minute=30, hour=2, day_of_week=1),  # seg 02:30
+        "options": {"queue": "celery"},
+    },
+    "send-churn-digest-weekly": {
+        "task": "apps.analytics.tasks.dispatch_churn_digest_weekly",
+        "schedule": crontab(minute=0, hour=8, day_of_week=1),  # seg 08:00
+        "options": {"queue": "celery"},
+    },
+    "send-churn-digest-monthly": {
+        "task": "apps.analytics.tasks.dispatch_churn_digest_monthly",
+        "schedule": crontab(minute=0, hour=8, day_of_month=1),  # dia 1, 08:00
+        "options": {"queue": "celery"},
+    },
 }
 
 # =============================================================================

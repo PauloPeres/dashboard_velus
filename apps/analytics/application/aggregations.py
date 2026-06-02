@@ -3075,6 +3075,12 @@ def compute_top_risk_customers(
             "score": r.score,
             "level": r.level,
             "monthly_amount": float(r.monthly_amount or 0),
+            "ml_probability": float(r.ml_probability) if r.ml_probability is not None else None,
+            "ml_probability_pct": (
+                int(round(float(r.ml_probability) * 100))
+                if r.ml_probability is not None
+                else None
+            ),
             "signals": r.signals or [],
         }
         for r in rows

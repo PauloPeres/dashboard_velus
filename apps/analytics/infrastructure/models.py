@@ -278,6 +278,11 @@ class ChurnRiskScore(TenantModel):
     monthly_amount = models.DecimalField(
         max_digits=12, decimal_places=2, default=0
     )
+    # Probabilidade de churn (0–1) do modelo ML, quando há modelo treinado pra
+    # org e o cliente está ativo. Null = sem modelo / amostra insuficiente.
+    ml_probability = models.DecimalField(
+        max_digits=5, decimal_places=4, null=True, blank=True
+    )
     computed_at = models.DateTimeField()
 
     class Meta:
@@ -296,6 +301,44 @@ class ChurnRiskScore(TenantModel):
 
     def __str__(self) -> str:
         return f"ChurnRisk {self.customer_id} · {self.level} ({self.score})"
+
+
+class ChurnRiskModel(TenantModel):
+    """Modelo de regressão logística treinado por organização (1 corrente).
+
+    Pesos e parâmetros de padronização são persistidos como JSON — o cluster
+    k3s tem filesystem efêmero, então nada de pickle em disco. Treinado a
+    partir de cancelamentos históricos (`apps.analytics.application.churn_ml`);
+    consumido no scoring pra preencher `ChurnRiskScore.ml_probability`.
+
+    `weights` = {feature → coef}, `bias` = intercepto, `feature_means`/
+    `feature_stds` = padronização aplicada às features no treino e no score.
+    """
+
+    feature_names = models.JSONField(default=list)
+    weights = models.JSONField(default=dict)
+    bias = models.FloatField(default=0.0)
+    feature_means = models.JSONField(default=dict)
+    feature_stds = models.JSONField(default=dict)
+
+    n_samples = models.PositiveIntegerField(default=0)
+    n_positive = models.PositiveIntegerField(default=0)
+    train_accuracy = models.FloatField(default=0.0)
+
+    trained_at = models.DateTimeField()
+
+    class Meta:
+        verbose_name = _("Modelo de risco de churn")
+        verbose_name_plural = _("Modelos de risco de churn")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization"],
+                name="unique_churn_model_per_org",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"ChurnModel {self.organization_id} · n={self.n_samples}"
 
 
 # =============================================================================

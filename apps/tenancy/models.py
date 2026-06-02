@@ -76,6 +76,14 @@ class User(AbstractUser):
     username = None  # type: ignore[assignment]  # remove o campo do AbstractUser
     email = models.EmailField(_("email"), unique=True)
 
+    # Preferências opt-in de digest de risco de churn por email (default off).
+    churn_digest_weekly = models.BooleanField(
+        _("Digest semanal de risco de churn"), default=False
+    )
+    churn_digest_monthly = models.BooleanField(
+        _("Digest mensal de risco de churn"), default=False
+    )
+
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS: list[str] = []
 

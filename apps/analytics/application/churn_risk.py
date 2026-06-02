@@ -6,7 +6,9 @@ sincronizados (sem ML, sem fontes novas) e persiste em `ChurnRiskScore`:
     1. Contrato bloqueado há ≥ 30 dias consecutivos        peso 40
     2. Atraso recorrente (≥ 3 faturas vencidas em 6 meses)  peso 25
     3. Chamados frequentes (≥ 3 nos últimos 30 dias)        peso 20
-    4. Offline com contrato ativo                           peso 15
+    4. Downgrade de plano (valor mensal caiu vs anterior)   peso 20
+    5. Offline com contrato ativo                           peso 15
+    6. Queda brusca de consumo de banda (≥ 70% em 30d)      peso 15
 
 Score = soma dos pesos disparados (capado em 100). Nível:
     HIGH ≥ 50 · MEDIUM ≥ 25 · LOW > 0
@@ -42,7 +44,13 @@ _ZERO = Decimal("0.00")
 W_BLOCKED = 40
 W_LATE_PAYMENTS = 25
 W_FREQUENT_TICKETS = 20
+W_DOWNGRADE = 20
 W_OFFLINE = 15
+W_BANDWIDTH_DROP = 15
+W_ML = 30  # sinal de alta probabilidade prevista pelo modelo ML
+
+# ── ML ──────────────────────────────────────────────────────────────────
+ML_SIGNAL_THRESHOLD = Decimal("0.5")  # prob ≥ 50% dispara o sinal de ML
 
 # ── Limiares ────────────────────────────────────────────────────────────
 BLOCKED_MIN_DAYS = 30
@@ -50,6 +58,10 @@ LATE_PAYMENTS_WINDOW_DAYS = 180  # ~6 meses
 LATE_PAYMENTS_MIN = 3
 TICKETS_WINDOW_DAYS = 30
 TICKETS_MIN = 3
+# Queda de banda: janela recente vs janela anterior de mesmo tamanho.
+BANDWIDTH_WINDOW_DAYS = 30
+BANDWIDTH_DROP_RATIO = Decimal("0.3")  # recente < 30% do anterior = queda ≥ 70%
+BANDWIDTH_MIN_PRIOR_BYTES = 1_000_000_000  # 1 GB — evita ruído de base ínfima
 
 LEVEL_HIGH_MIN = 50
 LEVEL_MEDIUM_MIN = 25
@@ -82,13 +94,20 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
     mrr: dict[int, Decimal] = defaultdict(lambda: _ZERO)
     active_customers: set[int] = set()
     blocked_contract_customer: dict[int, int] = {}
+    # (source_type, external_id) → customer_id — base pro sinal de downgrade.
+    contract_keys: dict[tuple[str, str], int] = {}
 
     # ── Receita em risco + população relevante ──────────────────────────
     # Só contratos ACTIVE/BLOCKED geram MRR — base pra "receita em risco".
     for c in Contract.objects.filter(
         organization=organization, status__in=("ACTIVE", "BLOCKED")
     ):
+        # Contrato sem cliente resolvido (sync chegou antes do Customer) não
+        # pode ser atribuído a um risco — ignora até a FK ser preenchida.
+        if c.customer_id is None:
+            continue
         mrr[c.customer_id] += c.monthly_amount_net
+        contract_keys[(c.source_type, c.external_id)] = c.customer_id
         if c.status == "ACTIVE":
             active_customers.add(c.customer_id)
         elif c.status == "BLOCKED":
@@ -161,6 +180,16 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
                 "weight": W_OFFLINE,
             })
 
+    # ── Sinal 5: downgrade de plano (valor mensal caiu vs versão anterior) ─
+    _apply_downgrade_signal(organization, contract_keys, signals)
+
+    # ── Sinal 6: queda brusca de consumo de banda ───────────────────────
+    _apply_bandwidth_drop_signal(organization, today, active_customers, signals)
+
+    # ── Sinal 7: ML — alta probabilidade prevista de churn ──────────────
+    # Complementar às regras: pode flagar clientes ativos sem sinal de regra.
+    ml_probs = _apply_ml_signal(organization, active_customers, signals)
+
     # ── Persistência idempotente ────────────────────────────────────────
     counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
     for cid, sig_list in signals.items():
@@ -171,6 +200,7 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
             {k: v for k, v in s.items() if not k.startswith("_")}
             for s in sorted(sig_list, key=lambda s: s["weight"], reverse=True)
         ]
+        prob = ml_probs.get(cid)
         ChurnRiskScore.objects.update_or_create(
             organization=organization,
             customer_id=cid,
@@ -179,6 +209,9 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
                 "level": level,
                 "signals": clean,
                 "monthly_amount": mrr[cid],
+                "ml_probability": (
+                    Decimal(str(round(prob, 4))) if prob is not None else None
+                ),
                 "computed_at": now,
             },
         )
@@ -252,3 +285,149 @@ def _apply_blocked_signal(
             "weight": W_BLOCKED,
             "_days": days,
         })
+
+
+def _apply_downgrade_signal(
+    organization: Organization,
+    contract_keys: dict[tuple[str, str], int],
+    signals: dict[int, list[dict[str, Any]]],
+) -> None:
+    """Dispara o sinal de downgrade comparando a versão SCD2 atual do contrato
+    com a versão imediatamente anterior em DimContract.
+
+    Downgrade = monthly_amount da versão `current` < monthly_amount da versão
+    anterior (maior `valid_from` entre as não-current). Reduzir o plano é um
+    sinal clássico de cliente prestes a sair.
+    """
+    from apps.analytics.infrastructure.models import DimContract
+
+    if not contract_keys:
+        return
+
+    external_ids = {ext for (_src, ext) in contract_keys}
+    # Agrupa versões por (source_type, external_id), ordenadas por valid_from.
+    versions: dict[tuple[str, str], list[DimContract]] = defaultdict(list)
+    for dim in (
+        DimContract.objects.filter(
+            organization=organization, external_id__in=external_ids
+        )
+        .only("source_type", "external_id", "monthly_amount", "current", "valid_from")
+        .order_by("valid_from")
+    ):
+        versions[(dim.source_type, dim.external_id)].append(dim)
+
+    for key, customer_id in contract_keys.items():
+        history = versions.get(key)
+        if not history or len(history) < 2:
+            continue
+        current = next((d for d in history if d.current), history[-1])
+        prior = [d for d in history if d is not current]
+        if not prior:
+            continue
+        # Versão anterior = a de maior valid_from entre as restantes.
+        previous = max(prior, key=lambda d: d.valid_from)
+        if current.monthly_amount >= previous.monthly_amount:
+            continue
+        signals[customer_id].append({
+            "code": "PLAN_DOWNGRADE",
+            "label": "Downgrade de plano",
+            "detail": (
+                f"Plano reduziu de R$ {previous.monthly_amount} "
+                f"para R$ {current.monthly_amount}"
+            ),
+            "weight": W_DOWNGRADE,
+        })
+
+
+def _apply_bandwidth_drop_signal(
+    organization: Organization,
+    today: Any,
+    active_customers: set[int],
+    signals: dict[int, list[dict[str, Any]]],
+) -> None:
+    """Dispara o sinal de queda brusca de consumo comparando a banda usada na
+    janela recente (30d) com a janela anterior de mesmo tamanho (30–60d).
+
+    Queda ≥ 70% (recente < 30% do anterior), exigindo base mínima na janela
+    anterior pra evitar ruído. Só clientes ativos — quem já saiu não interessa.
+    """
+    from apps.network.infrastructure.models import BandwidthUsage
+
+    if not active_customers:
+        return
+
+    recent_start = today - timedelta(days=BANDWIDTH_WINDOW_DAYS)
+    prior_start = today - timedelta(days=2 * BANDWIDTH_WINDOW_DAYS)
+
+    recent: dict[int, int] = defaultdict(int)
+    prior: dict[int, int] = defaultdict(int)
+    for row in (
+        BandwidthUsage.objects.filter(
+            organization=organization,
+            customer_id__in=active_customers,
+            reference_date__gte=prior_start,
+            reference_date__lt=today,
+        ).values("customer_id", "reference_date", "download_bytes", "upload_bytes")
+    ):
+        cid = row["customer_id"]
+        total = (row["download_bytes"] or 0) + (row["upload_bytes"] or 0)
+        if row["reference_date"] >= recent_start:
+            recent[cid] += total
+        else:
+            prior[cid] += total
+
+    for cid, prior_bytes in prior.items():
+        if prior_bytes < BANDWIDTH_MIN_PRIOR_BYTES:
+            continue
+        recent_bytes = recent.get(cid, 0)
+        if recent_bytes >= prior_bytes * BANDWIDTH_DROP_RATIO:
+            continue
+        drop_pct = int((1 - Decimal(recent_bytes) / Decimal(prior_bytes)) * 100)
+        signals[cid].append({
+            "code": "BANDWIDTH_DROP",
+            "label": "Queda de consumo",
+            "detail": f"Consumo de banda caiu {drop_pct}% no último mês",
+            "weight": W_BANDWIDTH_DROP,
+        })
+
+
+def _apply_ml_signal(
+    organization: Organization,
+    active_customers: set[int],
+    signals: dict[int, list[dict[str, Any]]],
+) -> dict[int, float]:
+    """Pontua os clientes ativos com o modelo ML (se houver) e dispara o sinal
+    de ML para os de alta probabilidade.
+
+    Retorna {customer_id → probabilidade} pra gravar `ml_probability` na
+    persistência. Sem modelo treinado, retorna vazio (fallback para regras).
+    """
+    from apps.analytics.application.churn_ml import (
+        compute_features,
+        get_current_model,
+        predict_probabilities,
+    )
+
+    if not active_customers:
+        return {}
+    model = get_current_model(organization)
+    if model is None:
+        return {}
+
+    features_all, _churned, _active = compute_features(organization)
+    features = {
+        cid: vec for cid, vec in features_all.items() if cid in active_customers
+    }
+    probs = predict_probabilities(model, features)
+
+    threshold = float(ML_SIGNAL_THRESHOLD)
+    for cid, prob in probs.items():
+        if prob < threshold:
+            continue
+        signals[cid].append({
+            "code": "ML_HIGH_RISK",
+            "label": "ML: alta probabilidade",
+            "detail": f"Modelo prevê {int(prob * 100)}% de chance de churn",
+            "weight": W_ML,
+        })
+    return probs

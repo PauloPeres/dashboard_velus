@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;margin:0;padding:24px;background:#f9fafb;">
+  <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:24px;">
+    <h1 style="font-size:18px;margin:0 0 4px;">Risco de churn — digest {{ period_label }}</h1>
+    <p style="font-size:12px;color:#9ca3af;margin:0 0 20px;">
+      {{ organization.name }} · {{ generated_at|date:"d/m/Y H:i" }}
+    </p>
+
+    <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+      <tr>
+        <td style="padding:8px;background:#f3f4f6;border-radius:8px;">Clientes em risco</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;">{{ summary.total_at_risk }}</td>
+      </tr>
+      <tr>
+        <td style="padding:8px;">Alto risco</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;color:#dc2626;">{{ summary.high }}</td>
+      </tr>
+      <tr>
+        <td style="padding:8px;">Médio risco</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;color:#f97316;">{{ summary.medium }}</td>
+      </tr>
+      <tr>
+        <td style="padding:8px;">Receita em risco (alto+médio)</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;">{{ revenue_at_risk_str }}</td>
+      </tr>
+    </table>
+
+    <h2 style="font-size:14px;margin:0 0 8px;">Clientes em maior risco</h2>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead>
+        <tr style="text-align:left;color:#6b7280;">
+          <th style="padding:6px;border-bottom:1px solid #e5e7eb;">Cliente</th>
+          <th style="padding:6px;border-bottom:1px solid #e5e7eb;">Nível</th>
+          <th style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">Score</th>
+          <th style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">MRR</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in top %}
+        <tr>
+          <td style="padding:6px;border-bottom:1px solid #f3f4f6;">{{ r.name|default:"—" }}</td>
+          <td style="padding:6px;border-bottom:1px solid #f3f4f6;">{{ r.level }}</td>
+          <td style="padding:6px;border-bottom:1px solid #f3f4f6;text-align:right;">{{ r.score }}</td>
+          <td style="padding:6px;border-bottom:1px solid #f3f4f6;text-align:right;">R$ {{ r.monthly_amount|floatformat:0 }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" style="padding:12px;text-align:center;color:#9ca3af;">Nenhum cliente em risco identificado.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <p style="font-size:11px;color:#9ca3af;margin-top:24px;">
+      Você recebe este email porque ativou o digest {{ period_label }} no seu perfil.
+      Para deixar de receber, desative a preferência em Configurações.
+    </p>
+  </div>
+</body>
+</html>

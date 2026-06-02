@@ -1095,3 +1095,26 @@ def risk(request: HttpRequest) -> HttpResponse:
             "risk_signal_json": charts.churn_risk_signal_bar(summary["signal_distribution"]),
         },
     )
+
+
+@login_required
+@never_cache
+def settings_view(request: HttpRequest) -> HttpResponse:
+    """Preferências do usuário — opt-in dos digests de risco de churn por email."""
+    user = request.user
+    saved = False
+    if request.method == "POST":
+        user.churn_digest_weekly = bool(request.POST.get("churn_digest_weekly"))
+        user.churn_digest_monthly = bool(request.POST.get("churn_digest_monthly"))
+        user.save(update_fields=["churn_digest_weekly", "churn_digest_monthly"])
+        saved = True
+
+    return render(
+        request,
+        "dashboards/settings.html",
+        {
+            "churn_digest_weekly": user.churn_digest_weekly,
+            "churn_digest_monthly": user.churn_digest_monthly,
+            "saved": saved,
+        },
+    )

@@ -149,6 +149,9 @@
             {% if user.is_authenticated %}
             <p class="text-xs text-gray-500 truncate mb-2 leading-tight">{{ user.email }}</p>
             <div class="flex items-center gap-2 flex-wrap">
+                <a href="{% url 'dashboards:settings' %}"
+                   class="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded hover:bg-gray-200 transition-colors"
+                   title="Preferências da conta">Configurações</a>
                 {% if user.is_superuser %}
                 <a href="/admin/"
                    class="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded hover:bg-gray-200 transition-colors"

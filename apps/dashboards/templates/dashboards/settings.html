@@ -1,0 +1,53 @@
+{% extends "dashboards/base.html" %}
+
+{% block title %}Configurações · Velus{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl">
+  <h1 class="text-2xl font-bold text-gray-900 mb-1">Configurações</h1>
+  <p class="text-xs text-gray-400 mb-6">Preferências da sua conta</p>
+
+  {% if saved %}
+  <div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-6">
+    <p class="text-sm text-green-800">Preferências salvas.</p>
+  </div>
+  {% endif %}
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+    <h2 class="text-sm font-semibold text-gray-700 mb-1">Digests de risco de churn por email</h2>
+    <p class="text-xs text-gray-400 mb-4">
+      Receba por email um resumo dos clientes em maior risco de cancelamento.
+      Você pode ativar ou desativar a qualquer momento.
+    </p>
+
+    <form method="post" action="{% url 'dashboards:settings' %}">
+      {% csrf_token %}
+
+      <label class="flex items-start gap-3 mb-4 cursor-pointer">
+        <input type="checkbox" name="churn_digest_weekly" value="1"
+               {% if churn_digest_weekly %}checked{% endif %}
+               class="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-400">
+        <span>
+          <span class="block text-sm font-medium text-gray-800">Digest semanal</span>
+          <span class="block text-xs text-gray-500">Resumo enxuto toda segunda-feira de manhã.</span>
+        </span>
+      </label>
+
+      <label class="flex items-start gap-3 mb-6 cursor-pointer">
+        <input type="checkbox" name="churn_digest_monthly" value="1"
+               {% if churn_digest_monthly %}checked{% endif %}
+               class="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-400">
+        <span>
+          <span class="block text-sm font-medium text-gray-800">Digest mensal completo</span>
+          <span class="block text-xs text-gray-500">Panorama detalhado no primeiro dia de cada mês.</span>
+        </span>
+      </label>
+
+      <button type="submit"
+              class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors">
+        Salvar preferências
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

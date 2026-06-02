@@ -198,3 +198,106 @@ def _run_churn_risk(*, organization_id: int) -> dict[str, Any]:
     org = Organization.objects.get(pk=organization_id)
     set_current_organization(org)
     return compute_churn_risk_scores(org)
+
+
+# =============================================================================
+# Churn ML — treino do modelo de churn por org (Beat semanal)
+# =============================================================================
+@shared_task(name="apps.analytics.tasks.dispatch_churn_ml_train_for_all_orgs")
+def dispatch_churn_ml_train_for_all_orgs() -> dict[str, int]:
+    """Enfileira o (re)treino do modelo de churn ML para cada org ativa."""
+    return _dispatch_churn_ml_train()
+
+
+@allow_cross_tenant(reason="dispatch_churn_ml itera Organization (não-TenantModel)")
+def _dispatch_churn_ml_train() -> dict[str, int]:
+    from apps.tenancy.models import Organization
+
+    n = 0
+    for org in Organization.objects.filter(is_active=True):
+        train_churn_model_for_org.apply_async(
+            kwargs={"organization_id": org.pk},
+            queue=org.celery_queue_name,
+        )
+        n += 1
+        _logger.info("churn_ml_train_dispatched", org=org.slug)
+
+    return {"dispatched": n}
+
+
+@shared_task(
+    name="apps.analytics.tasks.train_churn_model_for_org",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    max_retries=2,
+    acks_late=True,
+)
+def train_churn_model_for_org(*, organization_id: int) -> dict[str, Any]:
+    """Treina e persiste o modelo de churn ML de uma org."""
+    return _run_churn_ml_train(organization_id=organization_id)
+
+
+@allow_cross_tenant(reason="treino churn ML opera fora de request HTTP")
+def _run_churn_ml_train(*, organization_id: int) -> dict[str, Any]:
+    from apps.analytics.application.churn_ml import train_churn_model
+    from apps.tenancy.models import Organization
+
+    org = Organization.objects.get(pk=organization_id)
+    set_current_organization(org)
+    summary = train_churn_model(org)
+    return summary or {"skipped": True}
+
+
+# =============================================================================
+# Churn digest — envia digest de risco por email aos usuários opt-in
+# =============================================================================
+@shared_task(name="apps.analytics.tasks.dispatch_churn_digest_weekly")
+def dispatch_churn_digest_weekly() -> dict[str, int]:
+    """Enfileira o envio do digest semanal de churn por org ativa."""
+    return _dispatch_churn_digest("weekly")
+
+
+@shared_task(name="apps.analytics.tasks.dispatch_churn_digest_monthly")
+def dispatch_churn_digest_monthly() -> dict[str, int]:
+    """Enfileira o envio do digest mensal de churn por org ativa."""
+    return _dispatch_churn_digest("monthly")
+
+
+@allow_cross_tenant(reason="dispatch_churn_digest itera Organization (não-TenantModel)")
+def _dispatch_churn_digest(period: str) -> dict[str, int]:
+    from apps.tenancy.models import Organization
+
+    n = 0
+    for org in Organization.objects.filter(is_active=True):
+        send_churn_digest_for_org.apply_async(
+            kwargs={"organization_id": org.pk, "period": period},
+            queue=org.celery_queue_name,
+        )
+        n += 1
+        _logger.info("churn_digest_dispatched", org=org.slug, period=period)
+
+    return {"dispatched": n}
+
+
+@shared_task(
+    name="apps.analytics.tasks.send_churn_digest_for_org",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    max_retries=2,
+    acks_late=True,
+)
+def send_churn_digest_for_org(*, organization_id: int, period: str) -> dict[str, Any]:
+    """Envia o digest de churn de uma org aos usuários opt-in."""
+    return _run_churn_digest(organization_id=organization_id, period=period)
+
+
+@allow_cross_tenant(reason="envio de digest opera fora de request HTTP")
+def _run_churn_digest(*, organization_id: int, period: str) -> dict[str, Any]:
+    from apps.analytics.application.churn_digest import send_churn_digest
+    from apps.tenancy.models import Organization
+
+    org = Organization.objects.get(pk=organization_id)
+    set_current_organization(org)
+    return send_churn_digest(org, period)
