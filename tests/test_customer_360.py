@@ -244,6 +244,83 @@ class TestComputeCustomer360:
 
 
 # =============================================================================
+# Link de WhatsApp (#37)
+# =============================================================================
+class TestWhatsappLink:
+    def test_eleven_digits_gets_country_code(self) -> None:
+        from apps.analytics.application.aggregations import _whatsapp_link
+
+        assert _whatsapp_link("(11) 98765-4321") == "https://wa.me/5511987654321"
+
+    def test_ten_digits_gets_country_code(self) -> None:
+        from apps.analytics.application.aggregations import _whatsapp_link
+
+        assert _whatsapp_link("1133334444") == "https://wa.me/551133334444"
+
+    def test_already_with_country_code_kept(self) -> None:
+        from apps.analytics.application.aggregations import _whatsapp_link
+
+        assert _whatsapp_link("5511987654321") == "https://wa.me/5511987654321"
+
+    def test_empty_or_invalid_returns_none(self) -> None:
+        from apps.analytics.application.aggregations import _whatsapp_link
+
+        assert _whatsapp_link("") is None
+        assert _whatsapp_link(None) is None
+        assert _whatsapp_link("123") is None
+
+
+# =============================================================================
+# Seção de risco de churn no 360 (#37)
+# =============================================================================
+@pytest.mark.django_db
+@pytest.mark.e2e
+class TestCustomer360Churn:
+    def test_no_risk_score_returns_none(self, seeded_360: Organization) -> None:
+        customer = _get_customer(seeded_360, "ext-1")
+        data = compute_customer_360(seeded_360, customer)
+        assert data["churn"] is None
+
+    def test_risk_section_with_signals_and_recommendations(
+        self, seeded_360: Organization
+    ) -> None:
+        from decimal import Decimal
+
+        from django.utils import timezone
+
+        from apps.analytics.infrastructure.models import ChurnRiskScore
+
+        customer = _get_customer(seeded_360, "ext-1")
+        set_current_organization(seeded_360)
+        ChurnRiskScore.objects.create(
+            organization=seeded_360,
+            customer=customer,
+            score=60,
+            level=ChurnRiskScore.LEVEL_HIGH,
+            signals=[
+                {"code": "LATE_PAYMENTS", "label": "Atraso recorrente",
+                 "detail": "3 faturas", "weight": 25},
+                {"code": "OFFLINE", "label": "Offline com contrato ativo",
+                 "detail": "", "weight": 15},
+            ],
+            monthly_amount=Decimal("150.00"),
+            ml_probability=Decimal("0.7"),
+            computed_at=timezone.now(),
+        )
+
+        data = compute_customer_360(seeded_360, customer)
+        churn = data["churn"]
+        assert churn is not None
+        assert churn["level"] == "HIGH"
+        assert churn["score"] == 60
+        assert churn["ml_probability_pct"] == 70
+        assert len(churn["signals"]) == 2
+        codes = {r["code"] for r in churn["recommendations"]}
+        assert codes == {"LATE_PAYMENTS", "OFFLINE"}
+        assert all(r["text"] for r in churn["recommendations"])
+
+
+# =============================================================================
 # Views — lista + detalhe
 # =============================================================================
 @pytest.mark.django_db
