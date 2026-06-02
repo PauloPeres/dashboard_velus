@@ -22,6 +22,7 @@ class FakeAdapterConfig(AppConfig):
         from .connections import FakeConnectionSource
         from .contracts import FakeContractSource
         from .customers import FakeCustomerSource
+        from .equipment import FakeEquipmentSource
         from .expenses import FakeExpenseSource
         from .invoices import FakeInvoiceSource, FakePaymentSource
         from .tickets import FakeTicketSource
@@ -35,6 +36,7 @@ class FakeAdapterConfig(AppConfig):
             (Capability.EXPENSES, FakeExpenseSource),
             (Capability.TICKETS, FakeTicketSource),
             (Capability.CONNECTIONS, FakeConnectionSource),
+            (Capability.EQUIPMENT, FakeEquipmentSource),
         ]:
             if registry.get_factory(SourceType.FAKE, cap) is None:
                 registry.register(SourceType.FAKE, cap, cls)

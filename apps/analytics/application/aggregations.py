@@ -895,6 +895,44 @@ def compute_recovery_rate(organization: Organization) -> dict[str, Any]:
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_equipment_summary(organization: Organization) -> dict[str, Any]:
+    """Resumo do parque de equipamentos em comodato (ONTs, roteadores, switches).
+
+    Valor total em campo = soma de `value` dos equipamentos ACTIVE — o capital
+    imobilizado emprestado a clientes, exposto a perda em cancelamentos sem
+    devolução.
+    """
+    from apps.inventory.infrastructure.models import ContractEquipment
+
+    by_status = (
+        ContractEquipment.objects.filter(organization=organization)
+        .values("status")
+        .annotate(
+            count=Count("id"),
+            total=Coalesce(Sum("value"), _ZERO, output_field=DecimalField()),
+        )
+    )
+    counts: dict[str, int] = {}
+    values: dict[str, Decimal] = {}
+    for row in by_status:
+        counts[row["status"]] = row["count"]
+        values[row["status"]] = row["total"]
+
+    active_count = counts.get("ACTIVE", 0)
+    active_value = values.get("ACTIVE", _ZERO)
+    total_count = sum(counts.values())
+
+    return {
+        "active_count": active_count,
+        "active_value": float(active_value),
+        "returned_count": counts.get("RETURNED", 0),
+        "unknown_count": counts.get("UNKNOWN", 0),
+        "total_count": total_count,
+        "avg_value": float(active_value / active_count) if active_count else 0.0,
+    }
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_churn_by_plan(
     organization: Organization, months: int = 3
 ) -> list[dict[str, Any]]:

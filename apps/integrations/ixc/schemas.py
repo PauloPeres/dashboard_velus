@@ -629,3 +629,44 @@ class IxcPaymentSchema(BaseModel):
 
     def get_extras(self) -> dict[str, Any]:
         return dict(self.model_extra or {})
+
+
+# =============================================================================
+# Equipamento em comodato — endpoint /cliente_contrato_comodato no IXC
+# =============================================================================
+class IxcEquipmentSchema(BaseModel):
+    """Schema do registro `cliente_contrato_comodato` na API IXC.
+
+    Equipamentos (ONT, roteador, switch) emprestados ao cliente, atrelados a um
+    contrato (`id_cliente_contrato`). `status` na origem costuma ser A=Ativo
+    (em campo) / D=Devolvido — mapeado pro status canônico no adapter.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    id_cliente_contrato: str = Field(default="")  # FK pro contrato
+    id_produto: str = Field(default="")
+    descricao: str = Field(default="")  # nome do produto, quando a API resolve
+    serial: str = Field(default="")
+    mac: str = Field(default="")
+    valor: str = Field(default="0")
+    status: str = Field(default="")  # A=Ativo (em campo), D=Devolvido
+
+    @field_validator(
+        "id", "id_cliente_contrato", "id_produto", "descricao",
+        "serial", "mac", "status", mode="before",
+    )
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("valor", mode="before")
+    @classmethod
+    def _coerce_amount(cls, v: Any) -> str:
+        if v in (None, "", "0.00"):
+            return "0"
+        return str(v).replace(",", ".")
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})

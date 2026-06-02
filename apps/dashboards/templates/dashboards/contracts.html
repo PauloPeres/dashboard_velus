@@ -76,6 +76,14 @@
   {% include "dashboards/_kpi_card.html" with label="Pipeline" value=pipeline_str subtitle="aguardando instalação — receita futura confirmada" tooltip="Contratos com status Aguardando Instalação. Cada um representa um cliente aprovado aguardando ativação técnica." %}
 </div>
 
+<!-- Equipamentos em comodato -->
+<h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Ativos em Campo</h2>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+  {% include "dashboards/_kpi_card.html" with label="Equipamentos em Campo" value=equipment_count_str subtitle=equipment_subtitle tooltip="Equipamentos em comodato (ONTs, roteadores, switches) atualmente emprestados a clientes — status ACTIVE." %}
+  {% include "dashboards/_kpi_card.html" with label="Capital Imobilizado" value=equipment_value_str subtitle="valor dos equipamentos em campo — exposto a perda em cancelamentos sem devolução" variant="border-blue-200" value_color="text-blue-700" tooltip="Soma do valor dos equipamentos em comodato com status ACTIVE. Representa o CAPEX em campo a recuperar em caso de cancelamento." %}
+  {% include "dashboards/_kpi_card.html" with label="Devolvidos" value=equipment.returned_count subtitle="equipamentos já recolhidos / devolvidos" tooltip="Equipamentos em comodato marcados como devolvidos (RETURNED) na origem." %}
+</div>
+
 <!-- Gráfico 1 — Evolução da base (full-width) -->
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
   <div class="flex items-baseline justify-between mb-1">

@@ -35,6 +35,7 @@ from apps.analytics.application.aggregations import (
     compute_delinquency_trend,
     compute_dre,
     compute_dre_by_account,
+    compute_equipment_summary,
     compute_expense_anomalies,
     compute_expense_by_category,
     compute_expense_by_supplier,
@@ -445,6 +446,7 @@ def contracts(request: HttpRequest) -> HttpResponse:
     blocked_dist = compute_blocked_duration_distribution(org)
     at_risk_summary = compute_blocked_at_risk_summary(org, min_days=30)
     at_risk_list = compute_at_risk_contracts(org, min_days=30, limit=50)
+    equipment = compute_equipment_summary(org)
 
     arpu = (
         kpis["mrr_now"] / kpis["active_contracts"]
@@ -480,6 +482,14 @@ def contracts(request: HttpRequest) -> HttpResponse:
                 f"{at_risk_summary['pct_of_blocked']:.0f}% dos bloqueados"
             ),
             "pipeline_str": str(kpis["awaiting_contracts"]),
+            # Equipamentos em comodato
+            "equipment": equipment,
+            "equipment_value_str": _fmt_brl(equipment["active_value"]),
+            "equipment_count_str": str(equipment["active_count"]),
+            "equipment_subtitle": (
+                f"{equipment['active_count']} em campo · "
+                f"ticket médio {_fmt_brl(equipment['avg_value'])}"
+            ),
             # charts
             "status_trend_json": charts.contract_status_stacked_chart(status_trend),
             "arpu_chart_json": charts.arpu_bar_chart(arpu_data),

@@ -33,6 +33,7 @@ class Capability(models.TextChoices):
         PAYMENTS   → apps.financial.domain.ports.PaymentSourcePort
         TICKETS    → apps.helpdesk.domain.ports.TicketSourcePort
         CONNECTIONS → apps.network.domain.ports.ConnectionSourcePort
+        EQUIPMENT  → apps.inventory.domain.ports.EquipmentSourcePort
     """
 
     CUSTOMERS = "CUSTOMERS", "Clientes"
@@ -42,3 +43,4 @@ class Capability(models.TextChoices):
     EXPENSES = "EXPENSES", "Despesas"
     TICKETS = "TICKETS", "Chamados"
     CONNECTIONS = "CONNECTIONS", "Conexões"
+    EQUIPMENT = "EQUIPMENT", "Equipamentos em comodato"
