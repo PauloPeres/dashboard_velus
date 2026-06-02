@@ -25,6 +25,22 @@
   {% include "dashboards/_kpi_card.html" with label="Novos — 0 a 30 dias" value=new_del_str subtitle=new_del.count|stringformat:"d"|add:" faturas — recém vencidas, alta chance de regularização" variant="border-yellow-300" value_color="text-yellow-700" tooltip="Faturas vencidas há menos de 30 dias. Alta taxa de recuperação espontânea ou com primeiro contato de cobrança." %}
 </div>
 
+<!-- Recovery Rate — efetividade de recuperação -->
+<h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Recuperação de Inadimplência</h2>
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
+  <div class="lg:col-span-1 flex flex-col gap-4">
+    {% include "dashboards/_kpi_card.html" with label="Recovery Rate" value=recovery_pct_str subtitle=recovery_subtitle variant="border-emerald-300" value_color="text-emerald-700" tooltip="Das faturas que inadimpliram (venceram sem pagamento em dia) nos últimos 12 meses, quanto em R$ acabou sendo pago em atraso. Considera apenas coortes com 90+ dias de maturação." %}
+    {% include "dashboards/_kpi_card.html" with label="Valor recuperado" value=recovery_recovered_str subtitle="de "|add:recovery_delinquent_str|add:" que inadimpliu na janela" tooltip="Soma das faturas inadimplentes que foram pagas em atraso, sobre o total que inadimpliu no período analisado." %}
+  </div>
+  <div class="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Curva de recuperação por profundidade do atraso</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">% do valor inadimplido recuperado em cada faixa — curva descendente confirma que quanto mais velho o atraso, menor a chance de recuperar</p>
+    <div id="recovery-chart" style="height:260px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+</div>
+
 <!-- Gráficos linha 1 -->
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
@@ -111,10 +127,12 @@
 {{ delinquency_trend_json|json_script:"delinquency-trend-data" }}
 {{ cash_chart_json|json_script:"cash-data" }}
 {{ blocked_series_json|json_script:"blocked-data" }}
+{{ recovery_chart_json|json_script:"recovery-data" }}
 <script>
   renderChart("aging-chart", "aging-data");
   renderChart("delinquency-trend-chart", "delinquency-trend-data");
   renderChart("cash-chart", "cash-data");
   renderChart("blocked-chart", "blocked-data");
+  renderChart("recovery-chart", "recovery-data");
 </script>
 {% endblock %}

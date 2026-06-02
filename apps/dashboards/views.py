@@ -46,6 +46,7 @@ from apps.analytics.application.aggregations import (
     compute_mao_de_obra_detail,
     compute_people_expenses,
     compute_pipeline_by_status,
+    compute_recovery_rate,
     compute_revenue_forecast,
     compute_top_delinquent_invoices,
 )
@@ -380,6 +381,7 @@ def financial(request: HttpRequest) -> HttpResponse:
     cash_series = compute_cash_received_series(org, months=months)
     delinquency_trend = compute_delinquency_trend(org, months=months)
     status_trend = compute_contract_status_trend(org, months=months)
+    recovery = compute_recovery_rate(org)
 
     # KPI cards extras
     over_90 = next((b for b in aging if b["key"] == "OVER_90"), {})
@@ -408,11 +410,21 @@ def financial(request: HttpRequest) -> HttpResponse:
             "at_risk_str": _fmt_brl(at_risk),
             "new_del_str": _fmt_brl(new_del.get("amount", 0)),
             "delinquency_subtitle": f"{kpis['delinquency_count']:,} faturas vencidas".replace(",", "."),
+            # Recovery Rate
+            "recovery": recovery,
+            "recovery_pct_str": f"{recovery['pct']:.1f}%",
+            "recovery_recovered_str": _fmt_brl(recovery["recovered_amount"]),
+            "recovery_delinquent_str": _fmt_brl(recovery["delinquent_amount"]),
+            "recovery_subtitle": (
+                f"{recovery['recovered_count']:,} de {recovery['delinquent_count']:,} "
+                "faturas recuperadas"
+            ).replace(",", "."),
             # charts
             "aging_chart_json": charts.aging_bar_chart(aging),
             "delinquency_trend_json": charts.delinquency_trend_chart(delinquency_trend),
             "cash_chart_json": charts.cash_received_chart(cash_series),
             "blocked_series_json": charts.blocked_trend_line(blocked_series),
+            "recovery_chart_json": charts.recovery_by_aging_chart(recovery["by_aging"]),
         },
     )
 

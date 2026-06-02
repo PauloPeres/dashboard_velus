@@ -755,6 +755,45 @@ def mao_de_obra_stacked_bar(data: dict[str, Any]) -> str:
     return _to_json(fig)
 
 
+def recovery_by_aging_chart(by_aging: list[dict[str, Any]]) -> str:
+    """Barras — taxa de recuperação (%) por profundidade do atraso.
+
+    Cada barra = % do valor inadimplido naquele bucket de aging que acabou sendo
+    recuperado (pago em atraso). A curva descendente esperada — quanto mais velho
+    o atraso, menor a recuperação — é o insight central da inadimplência.
+    """
+    labels = [b["label"] for b in by_aging]
+    pct = [b["pct"] for b in by_aging]
+    recovered = [b["recovered"] for b in by_aging]
+    total = [b["total"] for b in by_aging]
+    counts = [b["count"] for b in by_aging]
+    # Verde forte → vermelho conforme o atraso aumenta (recuperação piora)
+    colors = ["#10b981", "#fbbf24", "#f97316", "#ef4444"]
+    custom = [[r, t, c] for r, t, c in zip(recovered, total, counts, strict=False)]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=labels, y=pct,
+                marker_color=colors[: len(labels)],
+                customdata=custom,
+                hovertemplate=(
+                    "<b>%{x}</b><br>"
+                    "Recuperação: %{y:.1f}%<br>"
+                    "Recuperado: R$ %{customdata[0]:,.2f}<br>"
+                    "Inadimpliu: R$ %{customdata[1]:,.2f}<br>"
+                    "Faturas: %{customdata[2]}<extra></extra>"
+                ),
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "yaxis": {"ticksuffix": "%", "range": [0, 100], "title": "Recuperação"},
+            "margin": {"l": 60, "r": 20, "t": 10, "b": 50},
+        },
+    )
+    return _to_json(fig)
+
+
 def dre_by_account_stacked_bar(data: dict[str, Any]) -> str:
     """Barras empilhadas — despesas por conta do planejamento IXC + linha de receita."""
     labels = data.get("month_labels", [])

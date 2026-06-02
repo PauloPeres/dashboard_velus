@@ -757,6 +757,143 @@ def compute_contract_status_trend(
     return result
 
 
+# Recovery Rate — efetividade de recuperação de inadimplência.
+# Janela de maturação: só consideramos coortes de vencimento com >=90 dias de
+# idade, para dar tempo de a fatura ser paga em atraso antes de medir.
+RECOVERY_MATURATION_DAYS = 90
+RECOVERY_WINDOW_MONTHS = 12
+
+_LATE_BUCKET_LABELS = {
+    "0_30": "1–30 dias",
+    "31_60": "31–60 dias",
+    "61_90": "61–90 dias",
+    "OVER_90": "90+ dias",
+}
+_LATE_BUCKET_ORDER = ("0_30", "31_60", "61_90", "OVER_90")
+
+
+def _late_bucket(days: int) -> str:
+    """Classifica dias de atraso no bucket de aging correspondente."""
+    if days <= 30:
+        return "0_30"
+    if days <= 60:
+        return "31_60"
+    if days <= 90:
+        return "61_90"
+    return "OVER_90"
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_recovery_rate(organization: Organization) -> dict[str, Any]:
+    """Recovery Rate — efetividade de recuperação de inadimplência.
+
+    Definição (B): das faturas que inadimpliram (venceram sem pagamento em dia),
+    quanto em R$ acabou sendo pago em atraso. Fonte: FactInvoice (binário pago/
+    não pago — usa o status da fatura, não baixas parciais).
+
+    Recovery Rate = valor recuperado em atraso / valor que inadimpliu.
+
+    Janela: coortes de vencimento dos últimos 12 meses, restritas a faturas com
+    pelo menos 90 dias de maturação (due_date <= today - 90d) — assim damos tempo
+    de recuperação antes de medir e não penalizamos coortes recentes.
+
+    O bucket de aging de cada fatura é a "profundidade do atraso":
+      - recuperada: dias entre due_date e paid_date
+      - em aberto: dias entre due_date e hoje
+    Isso responde "quanto mais velho o atraso, menor a chance de recuperar?".
+    """
+    today = timezone.now().date()
+    matured_before = today - timedelta(days=RECOVERY_MATURATION_DAYS)
+    window_start = _first_of_month_n_ago(matured_before, RECOVERY_WINDOW_MONTHS - 1)
+
+    rows = (
+        FactInvoice.objects.filter(
+            organization=organization,
+            due_date__gte=window_start,
+            due_date__lte=matured_before,
+        )
+        .exclude(status="CANCELED")
+        .values("due_date", "paid_date", "status", "amount")
+    )
+
+    buckets: dict[str, dict[str, Any]] = {
+        key: {"recovered": _ZERO, "total": _ZERO, "count": 0}
+        for key in _LATE_BUCKET_ORDER
+    }
+    recovered_amount = _ZERO
+    delinquent_amount = _ZERO
+    outstanding_amount = _ZERO
+    recovered_count = 0
+    delinquent_count = 0
+
+    for row in rows:
+        due_date = row["due_date"]
+        paid_date = row["paid_date"]
+        status = row["status"]
+        amount = row["amount"] or _ZERO
+
+        is_paid = status == "PAID" and paid_date is not None
+        # Paga em dia (ou adiantada) nunca inadimpliu — fora do denominador.
+        if is_paid and paid_date <= due_date:
+            continue
+
+        if is_paid:
+            # Recuperada: paga, porém em atraso.
+            days_late = (paid_date - due_date).days
+            bucket = _late_bucket(days_late)
+            buckets[bucket]["recovered"] += amount
+            buckets[bucket]["total"] += amount
+            buckets[bucket]["count"] += 1
+            recovered_amount += amount
+            recovered_count += 1
+        else:
+            # Inadimpliu e segue em aberto — só entra no denominador.
+            days_late = (today - due_date).days
+            bucket = _late_bucket(days_late)
+            buckets[bucket]["total"] += amount
+            buckets[bucket]["count"] += 1
+            outstanding_amount += amount
+
+        delinquent_amount += amount
+        delinquent_count += 1
+
+    pct = (
+        round(float(recovered_amount / delinquent_amount * 100), 1)
+        if delinquent_amount > 0
+        else 0.0
+    )
+
+    by_aging = []
+    for key in _LATE_BUCKET_ORDER:
+        b = buckets[key]
+        b_total = b["total"]
+        b_pct = (
+            round(float(b["recovered"] / b_total * 100), 1) if b_total > 0 else 0.0
+        )
+        by_aging.append(
+            {
+                "key": key,
+                "label": _LATE_BUCKET_LABELS[key],
+                "recovered": float(b["recovered"]),
+                "total": float(b_total),
+                "pct": b_pct,
+                "count": b["count"],
+            }
+        )
+
+    return {
+        "pct": pct,
+        "recovered_amount": float(recovered_amount),
+        "delinquent_amount": float(delinquent_amount),
+        "outstanding_amount": float(outstanding_amount),
+        "recovered_count": recovered_count,
+        "delinquent_count": delinquent_count,
+        "by_aging": by_aging,
+        "window_months": RECOVERY_WINDOW_MONTHS,
+        "maturation_days": RECOVERY_MATURATION_DAYS,
+    }
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_churn_by_plan(
     organization: Organization, months: int = 3
