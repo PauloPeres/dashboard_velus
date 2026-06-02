@@ -52,6 +52,46 @@ def test_configures_all_registered_ixc_capabilities(
 
 
 @pytest.mark.django_db
+def test_reuse_credentials_backfills_missing_capabilities(
+    organization_a: Organization,
+) -> None:
+    # Org já tem 1 datasource IXC (cenário antigo: só CUSTOMERS configurada).
+    set_current_organization(organization_a)
+    seed = OrganizationDataSource.objects.create(
+        organization=organization_a,
+        source_type=SourceType.IXC.value,
+        capability=Capability.CUSTOMERS.value,
+        priority=100,
+        is_active=True,
+    )
+    seed.set_credentials(
+        {"base_url": "https://erp.example.com", "user_id": "7", "api_token": "tok-xyz"}
+    )
+    seed.save()
+
+    # Sem digitar o token de novo — reaproveita o que já está salvo.
+    call_command("setup_ixc_credentials", "acme", "--reuse-credentials")
+
+    rows = OrganizationDataSource.objects.filter(
+        organization=organization_a, source_type=SourceType.IXC.value, is_active=True
+    )
+    assert {r.capability for r in rows} == _ixc_capabilities()
+    # Todas herdam as mesmas credenciais já existentes.
+    for r in rows:
+        assert r.get_credentials()["api_token"] == "tok-xyz"
+
+
+@pytest.mark.django_db
+def test_reuse_credentials_without_existing_fails(
+    organization_a: Organization,
+) -> None:
+    from django.core.management.base import CommandError
+
+    with pytest.raises(CommandError, match="Nenhuma datasource IXC"):
+        call_command("setup_ixc_credentials", "acme", "--reuse-credentials")
+
+
+@pytest.mark.django_db
 def test_rerun_is_idempotent(
     organization_a: Organization, monkeypatch: pytest.MonkeyPatch
 ) -> None:
