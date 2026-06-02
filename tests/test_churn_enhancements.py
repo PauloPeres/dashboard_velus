@@ -25,6 +25,7 @@ from apps.analytics.application.churn_digest import (
 )
 from apps.analytics.application.churn_ml import (
     FEATURES,
+    _payment_profile,
     compute_features,
     get_current_model,
     predict_probabilities,
@@ -378,6 +379,70 @@ class TestChurnMLPointInTime:
         assert vec["late_payments"] == 1.0
         # Tenure fotografado no cancelamento (~366d), não até hoje.
         assert vec["tenure_days"] == 366.0
+
+
+# =============================================================================
+# Perfil de inadimplência relativo ao cliente (#19) — função pura
+# =============================================================================
+class TestPaymentProfile:
+    """`_payment_profile` mede atraso *relativo ao próprio cliente*.
+
+    `r` é a data/hora de referência (datetime); `r_date` é `r.date()`.
+    A janela "recente" é de 90 dias antes de `r_date`.
+    """
+
+    R = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    R_DATE = R.date()
+
+    def _paid(self, due: date, days_late: int) -> datetime:
+        return datetime.combine(due + timedelta(days=days_late), datetime.min.time(), tzinfo=UTC)
+
+    def test_no_invoices_returns_zero(self) -> None:
+        baseline, recent_dev = _payment_profile([], self.R, self.R_DATE)
+        assert baseline == 0.0
+        assert recent_dev == 0.0
+
+    def test_consistently_late_has_zero_deviation(self) -> None:
+        # Cliente que SEMPRE atrasa 10 dias — atrasar faz parte do perfil dele.
+        invoices = [
+            (date(2026, d, 1), self._paid(date(2026, d, 1), 10)) for d in range(1, 6)
+        ]
+        baseline, recent_dev = _payment_profile(invoices, self.R, self.R_DATE)
+        assert baseline == 10.0
+        # Faturas recentes seguem o mesmo padrão → desvio ~0 (não é sinal).
+        assert recent_dev == pytest.approx(0.0)
+
+    def test_recent_escalation_positive_deviation(self) -> None:
+        # Histórico pontual (0d), mas atrasando muito nos últimos 90 dias.
+        old = [
+            (date(2025, m, 1), self._paid(date(2025, m, 1), 0)) for m in range(1, 7)
+        ]
+        recent = [
+            (date(2026, 4, 1), self._paid(date(2026, 4, 1), 30)),
+            (date(2026, 5, 1), self._paid(date(2026, 5, 1), 30)),
+        ]
+        baseline, recent_dev = _payment_profile(old + recent, self.R, self.R_DATE)
+        assert baseline == pytest.approx(0.0)  # mediana histórica pontual
+        assert recent_dev > 25.0  # atraso recente muito acima do normal dele
+
+    def test_future_due_ignored(self) -> None:
+        # Fatura que vence DEPOIS da data de referência não conta.
+        invoices = [
+            (date(2026, 5, 1), self._paid(date(2026, 5, 1), 5)),
+            (date(2026, 12, 1), None),  # futura
+        ]
+        baseline, _recent_dev = _payment_profile(invoices, self.R, self.R_DATE)
+        assert baseline == 5.0
+
+    def test_paid_after_reference_treated_as_open(self) -> None:
+        # Vencida antes de `r`, paga só DEPOIS de `r` → tratada como em aberto.
+        future_paid = datetime(2026, 7, 1, tzinfo=UTC)
+        invoices = [(date(2026, 5, 1), future_paid)]
+        baseline, recent_dev = _payment_profile(invoices, self.R, self.R_DATE)
+        # Não liquidada em `r` → não entra no baseline (mediana de vazio = 0).
+        assert baseline == 0.0
+        # Atraso acumulado até `r_date`: (2026-06-01 - 2026-05-01) = 31 dias.
+        assert recent_dev == pytest.approx(31.0)
 
 
 # =============================================================================
