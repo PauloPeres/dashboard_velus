@@ -432,6 +432,10 @@ def financial(request: HttpRequest) -> HttpResponse:
         for s in status_trend
     ]
 
+    # Inadimplência separada: principal (MRR) vs multa/juros (#41)
+    delinquency_principal = sum(s["principal"] for s in delinquency_trend)
+    delinquency_late_fee = sum(s["late_fee"] for s in delinquency_trend)
+
     return render(
         request,
         "dashboards/financial.html",
@@ -448,6 +452,9 @@ def financial(request: HttpRequest) -> HttpResponse:
             "at_risk_str": _fmt_brl(at_risk),
             "new_del_str": _fmt_brl(new_del.get("amount", 0)),
             "delinquency_subtitle": f"{kpis['delinquency_count']:,} faturas vencidas".replace(",", "."),
+            "delinquency_principal_str": _fmt_brl(delinquency_principal),
+            "delinquency_late_fee_str": _fmt_brl(delinquency_late_fee),
+            "delinquency_has_late_fee": delinquency_late_fee > 0,
             # Recovery Rate
             "recovery": recovery,
             "recovery_pct_str": f"{recovery['pct']:.1f}%",

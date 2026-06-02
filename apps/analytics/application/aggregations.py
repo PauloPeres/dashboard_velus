@@ -1114,10 +1114,15 @@ def compute_delinquency_trend(
     """Inadimplência por mês de vencimento — quanto de cada coorte mensal ainda está em aberto.
 
     Para cada mês dos últimos N meses, soma o valor das faturas cujo `due_date` caiu
-    naquele mês e que AINDA estão em aberto (PENDING ou OVERDUE, days_overdue > 0).
+    naquele mês e que AINDA estão em aberto (PENDING ou OVERDUE, days_overdue > 0),
+    separando **principal** (mensalidade/MRR) de **multa/juros** (encargo por atraso).
 
     Interpretação para ISP: "das faturas que venceram em Março, quantos reais ainda não
     foram pagos?" — mostra qual coorte de vencimento tem pior taxa de recuperação.
+
+    `amount` = principal + multa (total em aberto). O IXC só materializa multa/juros
+    no pagamento/reemissão, então `late_fee` costuma vir 0 nas faturas em aberto
+    (fallback gracioso — toda a inadimplência aparece como principal).
     """
     today = timezone.now().date()
     cutoff = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
@@ -1133,7 +1138,10 @@ def compute_delinquency_trend(
         .annotate(month=TruncMonth("due_date"))
         .values("month")
         .annotate(
-            total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            principal=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            late_fee=Coalesce(
+                Sum("late_fee_amount"), _ZERO, output_field=DecimalField()
+            ),
             count=Count("id"),
         )
         .order_by("month")
@@ -1143,7 +1151,9 @@ def compute_delinquency_trend(
         {
             "month": row["month"].strftime("%Y-%m"),
             "label": row["month"].strftime("%b/%y"),
-            "amount": float(row["total"]),
+            "principal": float(row["principal"]),
+            "late_fee": float(row["late_fee"]),
+            "amount": float(row["principal"] + row["late_fee"]),
             "count": row["count"],
         }
         for row in by_month

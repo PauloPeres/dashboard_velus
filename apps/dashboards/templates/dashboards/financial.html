@@ -54,8 +54,23 @@
     <div class="flex items-baseline justify-between mb-1">
       <h2 class="text-sm font-semibold text-gray-700">Inadimplência — por mês de vencimento</h2>
     </div>
-    <p class="text-xs text-gray-400 mb-3">Valor em aberto por coorte de vencimento — barras altas à direita indicam crescimento de novos inadimplentes</p>
+    <p class="text-xs text-gray-400 mb-3">Valor em aberto por coorte de vencimento, separando principal (MRR) de multa/juros — barras altas à direita indicam crescimento de novos inadimplentes</p>
     <div id="delinquency-trend-chart" style="height:280px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+    <div class="flex items-center gap-4 mt-3 text-xs">
+      <span class="flex items-center gap-1.5">
+        <span class="inline-block w-2.5 h-2.5 rounded-sm bg-red-500"></span>
+        <span class="text-gray-500">Principal (MRR)</span>
+        <span class="font-semibold text-gray-700 tabular-nums">{{ delinquency_principal_str }}</span>
+      </span>
+      <span class="flex items-center gap-1.5">
+        <span class="inline-block w-2.5 h-2.5 rounded-sm bg-amber-500"></span>
+        <span class="text-gray-500">Multa/juros</span>
+        <span class="font-semibold text-gray-700 tabular-nums">{{ delinquency_late_fee_str }}</span>
+      </span>
+      {% if not delinquency_has_late_fee %}
+      <span class="text-gray-400 italic">— multa/juros materializa só no pagamento (origem não traz nas abertas)</span>
+      {% endif %}
+    </div>
   </div>
 </div>
 

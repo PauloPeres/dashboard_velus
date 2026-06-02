@@ -261,31 +261,46 @@ def dre_grouped_bar(mrr_series: list[dict[str, Any]], expense_series: list[dict[
 
 
 def delinquency_trend_chart(series: list[dict[str, Any]]) -> str:
-    """Barras — inadimplência não-recuperada por mês de vencimento (últimos 12 meses).
+    """Barras empilhadas — inadimplência por mês de vencimento, principal vs multa/juros.
 
-    Cada barra = valor ainda em aberto das faturas que venceram naquele mês.
+    Cada barra = valor ainda em aberto das faturas que venceram naquele mês,
+    separando o principal (mensalidade/MRR) do encargo por atraso (multa/juros).
     Barras mais altas à direita = crescimento recente de novos inadimplentes.
+
+    `late_fee` costuma vir 0 (o IXC só materializa multa/juros no pagamento) —
+    nesse caso a barra mostra só o principal, sem segmento de multa visível.
     """
     labels = [s["label"] for s in series]
-    values = [s["amount"] for s in series]
     counts = [s["count"] for s in series]
+    principal = [s.get("principal", s.get("amount", 0)) for s in series]
+    late_fee = [s.get("late_fee", 0) for s in series]
     fig = go.Figure(
         data=[
             go.Bar(
-                x=labels, y=values,
+                name="Principal (MRR)",
+                x=labels, y=principal,
                 marker_color="#ef4444",
                 customdata=counts,
                 hovertemplate=(
                     "<b>Venc. %{x}</b><br>"
-                    "Em aberto: R$ %{y:,.2f}<br>"
+                    "Principal: R$ %{y:,.2f}<br>"
                     "Faturas: %{customdata}<extra></extra>"
                 ),
-            )
+            ),
+            go.Bar(
+                name="Multa/juros",
+                x=labels, y=late_fee,
+                marker_color="#f59e0b",
+                hovertemplate="<b>Venc. %{x}</b><br>Multa/juros: R$ %{y:,.2f}<extra></extra>",
+            ),
         ],
         layout={
             **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "legend": {"orientation": "h", "y": -0.2, "font": {"size": 10}},
             "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f"},
-            "margin": {"l": 60, "r": 20, "t": 10, "b": 50},
+            "margin": {"l": 60, "r": 20, "t": 10, "b": 60},
         },
     )
     return _to_json(fig)

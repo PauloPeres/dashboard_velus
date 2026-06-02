@@ -150,8 +150,12 @@ class FactInvoice(TenantModel):
     due_date = models.DateField(db_index=True)
     paid_date = models.DateField(null=True, blank=True, db_index=True)
 
-    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)  # principal (valor do boleto)
     paid_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    # Multa + juros acumulados (valor_multas + valor_juros do IXC). Separa o
+    # principal da operação recorrente do encargo por atraso na inadimplência.
+    # O IXC só materializa esse valor no pagamento/reemissão — 0 nas abertas.
+    late_fee_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     status = models.CharField(max_length=16)
 
     # Derivados pra acelerar queries de aging

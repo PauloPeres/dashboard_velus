@@ -7,6 +7,7 @@ Em fase futura, isolar em tasks Celery agendadas com chunking pra orgs grandes.
 from __future__ import annotations
 
 from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from django.db import transaction
@@ -127,6 +128,36 @@ def _aging_bucket(
     return days, "OVER_90"
 
 
+_ZERO = Decimal("0")
+# Campos de encargo por atraso no fn_areceber do IXC (vão pra raw_extras).
+_LATE_FEE_KEYS = ("valor_multas", "valor_juros")
+
+
+def _to_decimal(value: Any) -> Decimal:
+    """Converte string/num do IXC (vírgula decimal, vazio, None) em Decimal."""
+    if value in (None, "", "0", "0.00"):
+        return _ZERO
+    try:
+        return Decimal(str(value).replace(",", "."))
+    except (InvalidOperation, ValueError):
+        return _ZERO
+
+
+def _parse_late_fee(raw_extras: Any) -> Decimal:
+    """Soma multa + juros do `raw_extras` da fatura IXC (função pura).
+
+    Fallback gracioso: origem sem esses campos (ou zerados) → 0. O IXC só
+    materializa multa/juros no pagamento/reemissão, então faturas em aberto
+    normalmente retornam 0 aqui.
+    """
+    if not isinstance(raw_extras, dict):
+        return _ZERO
+    total = _ZERO
+    for key in _LATE_FEE_KEYS:
+        total += _to_decimal(raw_extras.get(key))
+    return total
+
+
 _FACT_CONTRACT_BATCH = 10_000  # linhas por bulk_create batch
 
 
@@ -219,7 +250,8 @@ def _rebuild_fact_invoice(organization: Organization) -> int:
             unique_fields=["organization", "invoice"],
             update_fields=[
                 "issued_date", "due_date", "paid_date", "amount",
-                "paid_amount", "status", "days_overdue", "aging_bucket",
+                "paid_amount", "late_fee_amount", "status",
+                "days_overdue", "aging_bucket",
             ],
             batch_size=_FACT_FINANCIAL_BATCH,
         )
@@ -237,6 +269,7 @@ def _rebuild_fact_invoice(organization: Organization) -> int:
                 paid_date=inv.paid_at.date() if inv.paid_at else None,
                 amount=inv.amount,
                 paid_amount=inv.paid_amount,
+                late_fee_amount=_parse_late_fee(inv.raw_extras),
                 status=inv.status,
                 days_overdue=days_overdue,
                 aging_bucket=bucket,
