@@ -290,7 +290,7 @@ def forecast(request: HttpRequest) -> HttpResponse:
     cur = dre_data["current_month"]
     ytd = dre_data["ytd"]
 
-    # Taxa de recebimento — extraída do primeiro mês do forecast (é a mesma para todos)
+    # Taxa de recebimento do 1º mês projetado — agora varia por mês (tendência OLS)
     collection_rate_pct = forecast_data[0]["collection_rate_pct"] if forecast_data else None
 
     return render(

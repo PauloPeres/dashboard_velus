@@ -5,13 +5,13 @@
 
 {% block content %}
 <h1 class="text-2xl font-bold mb-2">Previsão Estratégica — 12 meses</h1>
-<p class="text-sm text-gray-500 mb-2">Projeção baseada na tendência de crescimento do MRR dos últimos 3 meses.</p>
+<p class="text-sm text-gray-500 mb-2">Tendência linear (OLS) do MRR de 12 meses, com sazonalidade por mês e banda de cenários otimista/pessimista.</p>
 {% if collection_rate_pct %}
 <div class="mb-6 flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
     <svg class="w-5 h-5 text-amber-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
     <span class="text-sm text-amber-800">
-        Taxa de recebimento histórica: <strong>{{ collection_rate_pct }}%</strong> do MRR.
-        A receita ajustada na previsão já desconta a inadimplência média dos últimos 3 meses.
+        Taxa de recebimento projetada (1º mês): <strong>{{ collection_rate_pct }}%</strong> do MRR.
+        A receita ajustada desconta a inadimplência, e a taxa acompanha a tendência histórica mês a mês.
     </span>
 </div>
 {% endif %}
@@ -26,7 +26,7 @@
 <div class="grid grid-cols-1 gap-6 mb-8">
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
         <h2 class="text-lg font-semibold mb-1">MRR Histórico + Projeção 12 meses</h2>
-        <p class="text-sm text-gray-500 mb-4">Linha tracejada = previsão. Linha verde = saldo projetado (MRR - Despesas médias).</p>
+        <p class="text-sm text-gray-500 mb-4">Linha tracejada = previsão (base). Faixa sombreada = cenários otimista/pessimista. Linha verde = saldo projetado (caixa - despesas).</p>
         <div id="forecast-chart" style="height:400px;"></div>
     </div>
 </div>
@@ -46,9 +46,10 @@
                 <tr class="border-b border-gray-200 text-left text-gray-500">
                     <th class="pb-2 pr-4">Mês</th>
                     <th class="pb-2 pr-4 text-right">MRR Bruto</th>
-                    <th class="pb-2 pr-4 text-right" title="MRR × taxa de recebimento histórica">Rec. Ajustada</th>
+                    <th class="pb-2 pr-4 text-right" title="MRR × taxa de recebimento projetada">Rec. Ajustada</th>
                     <th class="pb-2 pr-4 text-right">Despesas</th>
-                    <th class="pb-2 text-right">Saldo (caixa)</th>
+                    <th class="pb-2 pr-4 text-right">Saldo (caixa)</th>
+                    <th class="pb-2 text-right text-gray-400" title="Saldo nos cenários pessimista / otimista">Cenário (pess.–otim.)</th>
                 </tr>
             </thead>
             <tbody>
@@ -58,8 +59,11 @@
                     <td class="py-2 pr-4 text-right text-gray-400">R$ {{ row.forecast_mrr|floatformat:0|intcomma }}</td>
                     <td class="py-2 pr-4 text-right text-green-700">R$ {{ row.forecast_cash|floatformat:0|intcomma }}</td>
                     <td class="py-2 pr-4 text-right text-red-600">R$ {{ row.forecast_expenses|floatformat:0|intcomma }}</td>
-                    <td class="py-2 text-right {% if row.forecast_net >= 0 %}text-blue-700{% else %}text-red-700{% endif %}">
+                    <td class="py-2 pr-4 text-right {% if row.forecast_net >= 0 %}text-blue-700{% else %}text-red-700{% endif %}">
                         R$ {{ row.forecast_net|floatformat:0|intcomma }}
+                    </td>
+                    <td class="py-2 text-right text-gray-400 whitespace-nowrap">
+                        {{ row.forecast_net_pessimistic|floatformat:0|intcomma }} – {{ row.forecast_net_optimistic|floatformat:0|intcomma }}
                     </td>
                 </tr>
                 {% endfor %}

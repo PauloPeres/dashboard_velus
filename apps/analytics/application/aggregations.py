@@ -9,6 +9,8 @@ por signal `sync_completed` (futuro).
 
 from __future__ import annotations
 
+import math
+import statistics
 from datetime import date as date_cls
 from datetime import timedelta
 from decimal import Decimal
@@ -67,6 +69,55 @@ def _full_month_keys(cutoff: date_cls, until: date_cls) -> list[str]:
             m = 1
             y += 1
     return keys
+
+
+def _ols_fit(ys: list[float]) -> tuple[float, float]:
+    """Regressão linear simples (mínimos quadrados) sobre x = 0,1,2,...
+
+    Retorna (slope, intercept) na forma fechada — sem numpy. Quando há menos de
+    dois pontos ou variância zero em x, devolve slope 0 e intercept = média.
+    """
+    n = len(ys)
+    if n == 0:
+        return 0.0, 0.0
+    if n == 1:
+        return 0.0, ys[0]
+    xs = list(range(n))
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    var_x = sum((x - mean_x) ** 2 for x in xs)
+    if var_x == 0:
+        return 0.0, mean_y
+    cov_xy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    slope = cov_xy / var_x
+    intercept = mean_y - slope * mean_x
+    return slope, intercept
+
+
+def _seasonal_factors(
+    month_numbers: list[int],
+    values: list[float],
+    fitted: list[float],
+    damping: float = 0.5,
+) -> dict[int, float]:
+    """Fatores sazonais multiplicativos por mês-do-ano (1..12), amortecidos.
+
+    `month_numbers`, `values` e `fitted` são pareados na mesma ordem cronológica.
+    Para cada mês-do-ano agrega a razão média observado/tendência e amortece em
+    direção a 1.0 (damping=0.5 → metade do desvio). Como só temos ~1 ano de
+    histórico, o damping evita superajuste a um único mês observado.
+    """
+    by_month: dict[int, list[float]] = {}
+    for mn, v, f in zip(month_numbers, values, fitted):
+        if f <= 0:
+            continue
+        by_month.setdefault(mn, []).append(v / f)
+    factors: dict[int, float] = {}
+    for mn, ratios in by_month.items():
+        avg = sum(ratios) / len(ratios)
+        # Amortece: 1.0 + damping*(avg-1.0). damping=0 → sem sazonalidade.
+        factors[mn] = 1.0 + damping * (avg - 1.0)
+    return factors
 
 
 def _ixc_blocked_since(raw_extras: dict[str, Any] | None) -> date_cls | None:
@@ -697,78 +748,198 @@ def compute_dre(
 def compute_revenue_forecast(
     organization: Organization, months_ahead: int = 12
 ) -> list[dict[str, Any]]:
-    """Previsão 12m baseada em tendência de MRR ajustada pela taxa de recebimento.
+    """Previsão Nm com tendência linear (OLS), sazonalidade e cenários.
 
-    Usa média de crescimento dos últimos 3 meses de MRR para projetar forward.
-    Aplica taxa de recebimento histórica (caixa recebido / MRR) para refletir
-    o impacto real da inadimplência na receita efetiva.
-    Também projeta despesas com base na média dos últimos 3 meses.
+    Modelo (puro Python, sem numpy/sklearn — cluster k3s enxuto):
+
+    * **Tendência**: regressão linear por mínimos quadrados sobre até 12 meses de
+      MRR, em vez de crescimento composto de 3 meses (muito sensível a ruído).
+    * **Sazonalidade**: fator multiplicativo por mês-do-ano (observado/tendência),
+      amortecido para 1.0 — só temos ~1 ano de dados, então não superajustamos.
+    * **Taxa de recebimento variável**: OLS sobre a razão caixa/MRR mês a mês,
+      projetada forward (clamp 0.50–1.05) em vez de constante.
+    * **Despesas com tendência**: OLS sobre despesas mensais (fallback média 3m).
+    * **Cenários**: banda otimista/pessimista a partir do desvio relativo dos
+      resíduos, alargando com o horizonte (`rel_std * sqrt(i+1)`).
+
+    Mantém as chaves usadas por view/chart/template (`forecast_mrr`,
+    `forecast_cash`, `forecast_expenses`, `forecast_net`, `collection_rate_pct`,
+    `is_forecast`, `month`, `label`) e acrescenta as variantes de cenário.
+    Quando há < 4 meses de histórico cai no modelo ingênuo de crescimento composto.
     """
-    from datetime import date as date_cls
+    hist_mrr = compute_mrr_series(organization, months=12)
+    hist_exp = compute_expense_series(organization, months=12)
+    hist_cash = compute_cash_received_series(organization, months=12)
 
-    # Historical base: last 6 months
-    hist_mrr = compute_mrr_series(organization, months=6)
-    hist_exp = compute_expense_series(organization, months=6)
-    hist_cash = compute_cash_received_series(organization, months=6)
+    mrr_points = [(m["month"], m["mrr"]) for m in hist_mrr]
+    mrr_values = [v for _, v in mrr_points]
 
-    # Compute avg MRR growth from last 3 months
-    mrr_values = [m["mrr"] for m in hist_mrr]
-    if len(mrr_values) >= 3:
-        last3 = mrr_values[-3:]
-        growth = (last3[-1] / last3[0]) ** (1 / 2) - 1 if last3[0] > 0 else 0.0  # compound monthly
-    elif len(mrr_values) >= 2:
-        growth = (mrr_values[-1] / mrr_values[0] - 1) if mrr_values[0] > 0 else 0.0
-    else:
-        growth = 0.0
+    today = timezone.now().date()
+    nm, ny = today.month + 1, today.year
+    if nm > 12:
+        nm, ny = 1, ny + 1
+    forecast_start = date_cls(ny, nm, 1)  # próximo mês
 
-    # Cap growth between -20% and +20% per month
-    growth = max(-0.20, min(0.20, growth))
+    def _month_at(i: int) -> date_cls:
+        m = forecast_start.month + i
+        y = forecast_start.year + (m - 1) // 12
+        return date_cls(y, ((m - 1) % 12) + 1, 1)
 
-    # Compute collection rate: avg(cash_received / mrr) for months with both values
+    # Modelo ingênuo de fallback quando o histórico é curto demais p/ OLS.
+    if len([v for v in mrr_values if v > 0]) < 4:
+        return _naive_revenue_forecast(
+            hist_mrr, hist_exp, hist_cash, months_ahead, _month_at
+        )
+
+    # --- Tendência de MRR (OLS) ---
+    slope, intercept = _ols_fit(mrr_values)
+    n = len(mrr_values)
+    fitted = [slope * x + intercept for x in range(n)]
+
+    # --- Sazonalidade amortecida por mês-do-ano ---
+    month_numbers = [int(key[5:7]) for key, _ in mrr_points]
+    factors = _seasonal_factors(month_numbers, mrr_values, fitted, damping=0.5)
+
+    # --- Resíduos relativos → largura da banda de cenários ---
+    rel_residuals = [
+        (mrr_values[i] - fitted[i]) / fitted[i]
+        for i in range(n)
+        if fitted[i] > 0
+    ]
+    rel_std = statistics.pstdev(rel_residuals) if len(rel_residuals) >= 2 else 0.0
+
+    # --- Taxa de recebimento com tendência (OLS sobre caixa/MRR) ---
     mrr_by_month = {m["month"]: m["mrr"] for m in hist_mrr if m["mrr"] > 0}
     cash_by_month = {c["month"]: c["amount"] for c in hist_cash if c["amount"] > 0}
     common_months = sorted(set(mrr_by_month) & set(cash_by_month))
-    rates = [cash_by_month[m] / mrr_by_month[m] for m in common_months if mrr_by_month[m] > 0]
-    collection_rate = sum(rates[-3:]) / len(rates[-3:]) if rates else 1.0
-    # Cap: min 50%, max 105% (small overpayments happen)
-    collection_rate = max(0.50, min(1.05, collection_rate))
+    rate_series = [cash_by_month[mo] / mrr_by_month[mo] for mo in common_months]
+    if len(rate_series) >= 3:
+        r_slope, r_intercept = _ols_fit(rate_series)
+        nr = len(rate_series)
 
-    # Avg monthly expenses (last 3 paid months)
-    exp_values = [e["expenses"] for e in hist_exp if e["expenses"] > 0]
-    avg_exp = sum(exp_values[-3:]) / len(exp_values[-3:]) if exp_values else 0.0
+        def _rate_at(i: int) -> float:
+            return max(0.50, min(1.05, r_slope * (nr - 1 + i + 1) + r_intercept))
+    else:
+        const_rate = (
+            sum(rate_series[-3:]) / len(rate_series[-3:]) if rate_series else 1.0
+        )
+        const_rate = max(0.50, min(1.05, const_rate))
 
-    # Base MRR = last historical value
-    base_mrr = mrr_values[-1] if mrr_values else 0.0
+        def _rate_at(i: int) -> float:
+            return const_rate
 
-    today = timezone.now().date()
-    # Start forecast from next month
-    nm = today.replace(day=1).month + 1
-    ny = today.replace(day=1).year
-    if nm > 12:
-        nm = 1
-        ny += 1
-    forecast_start = date_cls(ny, nm, 1)
+    # --- Despesas com tendência (OLS), fallback média 3m ---
+    exp_values = [e["expenses"] for e in hist_exp]
+    exp_nonzero = [v for v in exp_values if v > 0]
+    if len(exp_nonzero) >= 4:
+        e_slope, e_intercept = _ols_fit(exp_values)
+        ne = len(exp_values)
 
-    result = []
+        def _exp_at(i: int) -> float:
+            return max(0.0, e_slope * (ne - 1 + i + 1) + e_intercept)
+    else:
+        avg_exp = (
+            sum(exp_nonzero[-3:]) / len(exp_nonzero[-3:]) if exp_nonzero else 0.0
+        )
+
+        def _exp_at(i: int) -> float:
+            return avg_exp
+
+    result: list[dict[str, Any]] = []
     for i in range(months_ahead):
-        m = forecast_start.month + i
-        y = forecast_start.year + (m - 1) // 12
-        m = ((m - 1) % 12) + 1
-        d = date_cls(y, m, 1)
+        d = _month_at(i)
         month_key = d.strftime("%Y-%m")
         label = d.strftime("%b/%y")
-        forecast_mrr = base_mrr * ((1 + growth) ** (i + 1))
-        # Receita efetiva = MRR × taxa de recebimento (ajuste de inadimplência)
-        forecast_cash = forecast_mrr * collection_rate
-        forecast_net = forecast_cash - avg_exp
+
+        trend_mrr = max(0.0, slope * (n - 1 + i + 1) + intercept)
+        seasonal = factors.get(d.month, 1.0)
+        forecast_mrr = trend_mrr * seasonal
+
+        # Banda alarga com o horizonte (incerteza acumulada).
+        band = rel_std * math.sqrt(i + 1)
+        mrr_opt = forecast_mrr * (1 + band)
+        mrr_pess = max(0.0, forecast_mrr * (1 - band))
+
+        rate = _rate_at(i)
+        exp = _exp_at(i)
+
+        forecast_cash = forecast_mrr * rate
+        forecast_net = forecast_cash - exp
+        net_opt = mrr_opt * rate - exp
+        net_pess = mrr_pess * rate - exp
+
         result.append(
             {
                 "month": month_key,
                 "label": label,
                 "forecast_mrr": round(forecast_mrr, 2),
-                "forecast_cash": round(forecast_cash, 2),   # receita ajustada por inadimplência
+                "forecast_mrr_optimistic": round(mrr_opt, 2),
+                "forecast_mrr_pessimistic": round(mrr_pess, 2),
+                "forecast_cash": round(forecast_cash, 2),
+                "forecast_expenses": round(exp, 2),
+                "forecast_net": round(forecast_net, 2),
+                "forecast_net_optimistic": round(net_opt, 2),
+                "forecast_net_pessimistic": round(net_pess, 2),
+                "seasonal_factor": round(seasonal, 4),
+                "collection_rate_pct": round(rate * 100, 1),
+                "is_forecast": True,
+            }
+        )
+    return result
+
+
+def _naive_revenue_forecast(
+    hist_mrr: list[dict[str, Any]],
+    hist_exp: list[dict[str, Any]],
+    hist_cash: list[dict[str, Any]],
+    months_ahead: int,
+    month_at,
+) -> list[dict[str, Any]]:
+    """Fallback de crescimento composto p/ histórico curto (< 4 meses de MRR).
+
+    Mantém o comportamento anterior — sem sazonalidade nem cenários — mas ainda
+    emite as chaves de cenário (iguais ao valor base) para o chart/template não
+    quebrarem.
+    """
+    mrr_values = [m["mrr"] for m in hist_mrr]
+    if len(mrr_values) >= 3 and mrr_values[-3] > 0:
+        growth = (mrr_values[-1] / mrr_values[-3]) ** (1 / 2) - 1
+    elif len(mrr_values) >= 2 and mrr_values[0] > 0:
+        growth = mrr_values[-1] / mrr_values[0] - 1
+    else:
+        growth = 0.0
+    growth = max(-0.20, min(0.20, growth))
+
+    mrr_by_month = {m["month"]: m["mrr"] for m in hist_mrr if m["mrr"] > 0}
+    cash_by_month = {c["month"]: c["amount"] for c in hist_cash if c["amount"] > 0}
+    common = sorted(set(mrr_by_month) & set(cash_by_month))
+    rates = [cash_by_month[mo] / mrr_by_month[mo] for mo in common]
+    collection_rate = sum(rates[-3:]) / len(rates[-3:]) if rates else 1.0
+    collection_rate = max(0.50, min(1.05, collection_rate))
+
+    exp_values = [e["expenses"] for e in hist_exp if e["expenses"] > 0]
+    avg_exp = sum(exp_values[-3:]) / len(exp_values[-3:]) if exp_values else 0.0
+    base_mrr = mrr_values[-1] if mrr_values else 0.0
+
+    result: list[dict[str, Any]] = []
+    for i in range(months_ahead):
+        d = month_at(i)
+        forecast_mrr = base_mrr * ((1 + growth) ** (i + 1))
+        forecast_cash = forecast_mrr * collection_rate
+        forecast_net = forecast_cash - avg_exp
+        result.append(
+            {
+                "month": d.strftime("%Y-%m"),
+                "label": d.strftime("%b/%y"),
+                "forecast_mrr": round(forecast_mrr, 2),
+                "forecast_mrr_optimistic": round(forecast_mrr, 2),
+                "forecast_mrr_pessimistic": round(forecast_mrr, 2),
+                "forecast_cash": round(forecast_cash, 2),
                 "forecast_expenses": round(avg_exp, 2),
                 "forecast_net": round(forecast_net, 2),
+                "forecast_net_optimistic": round(forecast_net, 2),
+                "forecast_net_pessimistic": round(forecast_net, 2),
+                "seasonal_factor": 1.0,
                 "collection_rate_pct": round(collection_rate * 100, 1),
                 "is_forecast": True,
             }

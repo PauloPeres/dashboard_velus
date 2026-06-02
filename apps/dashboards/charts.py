@@ -858,9 +858,36 @@ def forecast_area(
     fc_labels = [f["label"] for f in forecast]
     fc_mrr = [f["forecast_mrr"] for f in forecast]
     fc_net = [f["forecast_net"] for f in forecast]
+    # Banda de cenários (otimista/pessimista); .get p/ compat retroativa.
+    fc_opt = [f.get("forecast_mrr_optimistic", f["forecast_mrr"]) for f in forecast]
+    fc_pess = [f.get("forecast_mrr_pessimistic", f["forecast_mrr"]) for f in forecast]
+    has_band = any(o != m or p != m for o, p, m in zip(fc_opt, fc_pess, fc_mrr))
+
+    band_traces = []
+    if has_band:
+        band_traces = [
+            go.Scatter(
+                name="Cenário Pessimista",
+                x=fc_labels, y=fc_pess,
+                mode="lines",
+                line={"color": "rgba(37,99,235,0)", "width": 0},
+                hovertemplate="<b>%{x}</b><br>Pessimista: R$ %{y:,.2f}<extra></extra>",
+                showlegend=False,
+            ),
+            go.Scatter(
+                name="Cenário (otimista–pessimista)",
+                x=fc_labels, y=fc_opt,
+                mode="lines",
+                line={"color": "rgba(37,99,235,0)", "width": 0},
+                fill="tonexty",
+                fillcolor="rgba(37,99,235,0.12)",
+                hovertemplate="<b>%{x}</b><br>Otimista: R$ %{y:,.2f}<extra></extra>",
+            ),
+        ]
 
     fig = go.Figure(
         data=[
+            *band_traces,
             go.Scatter(
                 name="MRR Histórico",
                 x=hist_labels, y=hist_mrr,
