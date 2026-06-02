@@ -18,11 +18,17 @@ Features point-in-time (v3 — corrige o vazamento temporal do #15):
     Todas as features usam apenas dados observáveis ATÉ essa data — nada que só
     existiria depois do ponto de observação:
         tenure_days · mrr · n_contracts · late_payments · tickets_total ·
-        pay_delay_baseline · pay_delay_recent_dev
-    As duas últimas (v4) medem inadimplência *relativa ao próprio cliente*:
+        pay_delay_baseline · pay_delay_recent_dev ·
+        os_recent_90d · os_recurrence
+    As de pagamento (v4) medem inadimplência *relativa ao próprio cliente*:
     quanto atrasar faz parte do perfil dele (mediana histórica) e o quanto ele
     está atrasando além do normal nos últimos 90 dias. Assim "sempre atrasa e
     segue igual" não é punido — só o desvio do próprio padrão sinaliza risco.
+    As de OS (v5) medem atrito operacional: volume de OS nos últimos 90 dias e
+    OS recorrentes (mesmo assunto reincidindo em janela curta = serviço não
+    resolvido). Conexões e uso de banda ficam de fora por ora — os dados ainda
+    não têm série temporal/vínculo de cliente suficientes pra features sem
+    vazamento (ver #20).
     Assim os churned não têm faturas/chamados posteriores ao cancelamento
     "vazando" pro vetor, e os ativos refletem o estado de hoje — exatamente o
     estado em que serão pontuados em produção. A assimetria de calendário que
@@ -46,6 +52,7 @@ import math
 from collections import defaultdict
 from datetime import timedelta
 from decimal import Decimal
+from itertools import pairwise
 from typing import Any
 
 import structlog
@@ -66,6 +73,8 @@ FEATURES = (
     "tickets_total",
     "pay_delay_baseline",
     "pay_delay_recent_dev",
+    "os_recent_90d",
+    "os_recurrence",
 )
 
 # ── Limiares de viabilidade do treino ───────────────────────────────────
@@ -147,6 +156,50 @@ def _payment_profile(
     return baseline, recent_dev
 
 
+# Janelas das features de OS, em dias.
+RECENT_OS_WINDOW_DAYS = 90
+OS_RECURRENCE_WINDOW_DAYS = 30
+
+
+def _os_signals(tickets: list[tuple[Any, str]], r: Any) -> tuple[float, float]:
+    """Sinais operacionais de OS *point-in-time* (até `r`).
+
+    Devolve (recent_90d, recurrence):
+        recent_90d  — nº de OS abertas nos últimos RECENT_OS_WINDOW_DAYS antes
+                      de `r`. Atividade recente de suporte = atrito recente.
+        recurrence  — nº de OS recorrentes: pares de OS do *mesmo assunto*
+                      abertas dentro de OS_RECURRENCE_WINDOW_DAYS uma da outra
+                      (problema reincidente). Reusa a lógica de revisita do #18,
+                      aqui por cliente. Reincidência = serviço não resolvido →
+                      maior risco de churn.
+
+    Só conta OS abertas até `r` (sem vazamento). Para churned, `r` é o
+    cancelamento — OS posteriores não entram.
+    """
+    recent_cutoff = r - timedelta(days=RECENT_OS_WINDOW_DAYS)
+    recurrence_window = timedelta(days=OS_RECURRENCE_WINDOW_DAYS)
+
+    recent_90d = 0
+    by_subject: dict[str, list[Any]] = defaultdict(list)
+    for opened, subject in tickets:
+        if opened is None or opened > r:
+            continue  # ainda não aberta na data de referência
+        if opened >= recent_cutoff:
+            recent_90d += 1
+        by_subject[subject].append(opened)
+
+    recurrence = 0
+    for opens in by_subject.values():
+        if len(opens) < 2:
+            continue
+        ordered = sorted(opens)
+        for prev, nxt in pairwise(ordered):
+            if nxt - prev <= recurrence_window:
+                recurrence += 1
+
+    return float(recent_90d), float(recurrence)
+
+
 @allow_cross_tenant(reason="treino de churn ML roda em Celery, escopo é a org passada")
 def compute_features(
     organization: Organization,
@@ -207,15 +260,16 @@ def compute_features(
             continue
         invoices_by_cid[cid].append((row["due_date"], row["paid_at"]))
 
-    # Chamados por cliente: lista de opened_at.
-    tickets_by_cid: dict[int, list[Any]] = defaultdict(list)
+    # Chamados por cliente: lista de (opened_at, subject_id) — assunto pra
+    # detectar OS recorrentes (mesmo assunto em janela curta).
+    tickets_by_cid: dict[int, list[tuple[Any, str]]] = defaultdict(list)
     for row in Ticket.objects.filter(organization=organization).values(
-        "customer_id", "opened_at"
+        "customer_id", "opened_at", "subject_id"
     ):
         cid = row["customer_id"]
         if cid is None:
             continue
-        tickets_by_cid[cid].append(row["opened_at"])
+        tickets_by_cid[cid].append((row["opened_at"], row["subject_id"] or ""))
 
     features: dict[int, dict[str, float]] = {}
     for cid, clist in contracts_by_cid.items():
@@ -256,14 +310,18 @@ def compute_features(
         )
 
         # Chamados abertos até a data de referência.
+        cust_tickets = tickets_by_cid.get(cid, ())
         tickets_total = sum(
-            1 for opened in tickets_by_cid.get(cid, ()) if opened is not None and opened <= r
+            1 for opened, _subj in cust_tickets if opened is not None and opened <= r
         )
 
         # Inadimplência relativa ao próprio perfil do cliente (point-in-time).
         pay_baseline, pay_recent_dev = _payment_profile(
             invoices_by_cid.get(cid, ()), r, r_date
         )
+
+        # Sinais operacionais de OS (recência + recorrência), point-in-time.
+        os_recent_90d, os_recurrence = _os_signals(list(cust_tickets), r)
 
         features[cid] = {
             "tenure_days": float(tenure_days),
@@ -273,6 +331,8 @@ def compute_features(
             "tickets_total": float(tickets_total),
             "pay_delay_baseline": pay_baseline,
             "pay_delay_recent_dev": pay_recent_dev,
+            "os_recent_90d": os_recent_90d,
+            "os_recurrence": os_recurrence,
         }
 
     return features, churned, active
