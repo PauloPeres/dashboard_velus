@@ -17,7 +17,12 @@ Features point-in-time (v3 — corrige o vazamento temporal do #15):
         negativos (ativos)  → agora.
     Todas as features usam apenas dados observáveis ATÉ essa data — nada que só
     existiria depois do ponto de observação:
-        tenure_days · mrr · n_contracts · late_payments · tickets_total
+        tenure_days · mrr · n_contracts · late_payments · tickets_total ·
+        pay_delay_baseline · pay_delay_recent_dev
+    As duas últimas (v4) medem inadimplência *relativa ao próprio cliente*:
+    quanto atrasar faz parte do perfil dele (mediana histórica) e o quanto ele
+    está atrasando além do normal nos últimos 90 dias. Assim "sempre atrasa e
+    segue igual" não é punido — só o desvio do próprio padrão sinaliza risco.
     Assim os churned não têm faturas/chamados posteriores ao cancelamento
     "vazando" pro vetor, e os ativos refletem o estado de hoje — exatamente o
     estado em que serão pontuados em produção. A assimetria de calendário que
@@ -39,6 +44,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -52,7 +58,15 @@ from apps.tenancy.models import Organization
 _logger = structlog.get_logger(__name__)
 
 # Ordem estável das features — usada no treino e no score.
-FEATURES = ("tenure_days", "mrr", "n_contracts", "late_payments", "tickets_total")
+FEATURES = (
+    "tenure_days",
+    "mrr",
+    "n_contracts",
+    "late_payments",
+    "tickets_total",
+    "pay_delay_baseline",
+    "pay_delay_recent_dev",
+)
 
 # ── Limiares de viabilidade do treino ───────────────────────────────────
 MIN_SAMPLES = 50
@@ -74,6 +88,63 @@ def _sigmoid(z: float) -> float:
     if z > 35:
         return 1.0
     return 1.0 / (1.0 + math.exp(-z))
+
+
+def _median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    if n % 2:
+        return s[mid]
+    return (s[mid - 1] + s[mid]) / 2.0
+
+
+# Janela "recente" do comportamento de pagamento, em dias.
+RECENT_PAYMENT_WINDOW_DAYS = 90
+
+
+def _payment_profile(
+    invoices: list[tuple[Any, Any]], r: Any, r_date: Any
+) -> tuple[float, float]:
+    """Perfil de inadimplência *relativo ao próprio cliente*, point-in-time.
+
+    Devolve (baseline, recent_dev):
+        baseline    — mediana do atraso (dias) das faturas já liquidadas até `r`.
+                      Captura o quanto atrasar "faz parte do perfil" do cliente.
+        recent_dev  — atraso médio das faturas vencidas nos últimos
+                      RECENT_PAYMENT_WINDOW_DAYS menos o baseline. Positivo =
+                      cliente atrasando *mais que o normal dele* → sinal forte;
+                      cliente que sempre atrasa e segue igual → ~0 (não-sinal).
+
+    Só usa faturas observáveis até `r` (vencidas até `r_date`); para liquidadas,
+    exige `paid <= r`. Sem vazamento temporal.
+    """
+    settled_lates: list[float] = []
+    recent_lates: list[float] = []
+    recent_cutoff = r_date - timedelta(days=RECENT_PAYMENT_WINDOW_DAYS)
+
+    for due, paid in invoices:
+        if due is None or due > r_date:
+            continue  # ainda não vencida na data de referência
+        if paid is not None and paid <= r:
+            late_days = max((paid.date() - due).days, 0)
+            settled_lates.append(float(late_days))
+            observed = float(late_days)
+        else:
+            # Em aberto na data de referência: atraso acumulado até `r`.
+            observed = float(max((r_date - due).days, 0))
+        if due >= recent_cutoff:
+            recent_lates.append(observed)
+
+    baseline = _median(settled_lates)
+    if recent_lates:
+        recent_avg = sum(recent_lates) / len(recent_lates)
+        recent_dev = recent_avg - baseline
+    else:
+        recent_dev = 0.0
+    return baseline, recent_dev
 
 
 @allow_cross_tenant(reason="treino de churn ML roda em Celery, escopo é a org passada")
@@ -189,12 +260,19 @@ def compute_features(
             1 for opened in tickets_by_cid.get(cid, ()) if opened is not None and opened <= r
         )
 
+        # Inadimplência relativa ao próprio perfil do cliente (point-in-time).
+        pay_baseline, pay_recent_dev = _payment_profile(
+            invoices_by_cid.get(cid, ()), r, r_date
+        )
+
         features[cid] = {
             "tenure_days": float(tenure_days),
             "mrr": float(mrr_val),
             "n_contracts": float(n_contracts),
             "late_payments": float(late),
             "tickets_total": float(tickets_total),
+            "pay_delay_baseline": pay_baseline,
+            "pay_delay_recent_dev": pay_recent_dev,
         }
 
     return features, churned, active
