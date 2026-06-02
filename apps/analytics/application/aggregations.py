@@ -51,6 +51,48 @@ def _first_of_month_n_ago(base: date_cls, n: int) -> date_cls:
     return base.replace(year=year, month=month, day=1)
 
 
+def _ixc_blocked_since(raw_extras: dict[str, Any] | None) -> date_cls | None:
+    """Data em que o contrato foi bloqueado, segundo o ERP IXC.
+
+    O `FactContractStatusDaily` só sabe quando o contrato ficou bloqueado se há
+    histórico de um dia NÃO bloqueado anterior. Contratos já bloqueados antes do
+    início dos snapshots não têm essa âncora — caem no sentinela 999 dias.
+    O IXC guarda a data real em `dt_ult_bloq_manual`/`dt_ult_bloq_auto`; usamos
+    a mais recente como fallback autoritativo.
+    """
+    candidates: list[date_cls] = []
+    for key in ("dt_ult_bloq_manual", "dt_ult_bloq_auto"):
+        value = str((raw_extras or {}).get(key) or "").strip()
+        if not value:
+            continue
+        try:
+            candidates.append(date_cls.fromisoformat(value[:10]))
+        except ValueError:
+            continue
+    return max(candidates) if candidates else None
+
+
+def _block_start_date(
+    last_ok: date_cls | None, ixc_since: date_cls | None
+) -> date_cls | None:
+    """Data de início do bloqueio atual.
+
+    Prefere o histórico de snapshots (dia seguinte ao último dia NÃO bloqueado)
+    quando disponível; senão usa a data autoritativa do IXC.
+    """
+    if last_ok:
+        return last_ok + timedelta(days=1)
+    return ixc_since
+
+
+def _days_blocked(
+    today: date_cls, last_ok: date_cls | None, ixc_since: date_cls | None
+) -> int:
+    """Dias consecutivos bloqueado; 999 quando não há âncora de data."""
+    start = _block_start_date(last_ok, ixc_since)
+    return (today - start).days if start else 999
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP, escopo é arg explícito")
 def compute_mrr_series(
     organization: Organization, months: int = 12
@@ -1070,6 +1112,8 @@ def compute_blocked_at_risk_summary(
     organization: Organization, min_days: int = 30
 ) -> dict[str, Any]:
     """KPI — contratos BLOCKED há mais de min_days dias consecutivos."""
+    from apps.customers.infrastructure.models import Contract
+
     today = timezone.now().date()
 
     blocked_ids = list(
@@ -1091,11 +1135,16 @@ def compute_blocked_at_risk_summary(
         .values("contract_id")
         .annotate(last_date=Max("date"))
     }
+    ixc_blocked_since = {
+        cid: _ixc_blocked_since(extras)
+        for cid, extras in Contract.objects.filter(
+            organization=organization, id__in=blocked_ids
+        ).values_list("id", "raw_extras")
+    }
 
     at_risk_ids = []
     for cid in blocked_ids:
-        last_ok = last_non_blocked.get(cid)
-        days = (today - last_ok).days - 1 if last_ok else 999
+        days = _days_blocked(today, last_non_blocked.get(cid), ixc_blocked_since.get(cid))
         if days >= min_days:
             at_risk_ids.append(cid)
 
@@ -1154,14 +1203,16 @@ def compute_at_risk_contracts(
 
     result = []
     for cid in blocked_ids:
-        last_ok = last_non_blocked.get(cid)
-        days = (today - last_ok).days - 1 if last_ok else 999
-        if days < min_days:
-            continue
         c = contracts_map.get(cid)
         if not c:
             continue
-        blocked_since = (last_ok + timedelta(days=1)).isoformat() if last_ok else "—"
+        last_ok = last_non_blocked.get(cid)
+        ixc_since = _ixc_blocked_since(c.raw_extras)
+        days = _days_blocked(today, last_ok, ixc_since)
+        if days < min_days:
+            continue
+        start = _block_start_date(last_ok, ixc_since)
+        blocked_since = start.isoformat() if start else "—"
         result.append(
             {
                 "contract_id": cid,
