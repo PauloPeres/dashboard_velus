@@ -95,3 +95,53 @@ class Ticket(TenantModel):
 
     def __str__(self) -> str:
         return f"#{self.protocol} ({self.source_type}:{self.external_id})"
+
+
+# =============================================================================
+# Lookups de OS IXC — cache sincronizado via `sync_os_lookups`
+# =============================================================================
+class OsLookupCache(models.Model):
+    """Cache de nomes de assunto e técnico das OS IXC para uma organização.
+
+    As OS guardam dimensões como IDs opacos (`Ticket.subject_id`, `Ticket.technician_id`).
+    Este cache resolve esses IDs em nomes legíveis pros dashboards de OS:
+
+    - subject_map: {id_assunto → nome}   (endpoint IXC `su_oss_assunto`)
+    - technician_map: {id_tecnico → nome} (endpoint IXC `funcionarios`)
+
+    Atualizado via `python manage.py sync_os_lookups <org_slug>`.
+    """
+
+    organization = models.OneToOneField(
+        "tenancy.Organization",
+        on_delete=models.CASCADE,
+        related_name="os_lookup_cache",
+        verbose_name=_("Organização"),
+    )
+    # {id_assunto (str) → nome}
+    subject_map = models.JSONField(
+        default=dict,
+        verbose_name=_("Mapa de assuntos"),
+        help_text="su_oss_assunto.id → assunto (tipo de OS)",
+    )
+    # {id_tecnico (str) → nome}
+    technician_map = models.JSONField(
+        default=dict,
+        verbose_name=_("Mapa de técnicos"),
+        help_text="funcionarios.id → funcionario (nome do técnico)",
+    )
+    synced_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Última sincronização"),
+    )
+
+    class Meta:
+        verbose_name = _("Cache de lookups de OS IXC")
+        verbose_name_plural = _("Caches de lookups de OS IXC")
+
+    def __str__(self) -> str:
+        return (
+            f"OsLookupCache {self.organization_id} · "
+            f"{len(self.subject_map)} assuntos, {len(self.technician_map)} técnicos"
+        )

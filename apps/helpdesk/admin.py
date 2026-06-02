@@ -10,7 +10,7 @@ from simple_history.admin import SimpleHistoryAdmin
 
 from apps.shared.context import set_current_organization
 
-from .infrastructure.models import Ticket
+from .infrastructure.models import OsLookupCache, Ticket
 
 
 class _TenantAdminMixin:
@@ -35,3 +35,17 @@ class TicketAdmin(_TenantAdminMixin, SimpleHistoryAdmin):
     search_fields = ("protocol", "external_id", "customer__name", "customer_external_id", "message")
     readonly_fields = ("created_at", "updated_at")
     autocomplete_fields = ("customer",)
+
+
+@admin.register(OsLookupCache)
+class OsLookupCacheAdmin(admin.ModelAdmin):
+    list_display = ("organization", "subject_count", "technician_count", "synced_at")
+    readonly_fields = ("synced_at",)
+
+    @admin.display(description="Assuntos")
+    def subject_count(self, obj: OsLookupCache) -> int:
+        return len(obj.subject_map)
+
+    @admin.display(description="Técnicos")
+    def technician_count(self, obj: OsLookupCache) -> int:
+        return len(obj.technician_map)

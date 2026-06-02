@@ -131,6 +131,9 @@ ignore = [
 # Sync importa apenas APIs de domain (CustomerRepository, CustomerDTO) — não
 # adapters. Esse arquivo precisa de tipos pra dispatch dict; é genuíno.
 "apps/sync/**" = ["TID251"]
+# Management commands de sync são glue operacional — usam o client IXC
+# diretamente (igual sync_planejamento). O ban TID251 é pra DOMAIN code.
+"apps/helpdesk/management/commands/**" = ["TID251"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 # Impede imports de adapters dentro de bounded contexts de negócio.
