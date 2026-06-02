@@ -11,7 +11,7 @@ Cobre:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -313,6 +313,71 @@ class TestChurnML:
         _sync(organization_a, "CONTRACTS")
         assert train_churn_model(organization_a) is None
         assert get_current_model(organization_a) is None
+
+    def test_train_records_validation_metrics(
+        self, ml_population: Organization
+    ) -> None:
+        summary = train_churn_model(ml_population)
+        assert summary is not None
+        assert "val_auc" in summary
+        assert "val_accuracy" in summary
+        model = get_current_model(ml_population)
+        # Holdout determinístico tem as duas classes → métricas computadas.
+        assert model.val_auc is not None
+        assert 0.0 <= model.val_auc <= 1.0
+        assert 0.0 <= model.val_accuracy <= 1.0
+
+
+# =============================================================================
+# Features point-in-time — sem vazamento temporal (#15)
+# =============================================================================
+@pytest.mark.django_db
+@pytest.mark.e2e
+class TestChurnMLPointInTime:
+    def test_late_payments_snapshot_at_cancellation(
+        self,
+        organization_a: Organization,
+        datasource_fake_customers_a: OrganizationDataSource,
+        datasource_fake_contracts_a: OrganizationDataSource,
+        datasource_fake_invoices_a: OrganizationDataSource,
+    ) -> None:
+        from apps.customers.infrastructure.models import Customer
+
+        canceled_at = datetime(2025, 1, 1, tzinfo=UTC)
+        FakeCustomerSource.set_seed([
+            CustomerDTO(external_id="ext-pit", document="33333333333",
+                        name="Cliente PIT", status="CANCELED",
+                        created_at_source=datetime(2024, 1, 1, tzinfo=UTC)),
+        ])
+        _sync(organization_a, "CUSTOMERS")
+        FakeContractSource.set_seed([
+            ContractDTO(external_id="ctr-pit", customer_external_id="ext-pit",
+                        plan_name="P", monthly_amount=Decimal("100.00"),
+                        status="CANCELED",
+                        activated_at=datetime(2024, 1, 1, tzinfo=UTC),
+                        canceled_at=canceled_at),
+        ])
+        _sync(organization_a, "CONTRACTS")
+        # Fatura vencida ANTES do cancelamento (conta) e DEPOIS (não conta).
+        FakeInvoiceSource.set_seed([
+            InvoiceDTO(external_id="iv-before", contract_external_id="ctr-pit",
+                       amount=Decimal("100.00"),
+                       due_date=date(2024, 6, 1), status="OVERDUE"),
+            InvoiceDTO(external_id="iv-after", contract_external_id="ctr-pit",
+                       amount=Decimal("100.00"),
+                       due_date=date(2025, 6, 1), status="OVERDUE"),
+        ])
+        _sync(organization_a, "INVOICES")
+
+        features, churned, _active = compute_features(organization_a)
+        set_current_organization(organization_a)
+        cid = Customer.objects.get(external_id="ext-pit").id
+        assert cid in churned
+        vec = features[cid]
+        # Só a fatura vencida antes do cancelamento entra no vetor.
+        assert vec["late_payments"] == 1.0
+        # Tenure fotografado no cancelamento (~366d), não até hoje.
+        assert vec["tenure_days"] == 366.0
 
 
 # =============================================================================
