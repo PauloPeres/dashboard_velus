@@ -103,17 +103,19 @@ class IxcPaymentSource:
             contract_external_id=None,
             amount=Decimal(schema.valor),
             paid_at=schema.data_baixa,
-            method=cls._map_method(schema.forma_pagamento),
+            method=cls._map_method(schema.forma_pagamento, schema.historico),
             raw_extras=extras,
         )
 
     @staticmethod
-    def _map_method(forma: str) -> str:
-        f = (forma or "").lower().strip()
-        if not f:
+    def _map_method(forma: str, historico: str = "") -> str:
+        # tipo_recebimento (forma) é só código contábil; o método legível está
+        # no histórico ("[Empresa - Pix - Banco]"). Varre os dois por keyword.
+        text = f"{forma or ''} {historico or ''}".lower().strip()
+        if not text:
             return "UNKNOWN"
         for keyword, canonical in _METHOD_KEYWORDS:
-            if keyword in f:
+            if keyword in text:
                 return canonical
         return "UNKNOWN"
 
@@ -122,7 +124,7 @@ class IxcPaymentSource:
         from zoneinfo import ZoneInfo
         sp = since.astimezone(ZoneInfo("America/Sao_Paulo"))
         return {
-            "qtype": "fn_areceber_baixas.data_baixa",
+            "qtype": "fn_areceber_baixas.data",
             "query": sp.strftime("%Y-%m-%d %H:%M:%S"),
             "oper": ">=",
         }

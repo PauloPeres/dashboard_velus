@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 def _to_str(v: Any) -> str:
@@ -642,18 +642,37 @@ class IxcPaymentSchema(BaseModel):
 
     model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
 
+    # NOTA: o endpoint real entrega os campos com nomes diferentes dos canônicos
+    # (id_receber/data/valor_liquido_recebido). Usamos AliasChoices pra aceitar
+    # ambos — sem isso, data_baixa ficava None e _to_dto descartava 100% das
+    # baixas, deixando Payment vazio (#26).
     id: str = Field(...)
-    id_areceber: str = Field(default="")  # FK pra fatura (fn_areceber)
+    id_areceber: str = Field(
+        default="",
+        validation_alias=AliasChoices("id_areceber", "id_receber"),
+    )  # FK pra fatura (fn_areceber)
     id_cliente: str = Field(default="")
-    valor: str = Field(default="0")  # valor recebido na baixa
-    data_baixa: datetime | None = Field(default=None)
-    forma_pagamento: str = Field(default="")  # texto/código IXC do meio de pagamento
+    valor: str = Field(
+        default="0",
+        validation_alias=AliasChoices("valor", "valor_liquido_recebido", "credito"),
+    )  # valor recebido na baixa
+    data_baixa: datetime | None = Field(
+        default=None,
+        validation_alias=AliasChoices("data_baixa", "data"),
+    )
+    # tipo_recebimento é um código contábil (débito/crédito), não o meio de
+    # pagamento — o método real só é legível no histórico (texto livre).
+    forma_pagamento: str = Field(
+        default="",
+        validation_alias=AliasChoices("forma_pagamento", "tipo_recebimento"),
+    )
+    historico: str = Field(default="")
     juros: str = Field(default="0")
     multa: str = Field(default="0")
     desconto: str = Field(default="0")
 
     @field_validator(
-        "id", "id_areceber", "id_cliente", "forma_pagamento", mode="before"
+        "id", "id_areceber", "id_cliente", "forma_pagamento", "historico", mode="before"
     )
     @classmethod
     def _coerce_str(cls, v: Any) -> str:
