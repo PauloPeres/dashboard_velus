@@ -100,6 +100,24 @@
   </div>
 </div>
 
+<!-- Consumo de banda (accounting RADIUS / radusuarios_consumo) -->
+{% if bandwidth_has_data %}
+<h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Consumo de banda</h2>
+<div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+  {% include "dashboards/_kpi_card.html" with label="Tráfego total" value=bandwidth_total_gb_str|add:" GB" subtitle="download + upload acumulado no período" tooltip="Soma de todos os registros de consumo (radusuarios_consumo): download + upload." variant="border-sky-200" value_color="text-sky-700" %}
+  {% include "dashboards/_kpi_card.html" with label="Média por cliente" value=bandwidth_avg_gb_str|add:" GB" subtitle=bandwidth_avg_subtitle tooltip="Tráfego total dividido pelos clientes com consumo registrado. Base pra identificar heavy users e subutilização." variant="border-indigo-200" value_color="text-indigo-700" %}
+  {% include "dashboards/_kpi_card.html" with label="Clientes monitorados" value=bandwidth.customer_count subtitle="com registro de consumo de banda" tooltip="Número de clientes distintos com pelo menos um registro de consumo." variant="border-gray-200" %}
+</div>
+
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Maiores consumidores (período)</h2>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">Top consumidores por tráfego acumulado — download e upload em GB</p>
+  <div id="bandwidth-chart" style="height:360px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+</div>
+{% endif %}
+
 <!-- Tabela: Top 20 consumidores de banda -->
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
   <div class="p-5 pb-0 flex items-baseline justify-between">
@@ -157,8 +175,10 @@
 {% block scripts %}
 {{ status_chart_json|json_script:"status-data" }}
 {{ nas_chart_json|json_script:"nas-data" }}
+{% if bandwidth_has_data %}{{ bandwidth_chart_json|json_script:"bandwidth-data" }}{% endif %}
 <script>
   renderChart("status-chart", "status-data");
   renderChart("nas-chart", "nas-data");
+  {% if bandwidth_has_data %}renderChart("bandwidth-chart", "bandwidth-data");{% endif %}
 </script>
 {% endblock %}

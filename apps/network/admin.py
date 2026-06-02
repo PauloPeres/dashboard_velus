@@ -10,7 +10,7 @@ from simple_history.admin import SimpleHistoryAdmin
 
 from apps.shared.context import set_current_organization
 
-from .infrastructure.models import Connection
+from .infrastructure.models import BandwidthUsage, Connection
 
 
 class _TenantAdminMixin:
@@ -35,6 +35,21 @@ class ConnectionAdmin(_TenantAdminMixin, SimpleHistoryAdmin):
     search_fields = (
         "login", "external_id", "customer__name",
         "customer_external_id", "ip", "nas_ip",
+    )
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("customer",)
+
+
+@admin.register(BandwidthUsage)
+class BandwidthUsageAdmin(_TenantAdminMixin, SimpleHistoryAdmin):
+    list_display = (
+        "external_id", "customer", "customer_external_id",
+        "download_bytes", "upload_bytes", "session_time",
+        "reference_date", "updated_at",
+    )
+    list_filter = ("source_type", "reference_date")
+    search_fields = (
+        "external_id", "customer__name", "customer_external_id",
     )
     readonly_fields = ("created_at", "updated_at")
     autocomplete_fields = ("customer",)

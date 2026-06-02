@@ -19,6 +19,7 @@ class FakeAdapterConfig(AppConfig):
         from apps.integrations.shared.enums import Capability, SourceType
         from apps.integrations.shared.registry import registry
 
+        from .bandwidth import FakeBandwidthUsageSource
         from .connections import FakeConnectionSource
         from .contracts import FakeContractSource
         from .customers import FakeCustomerSource
@@ -38,6 +39,7 @@ class FakeAdapterConfig(AppConfig):
             (Capability.EXPENSES, FakeExpenseSource),
             (Capability.TICKETS, FakeTicketSource),
             (Capability.CONNECTIONS, FakeConnectionSource),
+            (Capability.BANDWIDTH, FakeBandwidthUsageSource),
             (Capability.EQUIPMENT, FakeEquipmentSource),
             (Capability.LEADS, FakeLeadSource),
             (Capability.OPPORTUNITIES, FakeOpportunitySource),

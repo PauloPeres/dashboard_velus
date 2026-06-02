@@ -12,7 +12,7 @@ desconhecidos passam por `extras` (config `extra='allow'`) e vão pra
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -570,6 +570,62 @@ class IxcRadUserSchema(BaseModel):
     @property
     def is_online(self) -> bool:
         return self.online.upper() == "S"
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})
+
+
+class IxcBandwidthSchema(BaseModel):
+    """Schema do registro `radusuarios_consumo` (accounting RADIUS) na API IXC.
+
+    Cada registro é o consumo acumulado de um cliente num período (tipicamente
+    um dia). `acctinputoctets`/`acctoutputoctets` são os contadores de bytes;
+    `acctsessiontime` é o tempo conectado em segundos. `data` é a data de
+    referência do consumo.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True, str_strip_whitespace=True)
+
+    id: str = Field(...)
+    id_cliente: str = Field(default="")
+    acctinputoctets: int = Field(default=0)  # download
+    acctoutputoctets: int = Field(default=0)  # upload
+    acctsessiontime: int = Field(default=0)  # segundos
+    data: date | None = Field(default=None)
+
+    @field_validator("id", "id_cliente", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator(
+        "acctinputoctets", "acctoutputoctets", "acctsessiontime", mode="before"
+    )
+    @classmethod
+    def _coerce_int(cls, v: Any) -> int:
+        if v in (None, ""):
+            return 0
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return 0
+
+    @field_validator("data", mode="before")
+    @classmethod
+    def _parse_ixc_date(cls, v: Any) -> date | None:
+        if v in (None, "", "0000-00-00 00:00:00", "0000-00-00"):
+            return None
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, date):
+            return v
+        if isinstance(v, str):
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    return datetime.strptime(v, fmt).date()
+                except ValueError:
+                    continue
+        return None
 
     def get_extras(self) -> dict[str, Any]:
         return dict(self.model_extra or {})

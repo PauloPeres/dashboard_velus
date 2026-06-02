@@ -1059,3 +1059,32 @@ def lead_origin_pie(data: list[dict[str, Any]]) -> str:
         layout={**_LAYOUT_BASE, "showlegend": True},
     )
     return _to_json(fig)
+
+
+def bandwidth_top_consumers_bar(data: list[dict[str, Any]]) -> str:
+    """Barras horizontais empilhadas — top consumidores (download + upload em GB)."""
+    labels = [d["customer_name"] for d in data]
+    download_gb = [round((d["download_bytes"] or 0) / 1024**3, 2) for d in data]
+    upload_gb = [round((d["upload_bytes"] or 0) / 1024**3, 2) for d in data]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=download_gb, y=labels, orientation="h",
+                name="Download", marker_color="#0ea5e9",
+                hovertemplate="<b>%{y}</b><br>Download: %{x} GB<extra></extra>",
+            ),
+            go.Bar(
+                x=upload_gb, y=labels, orientation="h",
+                name="Upload", marker_color="#6366f1",
+                hovertemplate="<b>%{y}</b><br>Upload: %{x} GB<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "yaxis": {"autorange": "reversed"},
+            "xaxis": {"title": "GB"},
+            "showlegend": True,
+        },
+    )
+    return _to_json(fig)

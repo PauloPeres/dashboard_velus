@@ -8,10 +8,10 @@ from django.db import transaction
 
 from apps.customers.infrastructure.models import Customer
 from apps.integrations.shared.enums import SourceType
-from apps.network.domain.dto import ConnectionDTO
+from apps.network.domain.dto import BandwidthUsageDTO, ConnectionDTO
 from apps.tenancy.models import Organization
 
-from .models import Connection
+from .models import BandwidthUsage, Connection
 
 
 class ConnectionRepository:
@@ -71,3 +71,51 @@ class ConnectionRepository:
         if raw_upper in Connection.Status.values:
             return raw_upper
         return Connection.Status.UNKNOWN.value
+
+
+class BandwidthUsageRepository:
+    """Persistência idempotente de BandwidthUsage a partir de DTOs.
+
+    Idempotência via composite unique `(organization, source_type, external_id)` —
+    upsert atualiza se já existe, cria se não. Rerodar sync não duplica.
+    """
+
+    def __init__(self, organization: Organization) -> None:
+        self.organization = organization
+
+    @transaction.atomic
+    def upsert_from_dto(
+        self,
+        dto: BandwidthUsageDTO,
+        *,
+        source_type: SourceType,
+    ) -> tuple[BandwidthUsage, bool]:
+        """Upsert idempotente. Retorna (usage, created)."""
+        customer = (
+            Customer.objects
+            .filter(
+                organization=self.organization,
+                source_type=source_type.value,
+                external_id=dto.customer_external_id,
+            )
+            .first()
+            if dto.customer_external_id
+            else None
+        )
+
+        defaults: dict[str, Any] = {
+            "customer": customer,
+            "customer_external_id": dto.customer_external_id,
+            "download_bytes": dto.download_bytes,
+            "upload_bytes": dto.upload_bytes,
+            "session_time": dto.session_time,
+            "reference_date": dto.reference_date,
+            "raw_extras": dto.raw_extras,
+        }
+        usage, created = BandwidthUsage.objects.update_or_create(
+            organization=self.organization,
+            source_type=source_type.value,
+            external_id=dto.external_id,
+            defaults=defaults,
+        )
+        return usage, created

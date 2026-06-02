@@ -2637,3 +2637,70 @@ def compute_pipeline_aging(
             "days_open": days_open,
         })
     return result
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_bandwidth_summary(
+    organization: Organization, top: int = 20
+) -> dict[str, Any]:
+    """Resumo do consumo de banda agregado por cliente.
+
+    Soma download/upload de todos os registros de consumo e identifica os
+    maiores consumidores — base pra segmentação (heavy users → upgrade,
+    subutilização → downgrade/churn) e dimensionamento de backbone.
+    """
+    from apps.network.infrastructure.models import BandwidthUsage
+
+    qs = BandwidthUsage.objects.filter(organization=organization)
+
+    totals = qs.aggregate(
+        total_download=Coalesce(Sum("download_bytes"), 0),
+        total_upload=Coalesce(Sum("upload_bytes"), 0),
+    )
+    total_download = totals["total_download"] or 0
+    total_upload = totals["total_upload"] or 0
+    total_bytes = total_download + total_upload
+
+    # Clientes distintos com consumo registrado
+    customer_count = (
+        qs.exclude(customer_external_id="")
+        .values("customer_external_id")
+        .distinct()
+        .count()
+    )
+
+    avg_per_customer = (total_bytes / customer_count) if customer_count else 0
+
+    # Top consumidores agregados por cliente
+    rows = (
+        qs.values("customer_external_id", "customer__name")
+        .annotate(
+            download=Coalesce(Sum("download_bytes"), 0),
+            upload=Coalesce(Sum("upload_bytes"), 0),
+        )
+        .order_by("-download")
+    )
+    top_consumers: list[dict[str, Any]] = []
+    for row in rows[:top]:
+        dl = row["download"] or 0
+        ul = row["upload"] or 0
+        total = dl + ul
+        ext = row["customer_external_id"]
+        top_consumers.append({
+            "customer_external_id": ext,
+            "customer_name": row["customer__name"] or f"Cliente #{ext}",
+            "download_bytes": dl,
+            "upload_bytes": ul,
+            "total_bytes": total,
+            "total_gb": round(total / 1024**3, 2),
+        })
+
+    return {
+        "total_download_bytes": total_download,
+        "total_upload_bytes": total_upload,
+        "total_bytes": total_bytes,
+        "total_gb": round(total_bytes / 1024**3, 2),
+        "customer_count": customer_count,
+        "avg_per_customer_gb": round(avg_per_customer / 1024**3, 2),
+        "top_consumers": top_consumers,
+    }

@@ -18,6 +18,7 @@ class IxcAdapterConfig(AppConfig):
         from apps.integrations.shared.enums import Capability, SourceType
         from apps.integrations.shared.registry import registry
 
+        from .bandwidth import IxcBandwidthUsageSource
         from .connections import IxcConnectionSource
         from .contracts import IxcContractSource
         from .customers import IxcCustomerSource
@@ -38,6 +39,7 @@ class IxcAdapterConfig(AppConfig):
             (Capability.EXPENSES, IxcExpenseSource),
             (Capability.TICKETS, IxcTicketSource),
             (Capability.CONNECTIONS, IxcConnectionSource),
+            (Capability.BANDWIDTH, IxcBandwidthUsageSource),
             (Capability.EQUIPMENT, IxcEquipmentSource),
             (Capability.LEADS, IxcLeadSource),
             (Capability.OPPORTUNITIES, IxcOpportunitySource),

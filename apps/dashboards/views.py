@@ -22,6 +22,7 @@ from apps.analytics.application.aggregations import (
     compute_aging_distribution,
     compute_arpu_by_plan,
     compute_at_risk_contracts,
+    compute_bandwidth_summary,
     compute_blocked_at_risk_summary,
     compute_blocked_duration_distribution,
     compute_burn_rate,
@@ -933,6 +934,9 @@ def network(request: HttpRequest) -> HttpResponse:
         c["customer_name"] = c["customer__name"] or f"Cliente #{c['customer_external_id']}"
         c["total_gb"] = round((c["total_bytes"] or 0) / 1024**3, 2)
 
+    # Consumo de banda agregado (accounting RADIUS / radusuarios_consumo)
+    bandwidth = compute_bandwidth_summary(org)
+
     return render(
         request,
         "dashboards/network.html",
@@ -947,6 +951,14 @@ def network(request: HttpRequest) -> HttpResponse:
             "top_consumers": top_consumers,
             "status_chart_json": charts.connection_status_pie(status_dist),
             "nas_chart_json": charts.connections_by_nas_bar(nas_dist),
+            "bandwidth": bandwidth,
+            "bandwidth_has_data": bandwidth["total_bytes"] > 0,
+            "bandwidth_total_gb_str": f"{bandwidth['total_gb']:,.2f}".replace(",", "."),
+            "bandwidth_avg_gb_str": f"{bandwidth['avg_per_customer_gb']:,.2f}".replace(",", "."),
+            "bandwidth_avg_subtitle": f"{bandwidth['customer_count']} clientes com consumo",
+            "bandwidth_chart_json": charts.bandwidth_top_consumers_bar(
+                bandwidth["top_consumers"]
+            ),
         },
     )
 

@@ -8,7 +8,7 @@ from typing import Protocol, runtime_checkable
 
 from apps.integrations.shared.enums import Capability, SourceType
 
-from .dto import ConnectionDTO
+from .dto import BandwidthUsageDTO, ConnectionDTO
 
 
 @runtime_checkable
@@ -28,4 +28,24 @@ class ConnectionSourcePort(Protocol):
 
     def get_connection(self, external_id: str) -> ConnectionDTO | None:
         """Busca conexão única pelo ID na fonte externa."""
+        ...
+
+
+@runtime_checkable
+class BandwidthUsageSourcePort(Protocol):
+    """Adapter que sabe ler consumo de banda (accounting RADIUS) de um sistema externo."""
+
+    source_type: SourceType
+    capabilities: frozenset[Capability]
+
+    def list_bandwidth_usage(
+        self,
+        *,
+        since: datetime | None = None,
+    ) -> Iterator[BandwidthUsageDTO]:
+        """Itera registros de consumo. since=None -> bootstrap; senão incremental."""
+        ...
+
+    def get_bandwidth_usage(self, external_id: str) -> BandwidthUsageDTO | None:
+        """Busca registro de consumo único pelo ID na fonte externa."""
         ...

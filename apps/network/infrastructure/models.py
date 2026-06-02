@@ -87,3 +87,65 @@ class Connection(TenantModel):
 
     def __str__(self) -> str:
         return f"{self.login} [{self.status}] ({self.source_type}:{self.external_id})"
+
+
+class BandwidthUsage(TenantModel):
+    """Consumo de banda por cliente/período vindo de accounting RADIUS.
+
+    `customer` é FK opcional pq sync pode receber consumo antes do cliente
+    correspondente. Repository tenta resolver via
+    `(organization, source_type, customer_external_id)` no upsert.
+    """
+
+    source_type = models.CharField(
+        max_length=32,
+        choices=SourceType.choices,
+        help_text=_("Sistema externo que originou este registro."),
+    )
+    external_id = models.CharField(
+        max_length=128,
+        help_text=_("ID do registro de consumo no sistema externo (opaco — string)."),
+    )
+
+    # FK resolvida via (source_type, customer_external_id) no Repository.
+    customer = models.ForeignKey(
+        "customers.Customer",
+        on_delete=models.PROTECT,
+        related_name="bandwidth_usages",
+        null=True,
+        blank=True,
+    )
+    customer_external_id = models.CharField(max_length=128, db_index=True)
+
+    download_bytes = models.BigIntegerField(default=0)
+    upload_bytes = models.BigIntegerField(default=0)
+    session_time = models.BigIntegerField(default=0)  # segundos
+
+    reference_date = models.DateField(null=True, blank=True)
+
+    raw_extras = models.JSONField(default=dict, blank=True)
+
+    history = HistoricalRecords()
+
+    class Meta:
+        verbose_name = _("Consumo de banda")
+        verbose_name_plural = _("Consumos de banda")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "source_type", "external_id"],
+                name="unique_bandwidth_usage_per_source",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "reference_date"]),
+            models.Index(
+                fields=["organization", "source_type", "customer_external_id"]
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"{self.customer_external_id} "
+            f"↓{self.download_bytes} ↑{self.upload_bytes} "
+            f"({self.source_type}:{self.external_id})"
+        )

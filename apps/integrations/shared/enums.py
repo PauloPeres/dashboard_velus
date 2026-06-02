@@ -33,6 +33,7 @@ class Capability(models.TextChoices):
         PAYMENTS   → apps.financial.domain.ports.PaymentSourcePort
         TICKETS    → apps.helpdesk.domain.ports.TicketSourcePort
         CONNECTIONS → apps.network.domain.ports.ConnectionSourcePort
+        BANDWIDTH   → apps.network.domain.ports.BandwidthUsageSourcePort
         EQUIPMENT  → apps.inventory.domain.ports.EquipmentSourcePort
         LEADS         → apps.sales.domain.ports.LeadSourcePort
         OPPORTUNITIES → apps.sales.domain.ports.OpportunitySourcePort
@@ -45,6 +46,7 @@ class Capability(models.TextChoices):
     EXPENSES = "EXPENSES", "Despesas"
     TICKETS = "TICKETS", "Chamados"
     CONNECTIONS = "CONNECTIONS", "Conexões"
+    BANDWIDTH = "BANDWIDTH", "Consumo de banda"
     EQUIPMENT = "EQUIPMENT", "Equipamentos em comodato"
     LEADS = "LEADS", "Leads (CRM)"
     OPPORTUNITIES = "OPPORTUNITIES", "Negociações (CRM)"

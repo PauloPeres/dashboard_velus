@@ -33,8 +33,11 @@ from apps.helpdesk.infrastructure.repositories import TicketRepository
 from apps.integrations.shared.enums import Capability, SourceType
 from apps.inventory.domain.dto import EquipmentDTO
 from apps.inventory.infrastructure.repositories import EquipmentRepository
-from apps.network.domain.dto import ConnectionDTO
-from apps.network.infrastructure.repositories import ConnectionRepository
+from apps.network.domain.dto import BandwidthUsageDTO, ConnectionDTO
+from apps.network.infrastructure.repositories import (
+    BandwidthUsageRepository,
+    ConnectionRepository,
+)
 from apps.sales.domain.dto import LeadDTO, OpportunityDTO
 from apps.sales.infrastructure.repositories import (
     LeadRepository,
@@ -134,6 +137,12 @@ def _connection_port_call(source: Any, since: datetime | None) -> Iterator[Conne
     return source.list_connections(since=since)
 
 
+def _bandwidth_port_call(
+    source: Any, since: datetime | None
+) -> Iterator[BandwidthUsageDTO]:
+    return source.list_bandwidth_usage(since=since)
+
+
 def _equipment_port_call(source: Any, since: datetime | None) -> Iterator[EquipmentDTO]:
     return source.list_equipment(since=since)
 
@@ -166,6 +175,7 @@ _DISPATCH: dict[
     Capability.EXPENSES: (_expense_port_call, ExpenseRepository, _repo_upsert),
     Capability.TICKETS: (_ticket_port_call, TicketRepository, _repo_upsert),
     Capability.CONNECTIONS: (_connection_port_call, ConnectionRepository, _repo_upsert),
+    Capability.BANDWIDTH: (_bandwidth_port_call, BandwidthUsageRepository, _repo_upsert),
     Capability.EQUIPMENT: (_equipment_port_call, EquipmentRepository, _repo_upsert),
     Capability.LEADS: (_lead_port_call, LeadRepository, _repo_upsert),
     Capability.OPPORTUNITIES: (_opportunity_port_call, OpportunityRepository, _repo_upsert),
