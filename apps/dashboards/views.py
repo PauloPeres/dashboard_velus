@@ -58,6 +58,7 @@ from apps.analytics.application.aggregations import (
     compute_revenue_comparison,
     compute_revenue_forecast,
     compute_sales_funnel,
+    compute_support_sla,
     compute_top_delinquent_invoices,
     compute_top_risk_customers,
     search_customers,
@@ -879,6 +880,10 @@ def operations(request: HttpRequest) -> HttpResponse:
     else:
         avg_res_str = f"{avg_resolution_hours:.1f}h"
 
+    # SLA por tipo de atendimento (Manutenção/Instalação/...) — últimos 30 dias
+    # com comparativo vs os 30 dias anteriores.
+    sla_by_type = compute_support_sla(org, period_days=30)
+
     return render(
         request,
         "dashboards/operations.html",
@@ -890,6 +895,7 @@ def operations(request: HttpRequest) -> HttpResponse:
             "sla_pct_str": f"{sla_pct:.1f}%",
             "open_tickets": open_tickets,
             "priority_dist": priority_dist,
+            "sla_by_type": sla_by_type,
             "volume_chart_json": charts.ticket_volume_trend(volume_series),
             "priority_chart_json": charts.ticket_priority_pie(priority_dist),
         },

@@ -3231,6 +3231,38 @@ def compute_bandwidth_summary(
     }
 
 
+def compute_support_sla(
+    organization: Organization, *, period_days: int = 30
+) -> list[dict[str, Any]]:
+    """SLA por tipo de atendimento — tempo médio de resposta/resolução + comparativo.
+
+    Resolve os assuntos das OS em categorias (via OsLookupCache + classify_subject)
+    e delega o cálculo à função pura `compute_sla_by_category`, que compara o
+    período atual com o anterior (mesma duração). Sem lookups sincronizados, as OS
+    caem todas em "Outros" (fallback gracioso).
+    """
+    from apps.helpdesk.application.os_classification import classify_subject
+    from apps.helpdesk.application.os_lookups import load_os_lookups
+    from apps.helpdesk.application.sla import compute_sla_by_category
+    from apps.helpdesk.infrastructure.models import Ticket
+
+    lookups = load_os_lookups(organization)
+    subject_to_category = {
+        sid: classify_subject(name) for sid, name in lookups.subject_map.items()
+    }
+
+    now = timezone.now()
+    window_start = now - timedelta(days=2 * period_days)
+    tickets = list(
+        Ticket.objects.filter(
+            organization=organization, opened_at__gte=window_start
+        ).values("subject_id", "status", "opened_at", "scheduled_at", "closed_at")
+    )
+    return compute_sla_by_category(
+        tickets, subject_to_category, now=now, period_days=period_days
+    )
+
+
 # =============================================================================
 # Customer 360 — visão unificada do cliente (read-only, cross-app)
 # =============================================================================

@@ -81,6 +81,56 @@
   </div>
 </div>
 
+<!-- SLA por tipo de atendimento -->
+<div class="flex items-baseline justify-between mb-3">
+  <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">SLA por tipo de atendimento</h2>
+  <span class="text-xs text-gray-400">últimos 30 dias · comparativo vs 30 dias anteriores</span>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+  {% for s in sla_by_type %}
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-3">
+      <h3 class="text-sm font-semibold text-gray-800">{{ s.label }}</h3>
+      <span class="text-xs text-gray-400">{{ s.count|intcomma }} OS</span>
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      <!-- Tempo de atendimento (abertura → agendamento) -->
+      <div>
+        <p class="text-xs text-gray-500 mb-1">Atendimento</p>
+        <p class="text-xl font-bold text-gray-900">
+          {% if s.responded_count %}{{ s.avg_response_hours|floatformat:1 }}h{% else %}<span class="text-gray-300">—</span>{% endif %}
+        </p>
+        {% if s.response_delta_hours is not None %}
+          <p class="text-xs mt-0.5 {% if s.response_improved %}text-emerald-600{% else %}text-red-600{% endif %}">
+            {% if s.response_improved %}▼{% else %}▲{% endif %} {{ s.response_delta_hours|floatformat:1 }}h
+          </p>
+        {% else %}
+          <p class="text-xs mt-0.5 text-gray-300">sem base anterior</p>
+        {% endif %}
+      </div>
+      <!-- Tempo de resolução (abertura → fechamento) -->
+      <div>
+        <p class="text-xs text-gray-500 mb-1">Resolução</p>
+        <p class="text-xl font-bold text-gray-900">
+          {% if s.resolved_count %}{{ s.avg_resolution_hours|floatformat:1 }}h{% else %}<span class="text-gray-300">—</span>{% endif %}
+        </p>
+        {% if s.resolution_delta_hours is not None %}
+          <p class="text-xs mt-0.5 {% if s.resolution_improved %}text-emerald-600{% else %}text-red-600{% endif %}">
+            {% if s.resolution_improved %}▼{% else %}▲{% endif %} {{ s.resolution_delta_hours|floatformat:1 }}h
+          </p>
+        {% else %}
+          <p class="text-xs mt-0.5 text-gray-300">sem base anterior</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% empty %}
+  <div class="col-span-full bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center text-gray-500">
+    Sem atendimentos nos últimos 30 dias
+  </div>
+  {% endfor %}
+</div>
+
 <!-- Gráficos -->
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">

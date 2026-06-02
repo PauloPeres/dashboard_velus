@@ -31,6 +31,23 @@ OTHER = "OTHER"            # não classificado
 # contam pro sinal de "chamados frequentes" do churn.
 CHURN_RELEVANT_CATEGORIES = frozenset({SUPPORT})
 
+# Rótulos legíveis por categoria — usados nos cards de SLA por tipo (#34).
+CATEGORY_LABELS: dict[str, str] = {
+    SUPPORT: "Manutenção",
+    INSTALL: "Instalação",
+    EQUIPMENT: "Equipamento",
+    FINANCE: "Financeiro",
+    COMMERCIAL: "Comercial",
+    LIFECYCLE: "Cancelamento/Retenção",
+    ADMIN: "Administrativo",
+    OTHER: "Outros",
+}
+
+
+def category_label(category: str) -> str:
+    """Rótulo legível de uma categoria de atendimento (fallback = própria chave)."""
+    return CATEGORY_LABELS.get(category, category)
+
 # Regras (categoria, palavras-chave) avaliadas em ordem; primeira que casa vence.
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
