@@ -219,10 +219,18 @@ def compute_kpis(organization: Organization) -> dict[str, Any]:
     month_first = today.replace(day=1)
     last_month_first = (month_first - timedelta(days=1)).replace(day=1)
 
+    # Último snapshot disponível <= hoje: o job diário de fact pode ainda não ter
+    # rodado para hoje (rollover de data), então não confiamos em date=today.
+    ref_date = (
+        FactContractStatusDaily.objects.filter(
+            organization=organization, date__lte=today, is_active=True
+        ).aggregate(m=Max("date"))["m"]
+    ) or today
+
     # MRR atual e mês anterior
     mrr_now = (
         FactContractStatusDaily.objects.filter(
-            organization=organization, date=today, is_active=True
+            organization=organization, date=ref_date, is_active=True
         ).aggregate(s=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()))
     )["s"] or _ZERO
 
@@ -240,7 +248,7 @@ def compute_kpis(organization: Organization) -> dict[str, Any]:
     # Contratos ativos — is_active = status in (ACTIVE, BLOCKED, AWAITING_INSTALL)
     status_breakdown = (
         FactContractStatusDaily.objects.filter(
-            organization=organization, date=today, is_active=True
+            organization=organization, date=ref_date, is_active=True
         )
         .values("status")
         .annotate(n=Count("id"))

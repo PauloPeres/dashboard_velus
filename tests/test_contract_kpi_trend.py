@@ -18,6 +18,7 @@ from apps.analytics.application.aggregations import (
     _cumulative_equipment_by_month,
     compute_contract_kpi_trend,
     compute_equipment_field_trend,
+    compute_kpis,
 )
 from apps.analytics.infrastructure.models import FactContractStatusDaily
 from apps.customers.infrastructure.models import Contract
@@ -139,6 +140,21 @@ def _make_equipment(org: Organization, *, status: str, data: str | None) -> None
         status=status,
         raw_extras={"data": data} if data is not None else {},
     )
+
+
+@pytest.mark.django_db
+class TestComputeKpisSnapshotFallback:
+    def test_mrr_uses_latest_snapshot_when_today_missing(
+        self, organization_a: Organization
+    ) -> None:
+        # Sem snapshot para hoje (job diário ainda não rodou): o último <= hoje
+        # deve alimentar o MRR em vez de zerar.
+        yesterday = timezone.now().date() - timedelta(days=1)
+        _active_snapshot(organization_a, on=yesterday, monthly=Decimal("250"))
+
+        kpis = compute_kpis(organization_a)
+        assert kpis["mrr_now"] == 250.0
+        assert kpis["active_contracts"] == 1
 
 
 @pytest.mark.django_db
