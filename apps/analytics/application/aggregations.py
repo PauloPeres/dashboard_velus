@@ -253,12 +253,12 @@ def compute_kpis(organization: Organization) -> dict[str, Any]:
     from apps.customers.infrastructure.models import Contract
     new_count = Contract.objects.filter(
         organization=organization,
-        activated_at__gte=month_first,
+        activated_at__date__gte=month_first,
     ).count()
 
     canceled_count = Contract.objects.filter(
         organization=organization,
-        canceled_at__gte=month_first,
+        canceled_at__date__gte=month_first,
     ).count()
 
     # Churn = cancelados no mês / ativos no início do mês * 100

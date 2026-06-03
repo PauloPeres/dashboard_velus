@@ -18,7 +18,11 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 
 from apps.analytics.application.aggregations import (
+    compute_aging_distribution,
+    compute_cash_received_series,
     compute_churn_risk_summary,
+    compute_kpis,
+    compute_revenue_forecast,
     compute_top_risk_customers,
 )
 from apps.shared.decorators import allow_cross_tenant
@@ -46,20 +50,72 @@ def _fmt_brl(value: Any) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def _build_strategic_block(organization: Organization) -> dict[str, Any]:
+    """Bloco estratégico do digest mensal: MRR, churn, net adds, caixa, inadimplência, forecast."""
+    kpis = compute_kpis(organization)
+    current_key = timezone.now().strftime("%Y-%m")
+    cash_series = compute_cash_received_series(organization, months=12)
+    # paid_date do IXC tem registros futuros; busca o mês corrente pela chave.
+    cash_month = next(
+        (c["amount"] for c in cash_series if c["month"] == current_key), 0.0
+    )
+    forecast = compute_revenue_forecast(organization, months_ahead=1)
+    forecast_next = forecast[0]["forecast_cash"] if forecast else 0.0
+    forecast_label = forecast[0]["label"] if forecast else ""
+    return {
+        "mrr_now_str": _fmt_brl(kpis["mrr_now"]),
+        "mrr_delta_pct": round(kpis["mrr_delta_pct"], 1),
+        "mrr_delta_positive": kpis["mrr_delta_pct"] >= 0,
+        "churn_pct": round(kpis["churn_pct"], 2),
+        "new_this_month": kpis["new_this_month"],
+        "canceled_this_month": kpis["canceled_this_month"],
+        "net_adds": kpis["new_this_month"] - kpis["canceled_this_month"],
+        "cash_month_str": _fmt_brl(cash_month),
+        "delinquency_str": _fmt_brl(kpis["delinquency_amount"]),
+        "delinquency_pct_of_mrr": round(kpis["delinquency_pct_of_mrr"], 1),
+        "forecast_next_str": _fmt_brl(forecast_next),
+        "forecast_label": forecast_label,
+    }
+
+
+def _build_collections_block(organization: Organization) -> dict[str, Any]:
+    """Bloco de cobranças do digest semanal: foco em inadimplência crítica (90+)."""
+    aging = compute_aging_distribution(organization)
+    over_90 = next((b for b in aging if b["key"] == "OVER_90"), {})
+    total_delinquency = sum(b["amount"] for b in aging if b["key"] != "ON_TIME")
+    return {
+        "over_90_str": _fmt_brl(over_90.get("amount", 0)),
+        "over_90_count": over_90.get("count", 0),
+        "total_delinquency_str": _fmt_brl(total_delinquency),
+    }
+
+
 @allow_cross_tenant(reason="digest de churn roda em Celery, escopo é a org passada")
 def build_digest(organization: Organization, period: str) -> dict[str, Any]:
-    """Monta o payload do digest da org para o período."""
+    """Monta o payload do digest da org para o período.
+
+    Conteúdo diferenciado por período (#44): o mensal carrega um bloco
+    estratégico (MRR, churn, net adds, caixa, inadimplência, forecast); o
+    semanal carrega um bloco operacional de cobranças (inadimplência crítica).
+    Ambos mantêm o panorama de risco de churn.
+    """
     summary = compute_churn_risk_summary(organization)
     top = compute_top_risk_customers(organization, limit=_TOP_LIMIT[period])
-    return {
+    context: dict[str, Any] = {
         "organization": organization,
         "period": period,
         "period_label": _PERIOD_LABEL[period],
+        "is_monthly": period == PERIOD_MONTHLY,
         "summary": summary,
         "revenue_at_risk_str": _fmt_brl(summary.get("revenue_at_risk")),
         "top": top,
         "generated_at": timezone.now(),
     }
+    if period == PERIOD_MONTHLY:
+        context["strategic"] = _build_strategic_block(organization)
+    else:
+        context["collections"] = _build_collections_block(organization)
+    return context
 
 
 def _recipients(organization: Organization, period: str) -> list[User]:
@@ -90,10 +146,10 @@ def send_churn_digest(organization: Organization, period: str) -> dict[str, Any]
         return {"sent": 0, "recipients": 0}
 
     context = build_digest(organization, period)
-    subject = (
-        f"[Velus] Risco de churn — digest {context['period_label']} · "
-        f"{organization.name}"
-    )
+    if period == PERIOD_MONTHLY:
+        subject = f"[Velus] Resumo estratégico mensal · {organization.name}"
+    else:
+        subject = f"[Velus] Foco da semana — risco e cobranças · {organization.name}"
     text_body = render_to_string("analytics/emails/churn_digest.txt", context)
     html_body = render_to_string("analytics/emails/churn_digest.html", context)
 

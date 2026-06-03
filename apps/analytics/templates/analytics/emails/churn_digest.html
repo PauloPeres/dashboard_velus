@@ -3,11 +3,69 @@
 <head><meta charset="UTF-8"></head>
 <body style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;margin:0;padding:24px;background:#f9fafb;">
   <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:24px;">
-    <h1 style="font-size:18px;margin:0 0 4px;">Risco de churn — digest {{ period_label }}</h1>
+    <h1 style="font-size:18px;margin:0 0 4px;">
+      {% if is_monthly %}Resumo estratégico mensal{% else %}Foco da semana — risco e cobranças{% endif %}
+    </h1>
     <p style="font-size:12px;color:#9ca3af;margin:0 0 20px;">
       {{ organization.name }} · {{ generated_at|date:"d/m/Y H:i" }}
     </p>
 
+    {% if is_monthly and strategic %}
+    <h2 style="font-size:14px;margin:0 0 8px;">Panorama estratégico do mês</h2>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:13px;">
+      <tr>
+        <td style="padding:8px;background:#f3f4f6;border-radius:8px;">MRR atual</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;">{{ strategic.mrr_now_str }}
+          <span style="color:{% if strategic.mrr_delta_positive %}#16a34a{% else %}#dc2626{% endif %};font-weight:normal;font-size:12px;">
+            ({% if strategic.mrr_delta_positive %}+{% endif %}{{ strategic.mrr_delta_pct }}%)
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:8px;">Net adds (novos − cancelados)</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;color:{% if strategic.net_adds >= 0 %}#16a34a{% else %}#dc2626{% endif %};">
+          {% if strategic.net_adds >= 0 %}+{% endif %}{{ strategic.net_adds }}
+          <span style="color:#9ca3af;font-weight:normal;font-size:12px;">({{ strategic.new_this_month }} novos / {{ strategic.canceled_this_month }} cancelados)</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:8px;">Churn do mês</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;">{{ strategic.churn_pct }}%</td>
+      </tr>
+      <tr>
+        <td style="padding:8px;">Caixa recebido (mês)</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;">{{ strategic.cash_month_str }}</td>
+      </tr>
+      <tr>
+        <td style="padding:8px;">Inadimplência (estoque)</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;color:#dc2626;">{{ strategic.delinquency_str }}
+          <span style="color:#9ca3af;font-weight:normal;font-size:12px;">({{ strategic.delinquency_pct_of_mrr }}% do MRR)</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:8px;">Projeção de caixa ({{ strategic.forecast_label }})</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;">{{ strategic.forecast_next_str }}</td>
+      </tr>
+    </table>
+    {% endif %}
+
+    {% if not is_monthly and collections %}
+    <h2 style="font-size:14px;margin:0 0 8px;">Cobranças — foco da semana</h2>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:13px;">
+      <tr>
+        <td style="padding:8px;background:#fef2f2;border-radius:8px;">Crítico (90+ dias)</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;color:#dc2626;">{{ collections.over_90_str }}
+          <span style="color:#9ca3af;font-weight:normal;font-size:12px;">({{ collections.over_90_count }} faturas)</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:8px;">Inadimplência total (estoque)</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;">{{ collections.total_delinquency_str }}</td>
+      </tr>
+    </table>
+    {% endif %}
+
+    <h2 style="font-size:14px;margin:0 0 8px;">Risco de churn</h2>
     <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
       <tr>
         <td style="padding:8px;background:#f3f4f6;border-radius:8px;">Clientes em risco</td>

@@ -1,7 +1,19 @@
-Velus — Digest {{ period_label }} de risco de churn
+Velus — {% if is_monthly %}Resumo estratégico mensal{% else %}Foco da semana — risco e cobranças{% endif %}
 {{ organization.name }} · {{ generated_at|date:"d/m/Y H:i" }}
-
-RESUMO
+{% if is_monthly and strategic %}
+PANORAMA ESTRATÉGICO DO MÊS
+  MRR atual: {{ strategic.mrr_now_str }} ({% if strategic.mrr_delta_positive %}+{% endif %}{{ strategic.mrr_delta_pct }}% vs mês anterior)
+  Net adds: {% if strategic.net_adds >= 0 %}+{% endif %}{{ strategic.net_adds }} ({{ strategic.new_this_month }} novos / {{ strategic.canceled_this_month }} cancelados)
+  Churn do mês: {{ strategic.churn_pct }}%
+  Caixa recebido (mês): {{ strategic.cash_month_str }}
+  Inadimplência (estoque): {{ strategic.delinquency_str }} ({{ strategic.delinquency_pct_of_mrr }}% do MRR)
+  Projeção de caixa ({{ strategic.forecast_label }}): {{ strategic.forecast_next_str }}
+{% endif %}{% if not is_monthly and collections %}
+COBRANÇAS — FOCO DA SEMANA
+  Crítico (90+ dias): {{ collections.over_90_str }} ({{ collections.over_90_count }} faturas)
+  Inadimplência total (estoque): {{ collections.total_delinquency_str }}
+{% endif %}
+RISCO DE CHURN — RESUMO
   Clientes em risco: {{ summary.total_at_risk }}
   Alto risco: {{ summary.high }}
   Médio risco: {{ summary.medium }}
