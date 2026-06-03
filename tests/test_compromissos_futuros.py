@@ -123,6 +123,31 @@ class TestCompromissosFuturos:
         # R$3.000 de dívida ÷ R$1.000/mês = 3× faturamento.
         assert s["divida_multiplo_faturamento"] == pytest.approx(3.0)
 
+    def test_multiplo_usa_divida_total_alem_do_horizonte(
+        self, organization_a: Organization
+    ) -> None:
+        # MRR = R$1.000. Dívida dentro do horizonte (12m) = R$1.000; outra
+        # parcela vence em 18m (fora da janela). O múltiplo é sobre o TOTAL
+        # geral (R$3.000), não só o que cai no horizonte selecionado.
+        _mrr_snapshot(organization_a, monthly=Decimal("1000"))
+        _open_expense(
+            organization_a, id_conta=_CONTA_DIVIDA, amount=Decimal("1000"),
+            due_date=_future(6),
+        )
+        _open_expense(
+            organization_a, id_conta=_CONTA_DIVIDA, amount=Decimal("2000"),
+            due_date=_future(18),
+        )
+        set_current_organization(organization_a)
+
+        data = compute_compromissos_futuros(organization_a, months_ahead=12)
+        s = data["summary"]
+        # Só R$1.000 cai no horizonte de 12 meses...
+        assert s["divida"] == pytest.approx(1000.0)
+        # ...mas o múltiplo considera os R$3.000 totais ÷ R$1.000/mês = 3×.
+        assert s["divida_total_geral"] == pytest.approx(3000.0)
+        assert s["divida_multiplo_faturamento"] == pytest.approx(3.0)
+
     def test_multiplo_zero_sem_faturamento(
         self, organization_a: Organization
     ) -> None:

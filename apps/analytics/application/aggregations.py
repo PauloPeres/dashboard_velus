@@ -3215,8 +3215,30 @@ def compute_compromissos_futuros(
         or 0
     )
     divida_total = tiers_out["divida"]["total"]
-    # Quantos meses de faturamento a dívida a vencer representa (alavancagem).
-    divida_mult_faturamento = divida_total / mrr_now if mrr_now > 0 else 0.0
+    # Múltiplo de alavancagem usa TODO o serviço da dívida a vencer (independente
+    # do horizonte 12/24/36m selecionado), não só o que cai na janela do gráfico.
+    divida_geral_total = 0.0
+    qs_divida_geral = (
+        ExpenseModel.objects.filter(
+            organization=organization,
+            status="OPEN",
+            deleted_at__isnull=True,
+            due_date__gt=today,
+        )
+        .annotate(id_conta_str=KeyTextTransform("id_conta", "raw_extras"))
+        .values("id_conta_str")
+        .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
+    )
+    for row in qs_divida_geral:
+        ic = str(row["id_conta_str"] or "0")
+        entry = _resolve_conta(ic, conta_map=conta_map, plano_map=plano_map)
+        section, _ = _get_dre_section(str(entry.get("cod", "")))
+        if _dre_tier_for_section(section) == "divida":
+            divida_geral_total += float(row["total"])
+    # Quantos meses de faturamento a dívida total representa (alavancagem).
+    divida_mult_faturamento = (
+        divida_geral_total / mrr_now if mrr_now > 0 else 0.0
+    )
 
     summary = {
         "total": grand_total,
@@ -3226,6 +3248,7 @@ def compute_compromissos_futuros(
             + tiers_out["outras"]["total"]
         ),
         "divida": divida_total,
+        "divida_total_geral": divida_geral_total,
         "divida_banco": divida_split["banco"]["total"],
         "divida_outras": divida_split["outras"]["total"],
         "investimento": tiers_out["investimento"]["total"],
