@@ -3013,6 +3013,21 @@ _COMPROMISSO_TIER_LABELS = {
 # é compra de bem/equipamento, operacional e contínuo, não uma frente que acaba.
 _COMPROMISSO_STRUCTURAL_TIERS = ("divida", "investimento")
 
+# Credores que são instituições financeiras (banco/financeira). Usado pra separar
+# "dívida bancária" de "outras dívidas" (ex.: empréstimo de sócio) no painel de
+# compromissos. Match por substring no nome do fornecedor (case-insensitive).
+_BANK_SUPPLIER_KEYWORDS = (
+    "bradesco", "sicredi", "sicoob", "santander", "itau", "itaú",
+    "banco do brasil", "caixa econ", "banrisul", "banco safra", "btg",
+    "nubank", "banco inter", "xp investimentos", "xp invest", "banco ",
+)
+
+
+def _is_bank_supplier(name: str) -> bool:
+    """True se o fornecedor é instituição financeira (dívida bancária)."""
+    n = (name or "").lower()
+    return any(kw in n for kw in _BANK_SUPPLIER_KEYWORDS)
+
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_compromissos_futuros(
@@ -3086,6 +3101,8 @@ def compute_compromissos_futuros(
     tiers_raw: dict[str, dict[str, float]] = {}  # tier → {YYYY-MM → valor}
     # (tier, fornecedor, conta_label) → {monthly: {mk → valor}, cnt}
     structural_raw: dict[tuple[str, str, str], dict[str, Any]] = {}
+    # Sub-split do tier dívida: banco (instituições financeiras) × outras.
+    divida_split_raw: dict[str, dict[str, float]] = {"banco": {}, "outras": {}}
 
     for row in qs:
         mk = row["month"].strftime("%Y-%m")
@@ -3114,6 +3131,12 @@ def compute_compromissos_futuros(
             st["monthly"][mk] = st["monthly"].get(mk, 0.0) + val
             st["cnt"] += row["cnt"]
 
+            if tier == "divida":
+                bucket = "banco" if _is_bank_supplier(sup) else "outras"
+                divida_split_raw[bucket][mk] = (
+                    divida_split_raw[bucket].get(mk, 0.0) + val
+                )
+
     month_labels: list[str] = []
     for mk in sorted_months:
         try:
@@ -3126,6 +3149,20 @@ def compute_compromissos_futuros(
         mdata = tiers_raw.get(tier, {})
         series = [mdata.get(mk, 0.0) for mk in sorted_months]
         tiers_out[tier] = {"label": label, "monthly": series, "total": sum(series)}
+
+    # Dívida bancária × outras dívidas, alinhado ao eixo de meses (pro gráfico).
+    divida_split = {
+        "banco": {
+            "label": "Dívida Bancária",
+            "monthly": [divida_split_raw["banco"].get(mk, 0.0) for mk in sorted_months],
+        },
+        "outras": {
+            "label": "Outras Dívidas",
+            "monthly": [divida_split_raw["outras"].get(mk, 0.0) for mk in sorted_months],
+        },
+    }
+    divida_split["banco"]["total"] = sum(divida_split["banco"]["monthly"])
+    divida_split["outras"]["total"] = sum(divida_split["outras"]["monthly"])
 
     # Saldo a quitar acumulado: total geral menos o que já venceu mês a mês.
     per_month_total = [
@@ -3189,6 +3226,8 @@ def compute_compromissos_futuros(
             + tiers_out["outras"]["total"]
         ),
         "divida": divida_total,
+        "divida_banco": divida_split["banco"]["total"],
+        "divida_outras": divida_split["outras"]["total"],
         "investimento": tiers_out["investimento"]["total"],
         "capex": tiers_out["capex"]["total"],
         "impostos": tiers_out["impostos"]["total"],
@@ -3203,6 +3242,7 @@ def compute_compromissos_futuros(
         "months": sorted_months,
         "month_labels": month_labels,
         "tiers": tiers_out,
+        "divida_split": divida_split,
         "cumulative": cumulative,
         "structural": structural_rows,
         "summary": summary,

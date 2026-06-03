@@ -963,9 +963,10 @@ def dre_by_account_stacked_bar(data: dict[str, Any]) -> str:
 def compromissos_futuros_stacked_bar(data: dict[str, Any]) -> str:
     """Barras empilhadas — compromissos futuros por camada + saldo acumulado.
 
-    Empilha as despesas OPEN futuras por camada gerencial (recorrente, dívida,
-    M&A, capex) e sobrepõe a linha do saldo a quitar (eixo secundário), que
-    mostra a desalavancagem mês a mês conforme as parcelas estruturais se encerram.
+    Empilha as despesas OPEN futuras por camada gerencial (recorrente, dívida
+    bancária, outras dívidas, M&A, capex) e sobrepõe a linha do saldo a quitar
+    (eixo secundário), que mostra a desalavancagem mês a mês conforme as parcelas
+    estruturais se encerram.
     """
     labels = data.get("month_labels", [])
     tiers = data.get("tiers", {})
@@ -982,9 +983,13 @@ def compromissos_futuros_stacked_bar(data: dict[str, Any]) -> str:
             strict=False,
         )
     ]
+    # Dívida separada em bancária (instituições financeiras) × outras (ex.:
+    # empréstimo de sócio, despesas não operacionais).
+    divida_split = data.get("divida_split", {})
     bar_specs = [
         ("Operacional / Recorrente", recorrente, "#94a3b8"),
-        ("Serviço da Dívida", tiers.get("divida", {}).get("monthly", []), "#ef4444"),
+        ("Dívida Bancária", divida_split.get("banco", {}).get("monthly", []), "#b91c1c"),
+        ("Outras Dívidas", divida_split.get("outras", {}).get("monthly", []), "#fb923c"),
         ("M&A (Aquisições)", tiers.get("investimento", {}).get("monthly", []), "#7c3aed"),
         ("Imobilizado / Capex", tiers.get("capex", {}).get("monthly", []), "#3b82f6"),
     ]

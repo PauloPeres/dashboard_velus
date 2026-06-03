@@ -136,6 +136,36 @@ class TestCompromissosFuturos:
         data = compute_compromissos_futuros(organization_a, months_ahead=12)
         assert data["summary"]["divida_multiplo_faturamento"] == pytest.approx(0.0)
 
+    def test_divida_split_banco_vs_outras(
+        self, organization_a: Organization
+    ) -> None:
+        # Bradesco/Sicredi = banco; sócio/outros = outras dívidas.
+        _open_expense(
+            organization_a, id_conta=_CONTA_DIVIDA, amount=Decimal("700"),
+            due_date=_future(1), supplier="BRADESCO",
+        )
+        _open_expense(
+            organization_a, id_conta=_CONTA_DIVIDA, amount=Decimal("300"),
+            due_date=_future(2), supplier="SICREDI",
+        )
+        _open_expense(
+            organization_a, id_conta=_CONTA_DIVIDA, amount=Decimal("100"),
+            due_date=_future(1), supplier="PAULO SÓCIO",
+        )
+        set_current_organization(organization_a)
+
+        data = compute_compromissos_futuros(organization_a, months_ahead=12)
+        split = data["divida_split"]
+        assert sum(split["banco"]["monthly"]) == pytest.approx(1000.0)
+        assert sum(split["outras"]["monthly"]) == pytest.approx(100.0)
+        # Soma dos dois bate com o total do tier dívida.
+        assert data["summary"]["divida_banco"] == pytest.approx(1000.0)
+        assert data["summary"]["divida_outras"] == pytest.approx(100.0)
+        assert (
+            data["summary"]["divida_banco"] + data["summary"]["divida_outras"]
+            == pytest.approx(data["summary"]["divida"])
+        )
+
     def test_capex_separated_from_ma(self, organization_a: Organization) -> None:
         # M&A real (conta 1.2.01) e capex/imobilizado (conta 1.2.02.x) caem na
         # mesma seção DRE, mas devem aparecer em camadas distintas.
