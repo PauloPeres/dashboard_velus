@@ -65,6 +65,7 @@ LOCAL_APPS: list[str] = [
     "apps.sync",
     "apps.dashboards",
     "apps.scenarios",
+    "apps.mcp",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -446,3 +447,10 @@ CONTENT_SECURITY_POLICY = {
 # Fernet key (consumido por apps.shared.fields.EncryptedField)
 # =============================================================================
 FERNET_KEY = env.FERNET_KEY.get_secret_value()
+
+# =============================================================================
+# Servidor MCP (read-only) — consumido por apps.mcp.server
+# =============================================================================
+MCP_ENABLED = env.MCP_ENABLED
+MCP_HOST = env.MCP_HOST
+MCP_PORT = env.MCP_PORT

@@ -115,6 +115,13 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     SENTRY_DSN: str = ""
 
+    # -------------------------------------------------------------------------
+    # Servidor MCP (read-only, autenticado por token por organização)
+    # -------------------------------------------------------------------------
+    MCP_ENABLED: bool = False
+    MCP_HOST: str = "0.0.0.0"  # noqa: S104 — bind interno ao Pod, exposto via Ingress
+    MCP_PORT: int = 8800
+
 
 # Singleton — importado por base.py
 env = Settings()
