@@ -613,6 +613,46 @@ def compute_open_revenue_series(
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_avulsas_billed_series(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Faturamento de cobranças avulsas (sem contrato) por mês de emissão.
+
+    Avulsas são faturas do IXC sem `contract` (instalação, equipamento, multa
+    etc.). NÃO entram no MRR (que é só recorrente de contrato), mas SÃO receita.
+    Usado pra somar à linha de receita da DRE gerencial (#72). Agrupa por
+    `issued_date` (competência do faturamento) e exclui canceladas.
+    """
+    today = timezone.now().date()
+    cutoff = _first_of_month_n_ago(today, months)
+
+    by_month = (
+        FactInvoice.objects.filter(
+            organization=organization,
+            invoice__contract__isnull=True,
+            issued_date__gte=cutoff,
+        )
+        .exclude(status="CANCELED")
+        .annotate(month=TruncMonth("issued_date"))
+        .values("month")
+        .annotate(
+            total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            count=Count("id"),
+        )
+        .order_by("month")
+    )
+    return [
+        {
+            "month": row["month"].strftime("%Y-%m"),
+            "label": row["month"].strftime("%b/%y"),
+            "amount": float(row["total"]),
+            "count": row["count"],
+        }
+        for row in by_month
+    ]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_expense_series(
     organization: Organization, months: int = 12
 ) -> list[dict[str, Any]]:
@@ -641,6 +681,59 @@ def compute_expense_series(
             "count": row["count"],
         }
         for row in by_month
+    ]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_operational_expense_series(
+    organization: Organization, months: int = 12
+) -> list[dict[str, Any]]:
+    """Despesas OPERACIONAIS (custos + opex) pagas por mês (#72).
+
+    Diferente de `compute_expense_series` (que soma TODA despesa, inclusive
+    impostos, dívida e investimento/M&A), aqui só entram as seções do tier
+    "operacional" do plano de contas — base correta pro EBITDA operacional.
+    Usa Expense bruto por `paid_at` com `raw_extras.id_conta`, igual à DRE por
+    conta.
+    """
+    from apps.financial.infrastructure.models import Expense as ExpenseModel
+
+    conta_map, plano_map = _load_plano_maps(organization)
+    today = timezone.now().date()
+    cutoff = _first_of_month_n_ago(today, months)
+
+    qs = (
+        ExpenseModel.objects.filter(
+            organization=organization,
+            status="PAID",
+            paid_at__isnull=False,
+            paid_at__gte=cutoff,
+        )
+        .annotate(
+            month=TruncMonth("paid_at"),
+            id_conta_str=KeyTextTransform("id_conta", "raw_extras"),
+        )
+        .values("month", "id_conta_str")
+        .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
+    )
+
+    by_month: dict[str, float] = {}
+    for row in qs:
+        id_plan = conta_map.get(str(row["id_conta_str"] or "0"), "0")
+        cod = plano_map.get(id_plan, {}).get("cod", "")
+        section, _ = _get_dre_section(cod)
+        if _dre_tier_for_section(section) != "operacional":
+            continue
+        mk = row["month"].strftime("%Y-%m")
+        by_month[mk] = by_month.get(mk, 0.0) + float(row["total"])
+
+    return [
+        {
+            "month": mk,
+            "label": date_cls.fromisoformat(mk + "-01").strftime("%b/%y"),
+            "expenses": by_month[mk],
+        }
+        for mk in sorted(by_month)
     ]
 
 
@@ -850,12 +943,16 @@ def compute_dre(
     """
     mrr_series = compute_mrr_series(organization, months=months)
     expense_series = compute_expense_series(organization, months=months)
+    op_expense_series = compute_operational_expense_series(organization, months=months)
+    avulsas_series = compute_avulsas_billed_series(organization, months=months)
     cashflow_series = compute_cashflow_series(organization, months=months)
     received_series = compute_cash_received_series(organization, months=months)
     open_series = compute_open_revenue_series(organization, months=months)
 
     received_by_month = {r["month"]: r["amount"] for r in received_series}
     open_by_month = {o["month"]: o["amount"] for o in open_series}
+    op_exp_by_month = {e["month"]: e["expenses"] for e in op_expense_series}
+    avulsas_by_month = {a["month"]: a["amount"] for a in avulsas_series}
 
     # Série combinada de receita: contratada (MRR) × recebida × em aberto, por mês.
     revenue_series = [
@@ -869,22 +966,26 @@ def compute_dre(
         for m in mrr_series
     ]
 
-    # Current month (last entry)
-    current_mrr = mrr_series[-1]["mrr"] if mrr_series else 0.0
-    exp_by_month = {e["month"]: e["expenses"] for e in expense_series}
+    # Current month (last entry). Receita = MRR (contratada) + avulsas faturadas;
+    # despesas do EBITDA = só operacionais (custos + opex), não impostos/dívida/M&A.
     current_month_key = mrr_series[-1]["month"] if mrr_series else ""
-    current_expenses = exp_by_month.get(current_month_key, 0.0)
+    current_mrr = mrr_series[-1]["mrr"] if mrr_series else 0.0
+    current_avulsas = avulsas_by_month.get(current_month_key, 0.0)
+    current_revenue = current_mrr + current_avulsas
+    current_expenses = op_exp_by_month.get(current_month_key, 0.0)
     current_received = received_by_month.get(current_month_key, 0.0)
     current_open = open_by_month.get(current_month_key, 0.0)
-    current_ebitda = current_mrr - current_expenses
+    current_ebitda = current_revenue - current_expenses
     current_margin = (
-        float(current_ebitda / current_mrr * 100) if current_mrr > 0 else 0.0
+        float(current_ebitda / current_revenue * 100) if current_revenue > 0 else 0.0
     )
 
     # YTD: sum only months in the current year
     current_year = str(timezone.now().year)
-    ytd_revenue = sum(m["mrr"] for m in mrr_series if m["month"].startswith(current_year))
-    ytd_expenses = sum(e["expenses"] for e in expense_series if e["month"].startswith(current_year))
+    ytd_mrr = sum(m["mrr"] for m in mrr_series if m["month"].startswith(current_year))
+    ytd_avulsas = sum(a["amount"] for a in avulsas_series if a["month"].startswith(current_year))
+    ytd_revenue = ytd_mrr + ytd_avulsas
+    ytd_expenses = sum(e["expenses"] for e in op_expense_series if e["month"].startswith(current_year))
     ytd_received = sum(r["amount"] for r in received_series if r["month"].startswith(current_year))
     ytd_open = sum(o["amount"] for o in open_series if o["month"].startswith(current_year))
     ytd_ebitda = ytd_revenue - ytd_expenses
@@ -892,12 +993,16 @@ def compute_dre(
     return {
         "mrr_series": mrr_series,
         "expense_series": expense_series,
+        "op_expense_series": op_expense_series,
+        "avulsas_series": avulsas_series,
         "cashflow_series": cashflow_series,
         "received_series": received_series,
         "open_series": open_series,
         "revenue_series": revenue_series,
         "current_month": {
-            "receita_bruta": current_mrr,
+            "receita_bruta": current_revenue,
+            "receita_mrr": current_mrr,
+            "receita_avulsas": current_avulsas,
             "receita_recebida": current_received,
             "receita_em_aberto": current_open,
             "despesas": current_expenses,
@@ -906,6 +1011,8 @@ def compute_dre(
         },
         "ytd": {
             "receita_bruta": ytd_revenue,
+            "receita_mrr": ytd_mrr,
+            "receita_avulsas": ytd_avulsas,
             "receita_recebida": ytd_received,
             "receita_em_aberto": ytd_open,
             "despesas": ytd_expenses,
@@ -2392,16 +2499,16 @@ _PLANEJAMENTO: dict[str, dict[str, str]] = {
 _DRE_SECTION_MAP: dict[str, tuple[str, int]] = {
     "5.1": ("Despesas Comerciais",              2),
     "5.2": ("Despesas Operacionais",            3),
-    "5.3": ("Despesas Financeiras",             4),
-    "5.4": ("Outras Despesas",                  5),
+    "5.3": ("Despesas Financeiras",             5),
+    "5.4": ("Outras Despesas",                  6),
     # Fallbacks single-segment
     "4":   ("Custos dos Serviços",              1),
-    "5":   ("Outras Despesas",                  5),
-    "2":   ("Despesas Gerais (A Classificar)",  6),
-    "3":   ("Outros Lançamentos",               7),
-    "1.2": ("Investimentos & Imobilizado",      8),
-    "1.1": ("Movimentações de Caixa",           9),
-    "1":   ("Movimentações de Ativo",           9),
+    "5":   ("Outras Despesas",                  6),
+    "2":   ("Despesas Gerais (A Classificar)",  7),
+    "3":   ("Outros Lançamentos",               8),
+    "1.2": ("Investimentos & Imobilizado",      9),
+    "1.1": ("Movimentações de Caixa",          10),
+    "1":   ("Movimentações de Ativo",          10),
 }
 
 # Overrides por cod COMPLETO: contas cuja classificação por prefixo no plano
@@ -2410,9 +2517,36 @@ _DRE_SECTION_MAP: dict[str, tuple[str, int]] = {
 #   - "5.1.03.0001" Empréstimos e financiamentos: o IXC pendura sob 5.1
 #     (Comerciais), mas são parcelas de empréstimo/financiamento → Financeiras.
 #     (vide #39: parcelamentos dominam o fluxo de caixa programado)
+#   - "4.2.01.003" Custo com Impostos (Simples Nacional, IPI, IPTU, ICMS...): o
+#     IXC pendura sob 4.x (Custos), mas imposto sobre receita NÃO é custo
+#     operacional — entra ABAIXO do EBITDA. (vide #72: DRE gerencial em camadas)
 _DRE_ACCOUNT_OVERRIDES: dict[str, tuple[str, int]] = {
-    "5.1.03.0001": ("Despesas Financeiras", 4),
+    "5.1.03.0001": ("Despesas Financeiras", 5),
+    "4.2.01.003": ("Impostos", 4),
 }
+
+# Camadas da DRE gerencial (#72): cada seção pertence a uma camada que define
+# onde entra no P&L. Operacional (custos + opex) forma o EBITDA; impostos,
+# dívida (financeiras) e investimentos/M&A ficam ABAIXO do EBITDA; o resto cai
+# em "outras" até o resultado líquido.
+_DRE_COST_SECTIONS = {"Custos dos Serviços"}
+_DRE_OPEX_SECTIONS = {"Despesas Comerciais", "Despesas Operacionais"}
+_DRE_TAX_SECTIONS = {"Impostos"}
+_DRE_DEBT_SECTIONS = {"Despesas Financeiras"}
+_DRE_INVEST_SECTIONS = {"Investimentos & Imobilizado"}
+
+
+def _dre_tier_for_section(section: str) -> str:
+    """Mapeia o nome da seção DRE para a camada gerencial (#72)."""
+    if section in _DRE_COST_SECTIONS or section in _DRE_OPEX_SECTIONS:
+        return "operacional"
+    if section in _DRE_TAX_SECTIONS:
+        return "impostos"
+    if section in _DRE_DEBT_SECTIONS:
+        return "divida"
+    if section in _DRE_INVEST_SECTIONS:
+        return "investimento"
+    return "outras"
 
 # Fornecedores que são pessoas físicas ou PJ individuais (não empresas grandes)
 # Mapeados a partir do endpoint `fornecedor` da API IXC.
@@ -2737,77 +2871,129 @@ def compute_dre_by_account(
 
     sections = sorted(sections_map.values(), key=lambda s: s["order"])
 
-    # --- Receita (MRR) alinhada ao intervalo ---
+    # --- Receita: MRR (recorrente de contrato) + avulsas faturadas (#72) ---
+    # MRR sozinho exclui cobranças avulsas (instalação, multa, equipamento etc.),
+    # que SÃO receita. Soma as avulsas faturadas por mês de emissão.
     rev_full = compute_mrr_series(organization, months=months_back_for_mrr)
     rev_by_month: dict[str, float] = {r["month"]: float(r["mrr"]) for r in rev_full}
-    revenue_monthly = [rev_by_month.get(mk, 0.0) for mk in sorted_months]
+    avulsas_full = compute_avulsas_billed_series(
+        organization, months=months_back_for_mrr
+    )
+    avulsas_by_month: dict[str, float] = {
+        r["month"]: float(r["amount"]) for r in avulsas_full
+    }
+    mrr_monthly = [rev_by_month.get(mk, 0.0) for mk in sorted_months]
+    avulsas_monthly = [avulsas_by_month.get(mk, 0.0) for mk in sorted_months]
+    revenue_monthly = [m + a for m, a in zip(mrr_monthly, avulsas_monthly)]
     revenue_total = sum(revenue_monthly)
 
-    # --- Linhas DRE estruturadas (P&L) ---
-    _COST_SECTIONS = {"Custos dos Serviços"}
-    _OPEX_SECTIONS = {"Despesas Comerciais", "Despesas Operacionais"}
-
+    # --- Linhas DRE estruturadas (P&L) em camadas (#72) ---
+    # operacional (custos+opex) → impostos → dívida → investimento/M&A → caixa
     def _sub(a: list[float], b: list[float]) -> list[float]:
         return [x - y for x, y in zip(a, b)]
+
+    sections_by_tier: dict[str, list[dict[str, Any]]] = {}
+    for sec in sections:
+        tier = _dre_tier_for_section(sec["section"])
+        sections_by_tier.setdefault(tier, []).append(sec)
 
     dre_rows: list[dict[str, Any]] = []
     dre_rows.append({
         "type": "header",
-        "label": "(+) Receita Bruta (MRR)",
+        "label": "(+) Receita (MRR + avulsas)",
         "monthly": list(revenue_monthly),
         "total": revenue_total,
     })
 
-    # Custos → Resultado Bruto
-    resultado_bruto = list(revenue_monthly)
-    for sec in sections:
-        if sec["section"] in _COST_SECTIONS:
+    def _emit_tier(tier: str, sub_label: str, running: list[float]) -> list[float]:
+        """Emite as seções de um tier e a linha de subtotal acumulado."""
+        for sec in sections_by_tier.get(tier, []):
             dre_rows.append({
                 "type": "section", "sign": "(-)",
                 "label": sec["section"],
                 "monthly": sec["monthly"], "total": sec["total"],
                 "accounts": sec["accounts"],
             })
-            resultado_bruto = _sub(resultado_bruto, sec["monthly"])
+            running = _sub(running, sec["monthly"])
+        dre_rows.append({
+            "type": "subtotal", "label": sub_label,
+            "monthly": running, "total": sum(running),
+        })
+        return running
+
+    # Camada operacional: custos → Resultado Bruto; opex → EBITDA Operacional.
+    # Separa custos de opex pra manter o Resultado Bruto, mas ambos são tier
+    # "operacional" — o EBITDA é o headline da operação.
+    cost_sections = [s for s in sections if s["section"] in _DRE_COST_SECTIONS]
+    opex_sections = [s for s in sections if s["section"] in _DRE_OPEX_SECTIONS]
+
+    resultado_bruto = list(revenue_monthly)
+    for sec in cost_sections:
+        dre_rows.append({
+            "type": "section", "sign": "(-)",
+            "label": sec["section"],
+            "monthly": sec["monthly"], "total": sec["total"],
+            "accounts": sec["accounts"],
+        })
+        resultado_bruto = _sub(resultado_bruto, sec["monthly"])
     dre_rows.append({
         "type": "subtotal", "label": "Resultado Bruto",
         "monthly": resultado_bruto, "total": sum(resultado_bruto),
     })
 
-    # Opex → EBITDA Operacional
     ebitda_monthly = list(resultado_bruto)
-    for sec in sections:
-        if sec["section"] in _OPEX_SECTIONS:
-            dre_rows.append({
-                "type": "section", "sign": "(-)",
-                "label": sec["section"],
-                "monthly": sec["monthly"], "total": sec["total"],
-                "accounts": sec["accounts"],
-            })
-            ebitda_monthly = _sub(ebitda_monthly, sec["monthly"])
+    for sec in opex_sections:
+        dre_rows.append({
+            "type": "section", "sign": "(-)",
+            "label": sec["section"],
+            "monthly": sec["monthly"], "total": sec["total"],
+            "accounts": sec["accounts"],
+        })
+        ebitda_monthly = _sub(ebitda_monthly, sec["monthly"])
     dre_rows.append({
         "type": "subtotal", "label": "EBITDA Operacional",
         "monthly": ebitda_monthly, "total": sum(ebitda_monthly),
     })
 
-    # Demais seções → Resultado Líquido
-    resultado_liq = list(ebitda_monthly)
-    for sec in sections:
-        if sec["section"] not in _COST_SECTIONS and sec["section"] not in _OPEX_SECTIONS:
-            dre_rows.append({
-                "type": "section", "sign": "(-)",
-                "label": sec["section"],
-                "monthly": sec["monthly"], "total": sec["total"],
-                "accounts": sec["accounts"],
-            })
-            resultado_liq = _sub(resultado_liq, sec["monthly"])
+    # Camadas abaixo do EBITDA: só emite o subtotal se o tier tiver seções.
+    running = list(ebitda_monthly)
+    _below_tiers = [
+        ("impostos", "Resultado após Impostos"),
+        ("divida", "Resultado após Serviço da Dívida"),
+        ("investimento", "Resultado após Investimentos (M&A/Capex)"),
+    ]
+    for tier, label in _below_tiers:
+        if not sections_by_tier.get(tier):
+            continue
+        running = _emit_tier(tier, label, running)
+
+    # Demais lançamentos (não classificados nas camadas) entram direto no caixa.
+    for sec in sections_by_tier.get("outras", []):
+        dre_rows.append({
+            "type": "section", "sign": "(-)",
+            "label": sec["section"],
+            "monthly": sec["monthly"], "total": sec["total"],
+            "accounts": sec["accounts"],
+        })
+        running = _sub(running, sec["monthly"])
+
+    # Linha final de caixa
     dre_rows.append({
-        "type": "total", "label": "Resultado Líquido",
-        "monthly": resultado_liq, "total": sum(resultado_liq),
+        "type": "total", "label": "Resultado Líquido (Caixa)",
+        "monthly": running, "total": sum(running),
     })
 
     total_expenses = sum(s["total"] for s in sections)
-    ebitda = revenue_total - total_expenses
+    # EBITDA = resultado operacional (receita − custos − opex), NÃO o líquido.
+    ebitda = sum(ebitda_monthly)
+    impostos_total = sum(
+        s["total"] for s in sections_by_tier.get("impostos", [])
+    )
+    divida_total = sum(s["total"] for s in sections_by_tier.get("divida", []))
+    investimento_total = sum(
+        s["total"] for s in sections_by_tier.get("investimento", [])
+    )
+    resultado_liquido = sum(running)
 
     return {
         "months": sorted_months,
@@ -2823,6 +3009,10 @@ def compute_dre_by_account(
             "total_expenses": total_expenses,
             "total_revenue": revenue_total,
             "ebitda": ebitda,
+            "impostos": impostos_total,
+            "divida": divida_total,
+            "investimento": investimento_total,
+            "resultado_liquido": resultado_liquido,
         },
     }
 

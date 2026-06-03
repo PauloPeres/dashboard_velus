@@ -39,9 +39,9 @@
 
 <!-- KPI Cards -->
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-    {% include "dashboards/_kpi_card.html" with label="Receita Bruta" value=total_revenue_str %}
+    {% include "dashboards/_kpi_card.html" with label="Receita (MRR + avulsas)" value=total_revenue_str %}
     {% include "dashboards/_kpi_card.html" with label="Total Despesas" value=total_expenses_str %}
-    {% include "dashboards/_kpi_card.html" with label="EBITDA" value=ebitda_str %}
+    {% include "dashboards/_kpi_card.html" with label="EBITDA Operacional" value=ebitda_str %}
     {% include "dashboards/_kpi_card.html" with label="Margem EBITDA" value=margin_pct_str %}
 </div>
 
@@ -49,7 +49,7 @@
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
     <h2 class="text-lg font-semibold mb-1">Despesas por Categoria — Mês a Mês</h2>
     <p class="text-xs text-gray-400 mb-3">
-        Barras empilhadas = despesas pagas por conta do plano IXC. Linha verde pontilhada = Receita (MRR).
+        Barras empilhadas = despesas pagas por conta do plano IXC. Linha verde pontilhada = Receita (MRR + avulsas).
     </p>
     <div id="dre-account-chart" class="animate-pulse bg-gray-50 rounded-lg" style="height:420px;"></div>
 </div>
@@ -73,7 +73,8 @@
         </div>
     </div>
     <p class="text-xs text-gray-400 mb-4">
-        Estrutura contábil baseada nos prefixos do plano de contas:
+        Estrutura em camadas: operacional (custos + opex) → EBITDA → impostos →
+        dívida (financeiras) → investimento/M&A → caixa. Prefixos do plano IXC:
         <span class="font-mono bg-gray-100 px-1 rounded">4.x</span> Custos ·
         <span class="font-mono bg-gray-100 px-1 rounded">5.2.x</span> Operacionais ·
         <span class="font-mono bg-gray-100 px-1 rounded">5.3.x</span> Financeiras.
@@ -189,7 +190,7 @@
     </div>
     <p class="text-xs text-gray-400 mt-3">
         Clique em uma linha de seção para expandir/recolher as contas individuais.
-        Valores em R$ (inteiros, arredondados). Receita = MRR dos contratos ativos no mês.
+        Valores em R$ (inteiros, arredondados). Receita = MRR dos contratos ativos + avulsas faturadas no mês.
     </p>
 </div>
 {% endif %}

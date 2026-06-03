@@ -8,13 +8,13 @@
 <p class="text-sm text-gray-500 mb-6">Demonstração de Resultado simplificada — últimos 12 meses.</p>
 
 <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
-    {% include "dashboards/_kpi_card.html" with label="Receita Contratada (MRR)" value=cur_receita_str %}
+    {% include "dashboards/_kpi_card.html" with label="Receita (MRR + avulsas)" value=cur_receita_str %}
     {% include "dashboards/_kpi_card.html" with label="Recebida (realizada)" value=cur_recebida_str %}
     {% include "dashboards/_kpi_card.html" with label="Em Aberto (não recebida)" value=cur_em_aberto_str %}
 </div>
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-    {% include "dashboards/_kpi_card.html" with label="Despesas (mês atual)" value=cur_despesas_str %}
-    {% include "dashboards/_kpi_card.html" with label="EBITDA (mês atual)" value=cur_ebitda_str %}
+    {% include "dashboards/_kpi_card.html" with label="Despesas Operacionais (mês atual)" value=cur_despesas_str %}
+    {% include "dashboards/_kpi_card.html" with label="EBITDA Operacional (mês atual)" value=cur_ebitda_str %}
     {% include "dashboards/_kpi_card.html" with label="Margem EBITDA" value=cur_margin_str %}
 </div>
 
@@ -31,8 +31,16 @@
         <h2 class="text-lg font-semibold mb-4">Acumulado no Período (YTD)</h2>
         <dl class="space-y-3">
             <div class="flex justify-between py-2 border-b border-gray-100">
-                <dt class="text-gray-600">Receita Contratada (MRR)</dt>
+                <dt class="text-gray-600">Receita (MRR + avulsas)</dt>
                 <dd class="font-semibold text-green-700">R$ {{ dre.ytd.receita_bruta|floatformat:0|intcomma }}</dd>
+            </div>
+            <div class="flex justify-between py-2 border-b border-gray-100 pl-4">
+                <dt class="text-gray-500">↳ MRR contratado</dt>
+                <dd class="font-semibold text-green-600">R$ {{ dre.ytd.receita_mrr|floatformat:0|intcomma }}</dd>
+            </div>
+            <div class="flex justify-between py-2 border-b border-gray-100 pl-4">
+                <dt class="text-gray-500">↳ Avulsas faturadas</dt>
+                <dd class="font-semibold text-green-600">R$ {{ dre.ytd.receita_avulsas|floatformat:0|intcomma }}</dd>
             </div>
             <div class="flex justify-between py-2 border-b border-gray-100 pl-4">
                 <dt class="text-gray-500">↳ Recebida (realizada)</dt>
@@ -43,11 +51,11 @@
                 <dd class="font-semibold text-amber-600">R$ {{ dre.ytd.receita_em_aberto|floatformat:0|intcomma }}</dd>
             </div>
             <div class="flex justify-between py-2 border-b border-gray-100">
-                <dt class="text-gray-600">(-) Despesas</dt>
+                <dt class="text-gray-600">(-) Despesas Operacionais</dt>
                 <dd class="font-semibold text-red-600">R$ {{ dre.ytd.despesas|floatformat:0|intcomma }}</dd>
             </div>
             <div class="flex justify-between py-2 border-t-2 border-gray-300">
-                <dt class="font-bold">EBITDA</dt>
+                <dt class="font-bold">EBITDA Operacional</dt>
                 <dd class="font-bold {% if dre.ytd.ebitda >= 0 %}text-blue-700{% else %}text-red-700{% endif %}">
                     R$ {{ dre.ytd.ebitda|floatformat:0|intcomma }}
                 </dd>

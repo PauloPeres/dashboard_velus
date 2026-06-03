@@ -387,7 +387,7 @@ def dre(request: HttpRequest) -> HttpResponse:
             "cur_ebitda_str": _fmt_brl(cur["ebitda"]),
             "cur_margin_str": f"{cur['ebitda_margin_pct']:.1f}%",
             "dre_chart_json": charts.dre_grouped_bar(
-                dre_data["mrr_series"], dre_data["expense_series"]
+                dre_data["mrr_series"], dre_data["op_expense_series"]
             ),
         },
     )
