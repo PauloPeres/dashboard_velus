@@ -17,6 +17,8 @@ from dateutil.relativedelta import relativedelta
 from django.utils import timezone
 
 from apps.analytics.application.aggregations import compute_compromissos_futuros
+from apps.analytics.infrastructure.models import FactContractStatusDaily
+from apps.customers.infrastructure.models import Contract
 from apps.financial.infrastructure.models import Expense
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import Organization
@@ -34,6 +36,30 @@ _seq = 0
 def _future(n_months: int, day: int = 15) -> date:
     """Retorna um dia no mês `n_months` à frente do mês atual (n>=1 → futuro)."""
     return timezone.now().date().replace(day=day) + relativedelta(months=n_months)
+
+
+def _mrr_snapshot(org: Organization, *, monthly: Decimal) -> None:
+    """Cria um snapshot ativo de hoje pra alimentar o MRR (faturamento mensal)."""
+    global _seq
+    _seq += 1
+    set_current_organization(org)
+    contract = Contract.objects.create(
+        organization=org,
+        source_type="FAKE",
+        external_id=f"cf-ctr-{_seq}",
+        customer_external_id=f"cf-cust-{_seq}",
+        plan_name="Plano X",
+        monthly_amount=monthly,
+        status="ACTIVE",
+    )
+    FactContractStatusDaily.objects.create(
+        organization=org,
+        contract=contract,
+        date=timezone.now().date(),
+        status="ACTIVE",
+        monthly_amount=monthly,
+        is_active=True,
+    )
 
 
 def _open_expense(
@@ -77,6 +103,38 @@ class TestCompromissosFuturos:
         assert s["investimento"] == pytest.approx(500.0)
         assert s["recorrente"] == pytest.approx(300.0)
         assert s["total"] == pytest.approx(1800.0)
+
+    def test_divida_multiplo_faturamento(self, organization_a: Organization) -> None:
+        # Faturamento mensal (MRR) = R$1.000; dívida a vencer = R$3.000.
+        _mrr_snapshot(organization_a, monthly=Decimal("1000"))
+        _open_expense(
+            organization_a, id_conta=_CONTA_DIVIDA, amount=Decimal("2000"),
+            due_date=_future(1),
+        )
+        _open_expense(
+            organization_a, id_conta=_CONTA_DIVIDA, amount=Decimal("1000"),
+            due_date=_future(2),
+        )
+        set_current_organization(organization_a)
+
+        data = compute_compromissos_futuros(organization_a, months_ahead=12)
+        s = data["summary"]
+        assert s["faturamento_mensal"] == pytest.approx(1000.0)
+        # R$3.000 de dívida ÷ R$1.000/mês = 3× faturamento.
+        assert s["divida_multiplo_faturamento"] == pytest.approx(3.0)
+
+    def test_multiplo_zero_sem_faturamento(
+        self, organization_a: Organization
+    ) -> None:
+        # Sem snapshot de MRR, não divide por zero — múltiplo vira 0.
+        _open_expense(
+            organization_a, id_conta=_CONTA_DIVIDA, amount=Decimal("500"),
+            due_date=_future(1),
+        )
+        set_current_organization(organization_a)
+
+        data = compute_compromissos_futuros(organization_a, months_ahead=12)
+        assert data["summary"]["divida_multiplo_faturamento"] == pytest.approx(0.0)
 
     def test_capex_separated_from_ma(self, organization_a: Organization) -> None:
         # M&A real (conta 1.2.01) e capex/imobilizado (conta 1.2.02.x) caem na

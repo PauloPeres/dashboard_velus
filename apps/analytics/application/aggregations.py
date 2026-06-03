@@ -3162,6 +3162,25 @@ def compute_compromissos_futuros(
         present = [mk for mk in sorted_months if mdata.get(mk)]
         return present[-1] if present else None
 
+    # Faturamento mensal (MRR) pro múltiplo da dívida. Usa o último snapshot
+    # <= hoje (o job diário pode não ter rodado para hoje), igual a compute_kpis.
+    ref_date = (
+        FactContractStatusDaily.objects.filter(
+            organization=organization, date__lte=today, is_active=True
+        ).aggregate(m=Max("date"))["m"]
+    ) or today
+    mrr_now = float(
+        FactContractStatusDaily.objects.filter(
+            organization=organization, date=ref_date, is_active=True
+        ).aggregate(
+            s=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField())
+        )["s"]
+        or 0
+    )
+    divida_total = tiers_out["divida"]["total"]
+    # Quantos meses de faturamento a dívida a vencer representa (alavancagem).
+    divida_mult_faturamento = divida_total / mrr_now if mrr_now > 0 else 0.0
+
     summary = {
         "total": grand_total,
         "recorrente": (
@@ -3169,12 +3188,14 @@ def compute_compromissos_futuros(
             + tiers_out["impostos"]["total"]
             + tiers_out["outras"]["total"]
         ),
-        "divida": tiers_out["divida"]["total"],
+        "divida": divida_total,
         "investimento": tiers_out["investimento"]["total"],
         "capex": tiers_out["capex"]["total"],
         "impostos": tiers_out["impostos"]["total"],
         "divida_last_month": _tier_last_month("divida"),
         "investimento_last_month": _tier_last_month("investimento"),
+        "faturamento_mensal": mrr_now,
+        "divida_multiplo_faturamento": divida_mult_faturamento,
         "horizon_label": horizon.strftime("%b/%y"),
     }
 

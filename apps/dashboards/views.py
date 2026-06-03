@@ -756,6 +756,10 @@ def compromissos(request: HttpRequest) -> HttpResponse:
             "recorrente_str": _fmt_brl(summary["recorrente"]),
             "divida_str": _fmt_brl(summary["divida"]),
             "investimento_str": _fmt_brl(summary["investimento"]),
+            "divida_mult_str": (
+                f"{summary['divida_multiplo_faturamento']:.1f}×".replace(".", ",")
+            ),
+            "faturamento_mensal_str": _fmt_brl(summary["faturamento_mensal"]),
             "divida_last_label": label_by_month.get(
                 summary["divida_last_month"], "—"
             ),

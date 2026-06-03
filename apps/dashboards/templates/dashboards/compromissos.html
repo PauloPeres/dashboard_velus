@@ -24,9 +24,10 @@
     </form>
 </div>
 
-<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
     {% include "dashboards/_kpi_card.html" with label="Total a vencer" value=total_str %}
     {% include "dashboards/_kpi_card.html" with label="Serviço da Dívida" value=divida_str subtitle="Encerra em "|add:divida_last_label %}
+    {% include "dashboards/_kpi_card.html" with label="Dívida / Faturamento" value=divida_mult_str subtitle="meses de faturamento ("|add:faturamento_mensal_str|add:"/mês)" tooltip="Total de Serviço da Dívida a vencer dividido pelo faturamento mensal recorrente (MRR). Quantos meses de faturamento seriam necessários para quitar toda a dívida." %}
     {% include "dashboards/_kpi_card.html" with label="M&A (Aquisições)" value=investimento_str subtitle="Encerra em "|add:investimento_last_label %}
     {% include "dashboards/_kpi_card.html" with label="Operacional / Recorrente" value=recorrente_str %}
 </div>
