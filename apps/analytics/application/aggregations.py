@@ -2992,16 +2992,25 @@ def compute_dre_by_account(
     }
 
 
+# Conta de M&A (aquisições societárias) no plano IXC: prefixo "1.2.01"
+# (Investimentos, Participações Societárias, Comissão de investimento). As demais
+# contas da seção "Investimentos & Imobilizado" (1.2.02.x — Veículos, Máquinas e
+# Equipamentos, Comodatos) são Imobilizado/Capex: compra de bem/equipamento, não
+# aquisição de empresa. Ambos caem na mesma seção DRE, então separamos pelo cod.
+_MA_ACCOUNT_PREFIX = "1.2.01"
+
 # Rótulos das camadas gerenciais (#72) no contexto de compromissos futuros.
 _COMPROMISSO_TIER_LABELS = {
     "operacional": "Operacional / Recorrente",
     "impostos": "Impostos",
     "divida": "Serviço da Dívida",
-    "investimento": "Investimento (M&A / Capex)",
+    "investimento": "M&A (Aquisições)",
+    "capex": "Imobilizado / Capex",
     "outras": "Outras",
 }
 # Camadas estruturais: compromissos não-recorrentes que um dia se encerram
-# (parcelas de aquisição/M&A e do serviço da dívida bancária).
+# (parcelas de aquisição/M&A e do serviço da dívida bancária). Capex NÃO entra:
+# é compra de bem/equipamento, operacional e contínuo, não uma frente que acaba.
 _COMPROMISSO_STRUCTURAL_TIERS = ("divida", "investimento")
 
 
@@ -3083,8 +3092,14 @@ def compute_compromissos_futuros(
         val = float(row["total"])
         ic = str(row["id_conta_str"] or "0")
         entry = _resolve_conta(ic, conta_map=conta_map, plano_map=plano_map)
-        section, _ = _get_dre_section(entry.get("cod", ""))
+        cod = str(entry.get("cod", ""))
+        section, _ = _get_dre_section(cod)
         tier = _dre_tier_for_section(section)
+        # Separa M&A (aquisições, conta 1.2.01) de Imobilizado/Capex (1.2.02.x):
+        # ambos caem na seção de investimento, mas só o primeiro é aquisição de
+        # empresa. Equipamento/veículo é capex operacional, não frente de M&A.
+        if tier == "investimento" and not cod.strip().startswith(_MA_ACCOUNT_PREFIX):
+            tier = "capex"
 
         tiers_raw.setdefault(tier, {})
         tiers_raw[tier][mk] = tiers_raw[tier].get(mk, 0.0) + val
@@ -3156,6 +3171,7 @@ def compute_compromissos_futuros(
         ),
         "divida": tiers_out["divida"]["total"],
         "investimento": tiers_out["investimento"]["total"],
+        "capex": tiers_out["capex"]["total"],
         "impostos": tiers_out["impostos"]["total"],
         "divida_last_month": _tier_last_month("divida"),
         "investimento_last_month": _tier_last_month("investimento"),

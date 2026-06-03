@@ -25,7 +25,8 @@ from apps.tenancy.models import Organization
 # test_dre_managerial_tiers:
 _CONTA_OPEX = "115"      # operacional
 _CONTA_DIVIDA = "147"    # dívida
-_CONTA_INVEST = "10028"  # investimento (M&A)
+_CONTA_INVEST = "10028"  # investimento / M&A (cod 1.2.01)
+_CONTA_CAPEX = "47"      # imobilizado / capex (cod 1.2.02.003 Máq. e Equip.)
 
 _seq = 0
 
@@ -76,6 +77,33 @@ class TestCompromissosFuturos:
         assert s["investimento"] == pytest.approx(500.0)
         assert s["recorrente"] == pytest.approx(300.0)
         assert s["total"] == pytest.approx(1800.0)
+
+    def test_capex_separated_from_ma(self, organization_a: Organization) -> None:
+        # M&A real (conta 1.2.01) e capex/imobilizado (conta 1.2.02.x) caem na
+        # mesma seção DRE, mas devem aparecer em camadas distintas.
+        _open_expense(
+            organization_a, id_conta=_CONTA_INVEST, amount=Decimal("800"),
+            due_date=_future(1), supplier="Power Net",
+        )
+        _open_expense(
+            organization_a, id_conta=_CONTA_CAPEX, amount=Decimal("100"),
+            due_date=_future(1), supplier="INTELBRAS S/A",
+        )
+        set_current_organization(organization_a)
+
+        data = compute_compromissos_futuros(organization_a, months_ahead=12)
+        s = data["summary"]
+        # M&A não inclui o capex.
+        assert s["investimento"] == pytest.approx(800.0)
+        assert s["capex"] == pytest.approx(100.0)
+        assert s["total"] == pytest.approx(900.0)
+
+        # Capex NÃO entra na tabela de frentes estruturais (M&A + dívida).
+        names = {r["name"] for r in data["structural"]}
+        assert "Power Net" in names
+        assert "INTELBRAS S/A" not in names
+        tiers = {r["tier"] for r in data["structural"]}
+        assert "capex" not in tiers
 
     def test_excludes_past_paid_and_soft_deleted(
         self, organization_a: Organization

@@ -964,8 +964,8 @@ def compromissos_futuros_stacked_bar(data: dict[str, Any]) -> str:
     """Barras empilhadas — compromissos futuros por camada + saldo acumulado.
 
     Empilha as despesas OPEN futuras por camada gerencial (recorrente, dívida,
-    M&A) e sobrepõe a linha do saldo a quitar (eixo secundário), que mostra a
-    desalavancagem mês a mês conforme as parcelas estruturais se encerram.
+    M&A, capex) e sobrepõe a linha do saldo a quitar (eixo secundário), que
+    mostra a desalavancagem mês a mês conforme as parcelas estruturais se encerram.
     """
     labels = data.get("month_labels", [])
     tiers = data.get("tiers", {})
@@ -985,7 +985,8 @@ def compromissos_futuros_stacked_bar(data: dict[str, Any]) -> str:
     bar_specs = [
         ("Operacional / Recorrente", recorrente, "#94a3b8"),
         ("Serviço da Dívida", tiers.get("divida", {}).get("monthly", []), "#ef4444"),
-        ("Investimento (M&A)", tiers.get("investimento", {}).get("monthly", []), "#7c3aed"),
+        ("M&A (Aquisições)", tiers.get("investimento", {}).get("monthly", []), "#7c3aed"),
+        ("Imobilizado / Capex", tiers.get("capex", {}).get("monthly", []), "#3b82f6"),
     ]
 
     traces: list[Any] = []

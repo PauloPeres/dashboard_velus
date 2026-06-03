@@ -27,7 +27,7 @@
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
     {% include "dashboards/_kpi_card.html" with label="Total a vencer" value=total_str %}
     {% include "dashboards/_kpi_card.html" with label="Serviço da Dívida" value=divida_str subtitle="Encerra em "|add:divida_last_label %}
-    {% include "dashboards/_kpi_card.html" with label="Investimento (M&A)" value=investimento_str subtitle="Encerra em "|add:investimento_last_label %}
+    {% include "dashboards/_kpi_card.html" with label="M&A (Aquisições)" value=investimento_str subtitle="Encerra em "|add:investimento_last_label %}
     {% include "dashboards/_kpi_card.html" with label="Operacional / Recorrente" value=recorrente_str %}
 </div>
 
