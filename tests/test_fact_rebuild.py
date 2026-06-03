@@ -19,6 +19,7 @@ from apps.analytics.application.rebuild import (
     rebuild_for_capability,
 )
 from apps.analytics.infrastructure.models import FactInvoice
+from apps.customers.infrastructure.models import Contract
 from apps.financial.infrastructure.models import Invoice
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import Organization
@@ -33,17 +34,30 @@ def _make_invoice(
     amount: Decimal,
     due_days_ago: int,
     paid: bool = False,
+    contract_status: str | None = None,
 ) -> Invoice:
     global _seq
     _seq += 1
     set_current_organization(org)
     now = timezone.now()
     due_date = (now - timedelta(days=due_days_ago)).date()
+    contract = None
+    if contract_status is not None:
+        contract = Contract.objects.create(
+            organization=org,
+            source_type="FAKE",
+            external_id=f"ctr-{_seq}",
+            customer_external_id=f"cust-{_seq}",
+            plan_name="Plano X",
+            monthly_amount=amount,
+            status=contract_status,
+        )
     return Invoice.objects.create(
         organization=org,
         source_type="FAKE",
         external_id=f"inv-{_seq}",
-        contract_external_id="",
+        contract_external_id=contract.external_id if contract else "",
+        contract=contract,
         amount=amount,
         paid_amount=amount if paid else None,
         due_date=due_date,
@@ -95,8 +109,15 @@ class TestRebuildFactInvoice:
         assert fact.aging_bucket == "PAID"
 
     def test_aging_distribution_after_rebuild(self, organization_a: Organization) -> None:
-        _make_invoice(organization_a, status="PENDING", amount=Decimal("200"), due_days_ago=45)
-        _make_invoice(organization_a, status="PENDING", amount=Decimal("300"), due_days_ago=100)
+        # aging só conta faturas de contratos recuperáveis (ACTIVE/BLOCKED)
+        _make_invoice(
+            organization_a, status="PENDING", amount=Decimal("200"),
+            due_days_ago=45, contract_status="ACTIVE",
+        )
+        _make_invoice(
+            organization_a, status="PENDING", amount=Decimal("300"),
+            due_days_ago=100, contract_status="ACTIVE",
+        )
         rebuild_for_capability(organization_a, "INVOICES")
 
         set_current_organization(organization_a)
