@@ -26,7 +26,7 @@ from apps.analytics.application.aggregations import (
     compute_blocked_at_risk_summary,
     compute_blocked_duration_distribution,
     compute_burn_rate,
-    compute_cash_mismatch,
+    compute_cash_calendar,
     compute_cash_received_series,
     compute_cashflow_series,
     compute_churn_by_plan,
@@ -790,6 +790,65 @@ def compromissos(request: HttpRequest) -> HttpResponse:
     )
 
 
+_MESES_PT = [
+    "", "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+]
+
+
+def _cash_calendar_ctx(
+    data: dict[str, Any],
+    *,
+    key: str,
+    tab: str,
+    subtitle: str,
+    in_word: str,
+    out_word: str,
+) -> dict[str, Any]:
+    """Monta o contexto formatado de uma visão (mês) do descasamento."""
+    s = data["summary"]
+    nd = s["num_days"]
+
+    # Descasamento em dias: positivo = entra DEPOIS de sair (aperto); ~0 alinhado.
+    desc = s["descasamento_dias"]
+    if abs(desc) < 1.0:
+        desc_band, desc_color = "Alinhado", "text-gray-900"
+    elif desc > 0:
+        desc_band, desc_color = "Entra após sair", "text-red-600"
+    else:
+        desc_band, desc_color = "Entra antes de sair", "text-green-600"
+
+    be = s["breakeven_day"]
+    breakeven_str = f"dia {be}" if be else "não vira positivo"
+
+    return {
+        "key": key,
+        "tab": tab,
+        "subtitle": subtitle,
+        "month_label": f"{_MESES_PT[s['month']]}/{s['year']}",
+        "chart_div_id": f"descasamento-chart-{key}",
+        "data_id": f"descasamento-data-{key}",
+        "avg_day_in_str": f"dia {s['avg_day_in']:.0f}" if s["avg_day_in"] else "—",
+        "avg_day_out_str": f"dia {s['avg_day_out']:.0f}" if s["avg_day_out"] else "—",
+        "in_subtitle": _fmt_brl(s["total_in"]) + f" {in_word}",
+        "out_subtitle": _fmt_brl(s["total_out"]) + f" {out_word}",
+        "descasamento_str": f"{desc:+.1f}".replace(".", ",") + " dias",
+        "descasamento_band": desc_band,
+        "descasamento_color": desc_color,
+        "worst_balance_str": _fmt_brl(s["worst_balance"]),
+        "worst_day_str": f"dia {s['worst_day']}" if s["worst_day"] else "—",
+        "days_negative_str": f"{s['days_negative']}/{nd}",
+        "breakeven_str": breakeven_str,
+        "total_in_str": _fmt_brl(s["total_in"]),
+        "total_out_str": _fmt_brl(s["total_out"]),
+        "net_str": _fmt_brl(s["net"]),
+        "net_positive": s["net"] >= 0,
+        "in_word": in_word,
+        "out_word": out_word,
+        "chart_json": charts.cash_mismatch_chart(data),
+    }
+
+
 @login_required
 @never_cache
 def descasamento(request: HttpRequest) -> HttpResponse:
@@ -798,48 +857,54 @@ def descasamento(request: HttpRequest) -> HttpResponse:
         return org_or_redirect
     org = org_or_redirect
 
-    # Perfil intra-mês precisa de histórico — força no mínimo 3 meses de janela.
-    months = _get_months(request)
-    if months < 3:
-        months = 6
+    today = timezone.now().date()
+    py, pm = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+    ny, nm = (today.year, today.month + 1) if today.month < 12 else (today.year + 1, 1)
 
-    data = compute_cash_mismatch(org, months=months)
-    s = data["summary"]
+    past = compute_cash_calendar(org, py, pm, "realized")
+    current = compute_cash_calendar(org, today.year, today.month, "hybrid")
+    future = compute_cash_calendar(org, ny, nm, "planned")
 
-    # Descasamento em dias: positivo = recebe DEPOIS de pagar (ruim); ~0 alinhado.
-    desc = s["descasamento_dias"]
-    if abs(desc) < 1.0:
-        desc_band, desc_color = "Alinhado", "text-gray-900"
-    elif desc > 0:
-        desc_band, desc_color = "Recebe após pagar", "text-red-600"
-    else:
-        desc_band, desc_color = "Recebe antes de pagar", "text-green-600"
-
-    be = s["breakeven_day"]
-    breakeven_str = f"dia {be}" if be else "não vira positivo"
+    views = [
+        _cash_calendar_ctx(
+            current,
+            key="atual",
+            tab="Mês atual",
+            subtitle=(
+                "Efetuado até hoje + a vencer daqui pra frente — como o mês "
+                "corrente deve fechar."
+            ),
+            in_word="previsto entrar",
+            out_word="previsto sair",
+        ),
+        _cash_calendar_ctx(
+            past,
+            key="passado",
+            tab="Mês passado",
+            subtitle=(
+                "Só o que foi efetuado — recebimentos e pagamentos pela data em "
+                "que o caixa realmente mexeu."
+            ),
+            in_word="recebidos",
+            out_word="pagos",
+        ),
+        _cash_calendar_ctx(
+            future,
+            key="proximo",
+            tab="Mês que vem",
+            subtitle=(
+                "Só o planejado — a receber × a pagar pelas datas de vencimento, "
+                "antes de qualquer baixa."
+            ),
+            in_word="a receber",
+            out_word="a pagar",
+        ),
+    ]
 
     return render(
         request,
         "dashboards/descasamento.html",
-        {
-            "data": data,
-            "summary": s,
-            "months": months,
-            "avg_day_in_str": f"dia {s['avg_day_in']:.0f}",
-            "avg_day_out_str": f"dia {s['avg_day_out']:.0f}",
-            "descasamento_str": f"{desc:+.1f}".replace(".", ",") + " dias",
-            "descasamento_band": desc_band,
-            "descasamento_color": desc_color,
-            "worst_balance_str": _fmt_brl(s["worst_balance"]),
-            "worst_day_str": f"dia {s['worst_day']}" if s["worst_day"] else "—",
-            "days_negative_str": f"{s['days_negative']}/31",
-            "breakeven_str": breakeven_str,
-            "total_in_str": _fmt_brl(s["total_in"]),
-            "total_out_str": _fmt_brl(s["total_out"]),
-            "net_str": _fmt_brl(s["net"]),
-            "net_positive": s["net"] >= 0,
-            "cash_mismatch_chart_json": charts.cash_mismatch_chart(data),
-        },
+        {"views": views},
     )
 
 

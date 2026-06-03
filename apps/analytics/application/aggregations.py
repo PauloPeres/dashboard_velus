@@ -9,6 +9,7 @@ por signal `sync_completed` (futuro).
 
 from __future__ import annotations
 
+import calendar
 import math
 import statistics
 from datetime import date as date_cls
@@ -549,70 +550,135 @@ def compute_cash_received_series(
     ]
 
 
+def _cash_calendar_add(
+    arr: list[float],
+    queryset: Any,
+    date_field: str,
+    amount_expr: Any,
+    num_days: int,
+    *,
+    clamp_min_day: int | None = None,
+) -> None:
+    """Soma os valores do queryset no array por dia do mês (1..num_days).
+
+    `clamp_min_day` empurra qualquer dia anterior para esse piso — usado no modo
+    híbrido para que itens já vencidos e não pagos apareçam como "vencem hoje".
+    """
+    rows = (
+        queryset.annotate(day=ExtractDay(date_field))
+        .values("day")
+        .annotate(total=amount_expr)
+    )
+    for r in rows:
+        d = r["day"]
+        if not d:
+            continue
+        idx = int(d)
+        if clamp_min_day is not None and idx < clamp_min_day:
+            idx = clamp_min_day
+        idx = min(idx, num_days)
+        arr[idx] += float(r["total"])
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
-def compute_cash_mismatch(
-    organization: Organization, months: int = 6
+def compute_cash_calendar(
+    organization: Organization, year: int, month: int, mode: str
 ) -> dict[str, Any]:
-    """Descasamento de caixa intra-mês: perfil de entradas × saídas por dia.
+    """Descasamento de caixa dia a dia de UM mês — entradas × saídas + saldo acum.
 
-    Agrega os últimos `months` meses fechados de recebimentos (FactInvoice PAID,
-    paid_date/paid_amount) e pagamentos (FactExpense PAID, paid_date/amount) pelo
-    DIA DO MÊS (1-31), tirando a média por mês. Mostra QUANDO o caixa entra vs
-    QUANDO sai e o saldo acumulado dentro do mês — revela o aperto de liquidez
-    mesmo quando o total mensal fecha, porque a concentração de saídas no meio
-    do mês abre um buraco que os recebimentos (mais diluídos) só cobrem depois.
+    Três modos, conforme a janela temporal pedida:
 
-    O saldo acumulado parte de ZERO a cada mês — é uma visão relativa intra-mês,
-    não a posição absoluta de caixa (que dependeria do saldo bancário inicial).
+    - ``realized``  (mês passado): só o que foi EFETUADO. Recebimentos via
+      FactInvoice PAID (paid_date/paid_amount) e pagamentos via FactExpense PAID
+      (paid_date/amount). É o caixa real que já passou.
+    - ``planned``   (mês que vem): só o PLANEJADO. A receber = FactInvoice
+      PENDING/OVERDUE por due_date; a pagar = FactExpense OPEN por due_date. É a
+      expectativa pelas datas de vencimento, antes de qualquer baixa.
+    - ``hybrid``    (mês atual): EFETUADO até hoje + A VENCER daqui pra frente.
+      Dias passados usam o que foi pago/recebido; itens em aberto entram pela
+      due_date, e os já vencidos e não pagos são empurrados para o dia de hoje
+      (vencem agora). Mostra como o mês corrente deve fechar.
+
+    O saldo acumulado parte de ZERO no dia 1º — visão relativa intra-mês, não a
+    posição absoluta de caixa (que dependeria do saldo bancário inicial).
     """
     today = timezone.now().date()
-    month_start = today.replace(day=1)
-    cutoff = _first_of_month_n_ago(today, months)
-    n_months = max(months, 1)
-
-    # índice = dia do mês (1..31); posição 0 é ignorada para alinhar com o dia.
-    inflow = [0.0] * 32
-    outflow = [0.0] * 32
-
-    rec = (
-        FactInvoice.objects.filter(
-            organization=organization,
-            status="PAID",
-            paid_date__gte=cutoff,
-            paid_date__lt=month_start,
-            paid_date__isnull=False,
-        )
-        .annotate(day=ExtractDay("paid_date"))
-        .values("day")
-        .annotate(
-            total=Coalesce(
-                Sum("paid_amount"), Sum("amount"), _ZERO, output_field=DecimalField()
-            )
-        )
+    num_days = calendar.monthrange(year, month)[1]
+    month_start = date_cls(year, month, 1)
+    next_start = (
+        date_cls(year + 1, 1, 1) if month == 12 else date_cls(year, month + 1, 1)
     )
-    for r in rec:
-        d = r["day"]
-        if d:
-            inflow[min(int(d), 31)] += float(r["total"]) / n_months
+    is_current = today.year == year and today.month == month
+    clamp_day = today.day if (mode == "hybrid" and is_current) else None
 
-    pay = (
-        FactExpense.objects.filter(
-            organization=organization,
-            status="PAID",
-            paid_date__gte=cutoff,
-            paid_date__lt=month_start,
-            paid_date__isnull=False,
-        )
-        .annotate(day=ExtractDay("paid_date"))
-        .values("day")
-        .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
+    # índice = dia do mês (1..num_days); posição 0 ignorada para alinhar com o dia.
+    inflow = [0.0] * (num_days + 1)
+    outflow = [0.0] * (num_days + 1)
+
+    inv_paid_amt = Coalesce(
+        Sum("paid_amount"), Sum("amount"), _ZERO, output_field=DecimalField()
     )
-    for r in pay:
-        d = r["day"]
-        if d:
-            outflow[min(int(d), 31)] += float(r["total"]) / n_months
+    amt = Coalesce(Sum("amount"), _ZERO, output_field=DecimalField())
 
-    days = list(range(1, 32))
+    # ── Parte realizada (pago/recebido) — usada em realized e hybrid ──────────
+    if mode in ("realized", "hybrid"):
+        _cash_calendar_add(
+            inflow,
+            FactInvoice.objects.filter(
+                organization=organization,
+                status="PAID",
+                paid_date__gte=month_start,
+                paid_date__lt=next_start,
+                paid_date__isnull=False,
+            ),
+            "paid_date",
+            inv_paid_amt,
+            num_days,
+        )
+        _cash_calendar_add(
+            outflow,
+            FactExpense.objects.filter(
+                organization=organization,
+                status="PAID",
+                paid_date__gte=month_start,
+                paid_date__lt=next_start,
+                paid_date__isnull=False,
+            ),
+            "paid_date",
+            amt,
+            num_days,
+        )
+
+    # ── Parte planejada (a vencer) — usada em planned e hybrid ────────────────
+    if mode in ("planned", "hybrid"):
+        _cash_calendar_add(
+            inflow,
+            FactInvoice.objects.filter(
+                organization=organization,
+                status__in=("PENDING", "OVERDUE"),
+                due_date__gte=month_start,
+                due_date__lt=next_start,
+            ),
+            "due_date",
+            amt,
+            num_days,
+            clamp_min_day=clamp_day,
+        )
+        _cash_calendar_add(
+            outflow,
+            FactExpense.objects.filter(
+                organization=organization,
+                status="OPEN",
+                due_date__gte=month_start,
+                due_date__lt=next_start,
+            ),
+            "due_date",
+            amt,
+            num_days,
+            clamp_min_day=clamp_day,
+        )
+
+    days = list(range(1, num_days + 1))
     inflow_d = [inflow[d] for d in days]
     outflow_d = [outflow[d] for d in days]
 
@@ -648,8 +714,12 @@ def compute_cash_mismatch(
         "inflow": inflow_d,
         "outflow": outflow_d,
         "cumulative": cumulative,
+        "today_day": today.day if (mode == "hybrid" and is_current) else None,
         "summary": {
-            "months": n_months,
+            "mode": mode,
+            "year": year,
+            "month": month,
+            "num_days": num_days,
             "total_in": total_in,
             "total_out": total_out,
             "net": total_in - total_out,

@@ -1053,6 +1053,7 @@ def cash_mismatch_chart(data: dict[str, Any]) -> str:
     inflow = data.get("inflow", [])
     outflow = data.get("outflow", [])
     cumulative = data.get("cumulative", [])
+    today_day = data.get("today_day")
 
     traces: list[Any] = [
         go.Bar(
@@ -1081,28 +1082,47 @@ def cash_mismatch_chart(data: dict[str, Any]) -> str:
         ),
     ]
 
-    fig = go.Figure(
-        data=traces,
-        layout={
-            **_LAYOUT_BASE,
-            "barmode": "relative",
-            "showlegend": True,
-            "legend": {"orientation": "h", "y": -0.2, "font": {"size": 10}},
-            "xaxis": {"title": "Dia do mês", "tickmode": "linear", "dtick": 2},
-            "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f", "title": "Por dia"},
-            "yaxis2": {
-                "overlaying": "y",
-                "side": "right",
-                "tickprefix": "R$ ",
-                "tickformat": ",.0f",
-                "showgrid": False,
-                "title": "Saldo acum.",
-                "zeroline": True,
-                "zerolinecolor": "#94a3b8",
-            },
-            "margin": {"l": 60, "r": 60, "t": 30, "b": 80},
+    layout: dict[str, Any] = {
+        **_LAYOUT_BASE,
+        "barmode": "relative",
+        "showlegend": True,
+        "legend": {"orientation": "h", "y": -0.2, "font": {"size": 10}},
+        "xaxis": {"title": "Dia do mês", "tickmode": "linear", "dtick": 2},
+        "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f", "title": "Por dia"},
+        "yaxis2": {
+            "overlaying": "y",
+            "side": "right",
+            "tickprefix": "R$ ",
+            "tickformat": ",.0f",
+            "showgrid": False,
+            "title": "Saldo acum.",
+            "zeroline": True,
+            "zerolinecolor": "#94a3b8",
         },
-    )
+        "margin": {"l": 60, "r": 60, "t": 30, "b": 80},
+    }
+
+    # Linha vertical "hoje" no modo híbrido: separa o efetuado do a vencer.
+    if today_day:
+        x_today = f"{int(today_day):02d}"
+        layout["shapes"] = [
+            {
+                "type": "line",
+                "x0": x_today, "x1": x_today,
+                "yref": "paper", "y0": 0, "y1": 1,
+                "line": {"color": "#64748b", "width": 1.5, "dash": "dash"},
+            }
+        ]
+        layout["annotations"] = [
+            {
+                "x": x_today, "xref": "x",
+                "yref": "paper", "y": 1.02,
+                "text": "hoje", "showarrow": False,
+                "font": {"size": 10, "color": "#64748b"},
+            }
+        ]
+
+    fig = go.Figure(data=traces, layout=layout)
     return _to_json(fig)
 
 
