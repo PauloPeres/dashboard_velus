@@ -14,11 +14,19 @@ cedo na validação Pydantic (Anti-Corruption Layer no IxcCustomerSource).
 
 from __future__ import annotations
 
+import json as _json
 from collections.abc import Iterator
 from typing import Any, ClassVar
 
 import httpx
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
+from apps.integrations.shared.exceptions import AdapterTransientError
 from apps.integrations.shared.http_client import BaseHttpAdapter
 
 
@@ -85,17 +93,7 @@ class IxcHttpClient(BaseHttpAdapter):
             body["page"] = str(page)
             body["rp"] = str(size)
 
-            # IXC: GET com body é peculiar — httpx aceita content em GET.
-            # Adicionamos header ixcsoft: listar.
-            self._throttle()
-            response = self._client.request(
-                "GET",
-                resource,
-                content=__import__("json").dumps(body).encode("utf-8"),
-                headers={"ixcsoft": "listar"},
-            )
-            # Reusa classificação do base (erros HTTP) via método auxiliar
-            payload = self._classify_and_extract(response, resource)
+            payload = self._fetch_page(resource, body)
 
             registros = payload.get("registros") or []
             if not registros:
@@ -111,6 +109,46 @@ class IxcHttpClient(BaseHttpAdapter):
             if page * size >= total or len(registros) < size:
                 return
             page += 1
+
+    def _fetch_page(self, resource: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Busca uma página com retry exponencial em erros transientes.
+
+        `paginate_ixc` faz GET inline (com body), então não passa pelo
+        `request()` do base — precisamos replicar aqui o retry e a conversão de
+        erros de rede (Errno 101 / timeout) em `AdapterTransientError`. Sem isso
+        uma falha momentânea (ex.: rota IPv6 indisponível no cluster) derrubava
+        o sync inteiro em vez de tentar de novo.
+        """
+
+        @retry(
+            retry=retry_if_exception_type(AdapterTransientError),
+            stop=stop_after_attempt(self.retry_max_attempts),
+            wait=wait_exponential(
+                multiplier=1, min=1, max=self.retry_max_wait_seconds
+            ),
+            reraise=True,
+        )
+        def _do() -> dict[str, Any]:
+            assert self._client is not None
+            self._throttle()
+            try:
+                response = self._client.request(
+                    "GET",
+                    resource,
+                    content=_json.dumps(body).encode("utf-8"),
+                    headers={"ixcsoft": "listar"},
+                )
+            except httpx.TimeoutException as exc:
+                raise AdapterTransientError(
+                    f"Timeout em IXC {resource}"
+                ) from exc
+            except httpx.NetworkError as exc:
+                raise AdapterTransientError(
+                    f"Erro de rede em IXC {resource}: {exc}"
+                ) from exc
+            return self._classify_and_extract(response, resource)
+
+        return _do()
 
     def _classify_and_extract(self, response: httpx.Response, path: str) -> dict[str, Any]:
         """Replica a classificação de erros do BaseHttpAdapter pro request inline.
@@ -140,8 +178,13 @@ class IxcHttpClient(BaseHttpAdapter):
         try:
             data = response.json()
         except ValueError as exc:
-            raise AdapterError(
-                f"IXC resposta não-JSON em {path}: {response.text[:200]}"
+            # IXC às vezes responde HTTP 200 com uma página HTML de erro
+            # ("Ocorreu um erro...") quando a query estoura/timeout no servidor.
+            # É intermitente — tratamos como transiente pra acionar o retry em
+            # vez de derrubar o sync como falha permanente.
+            raise AdapterTransientError(
+                f"IXC resposta não-JSON (provável erro server-side) em {path}: "
+                f"{response.text[:200]}"
             ) from exc
         if not isinstance(data, dict):
             raise AdapterError(f"IXC resposta inesperada em {path}: {type(data).__name__}")

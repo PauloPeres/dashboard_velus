@@ -177,6 +177,60 @@ class TestIxcCustomerSourceListCustomers:
         assert call_count["n"] == 3
         assert len(items) == 5
 
+    def test_retries_on_network_error_then_succeeds(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        """Erro de rede (Errno 101 / rota IPv6 indisponível) é transiente: a
+        paginação tenta de novo em vez de derrubar o sync."""
+        import httpx
+
+        from apps.integrations.ixc.client import IxcHttpClient
+
+        ok = {"page": "1", "total": "1", "registros": [_sample_ixc_customer(id="1")]}
+        calls = {"n": 0}
+
+        def handler(request: Any) -> Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ConnectError("[Errno 101] Network is unreachable")
+            return Response(200, json=ok)
+
+        respx_mock.get(f"{API_URL}/cliente").mock(side_effect=handler)
+
+        with IxcHttpClient(base_url=BASE_URL, user_id="1", api_token="t") as client:
+            items = list(client.paginate_ixc("cliente", page_size=2))
+
+        assert calls["n"] == 2  # 1ª falhou, 2ª passou
+        assert len(items) == 1
+
+    def test_retries_on_ixc_html_error_page(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        """IXC responde HTTP 200 com página HTML de erro ('Ocorreu um erro') —
+        intermitente, deve ser tratado como transiente e re-tentado."""
+        from apps.integrations.ixc.client import IxcHttpClient
+
+        ok = {"page": "1", "total": "1", "registros": [_sample_ixc_customer(id="1")]}
+        calls = {"n": 0}
+
+        def handler(request: Any) -> Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return Response(
+                    200,
+                    text="<div>Ocorreu um erro ao processar a requisição</div>",
+                    headers={"content-type": "text/html"},
+                )
+            return Response(200, json=ok)
+
+        respx_mock.get(f"{API_URL}/cliente").mock(side_effect=handler)
+
+        with IxcHttpClient(base_url=BASE_URL, user_id="1", api_token="t") as client:
+            items = list(client.paginate_ixc("cliente", page_size=2))
+
+        assert calls["n"] == 2
+        assert len(items) == 1
+
     def test_pydantic_validation_failure_raises_contract_error(
         self, respx_mock: respx.MockRouter
     ) -> None:
