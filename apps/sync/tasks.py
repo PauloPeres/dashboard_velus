@@ -31,6 +31,7 @@ from apps.financial.infrastructure.repositories import (
 from apps.helpdesk.domain.dto import TicketDTO
 from apps.helpdesk.infrastructure.repositories import TicketRepository
 from apps.integrations.shared.enums import Capability, SourceType
+from apps.integrations.shared.registry import registry
 from apps.inventory.domain.dto import EquipmentDTO
 from apps.inventory.infrastructure.repositories import EquipmentRepository
 from apps.network.domain.dto import BandwidthUsageDTO, ConnectionDTO
@@ -43,7 +44,6 @@ from apps.sales.infrastructure.repositories import (
     LeadRepository,
     OpportunityRepository,
 )
-from apps.integrations.shared.registry import registry
 from apps.shared.context import (
     reset_current_organization,
     set_current_organization,
