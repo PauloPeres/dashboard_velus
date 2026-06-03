@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from django.db import transaction
+from django.utils import timezone
 
 from apps.customers.infrastructure.models import Contract
 from apps.financial.domain.dto import ExpenseDTO, InvoiceDTO, PaymentDTO
@@ -12,6 +13,69 @@ from apps.integrations.shared.enums import SourceType
 from apps.tenancy.models import Organization
 
 from .models import Expense, Invoice, Payment
+
+
+def _soft_delete_missing(
+    model: Any,
+    organization: Organization,
+    *,
+    seen_external_ids: set[str],
+    source_type: SourceType,
+    min_keep_ratio: float,
+) -> dict[str, Any]:
+    """Marca como soft-deleted os registros ativos cujo external_id NÃO veio no
+    pull completo do IXC (foram removidos na fonte da verdade) e reativa os que
+    voltaram a aparecer. Genérico — serve Payment e Expense.
+
+    Detecção por ausência: opera sobre o conjunto local ativo vs. o conjunto
+    visto no pull. Conjuntos `to_delete`/`to_reactivate` são pequenos (só o
+    delta), então os UPDATEs usam IN curto — sem IN gigante nem re-save linha a
+    linha (que estouraria as tabelas de history).
+
+    Guard-rail: se o pull trouxe menos que `min_keep_ratio` do total ativo
+    local, ABORTA sem deletar — protege contra um pull parcial/falho zerar tudo.
+    """
+    base = model.objects.filter(
+        organization=organization, source_type=source_type.value
+    )
+    active_ids = set(
+        base.filter(deleted_at__isnull=True).values_list("external_id", flat=True)
+    )
+
+    if active_ids and len(seen_external_ids) < len(active_ids) * min_keep_ratio:
+        return {
+            "active": len(active_ids),
+            "seen": len(seen_external_ids),
+            "soft_deleted": 0,
+            "reactivated": 0,
+            "aborted": True,
+        }
+
+    now = timezone.now()
+    to_delete = active_ids - seen_external_ids
+    soft_deleted = (
+        base.filter(external_id__in=to_delete).update(deleted_at=now)
+        if to_delete
+        else 0
+    )
+
+    deleted_ids = set(
+        base.filter(deleted_at__isnull=False).values_list("external_id", flat=True)
+    )
+    to_reactivate = deleted_ids & seen_external_ids
+    reactivated = (
+        base.filter(external_id__in=to_reactivate).update(deleted_at=None)
+        if to_reactivate
+        else 0
+    )
+
+    return {
+        "active": len(active_ids),
+        "seen": len(seen_external_ids),
+        "soft_deleted": soft_deleted,
+        "reactivated": reactivated,
+        "aborted": False,
+    }
 
 
 class InvoiceRepository:
@@ -110,6 +174,8 @@ class PaymentRepository:
             "paid_at": dto.paid_at,
             "method": self._normalize_method(dto.method),
             "raw_extras": dto.raw_extras,
+            # Reativa: se voltou a aparecer no IXC, deixa de estar soft-deleted.
+            "deleted_at": None,
         }
         payment, created = Payment.objects.update_or_create(
             organization=self.organization,
@@ -118,6 +184,22 @@ class PaymentRepository:
             defaults=defaults,
         )
         return payment, created
+
+    def soft_delete_missing(
+        self,
+        *,
+        seen_external_ids: set[str],
+        source_type: SourceType,
+        min_keep_ratio: float = 0.5,
+    ) -> dict[str, Any]:
+        """Soft-delete de Payments ausentes no pull completo (ver _soft_delete_missing)."""
+        return _soft_delete_missing(
+            Payment,
+            self.organization,
+            seen_external_ids=seen_external_ids,
+            source_type=source_type,
+            min_keep_ratio=min_keep_ratio,
+        )
 
     @staticmethod
     def _normalize_method(raw: str) -> str:
@@ -153,6 +235,8 @@ class ExpenseRepository:
             "status": self._normalize_status(dto.status),
             "payment_type": dto.payment_type,
             "raw_extras": dto.raw_extras,
+            # Reativa: se voltou a aparecer no IXC, deixa de estar soft-deleted.
+            "deleted_at": None,
         }
         expense, created = Expense.objects.update_or_create(
             organization=self.organization,
@@ -161,6 +245,22 @@ class ExpenseRepository:
             defaults=defaults,
         )
         return expense, created
+
+    def soft_delete_missing(
+        self,
+        *,
+        seen_external_ids: set[str],
+        source_type: SourceType,
+        min_keep_ratio: float = 0.5,
+    ) -> dict[str, Any]:
+        """Soft-delete de Expenses ausentes no pull completo (ver _soft_delete_missing)."""
+        return _soft_delete_missing(
+            Expense,
+            self.organization,
+            seen_external_ids=seen_external_ids,
+            source_type=source_type,
+            min_keep_ratio=min_keep_ratio,
+        )
 
     @staticmethod
     def _normalize_status(raw: str) -> str:

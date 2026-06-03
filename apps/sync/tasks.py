@@ -350,3 +350,192 @@ def _run_sync(
         "records_processed": total_processed,
         "sources": per_source_summary,
     }
+
+
+# =============================================================================
+# Reconciliação — detecta REMOÇÕES no IXC (fonte da verdade)
+# =============================================================================
+# O sync incremental é upsert-only e filtra por data de emissão/baixa, então
+# nunca percebe um registro DELETADO no IXC (ex.: carnê de pagamento removido,
+# despesa apagada). A reconciliação faz um pull COMPLETO por capability,
+# coleta os external_ids vistos e faz soft-delete dos ativos locais ausentes
+# (nosso sistema nunca remove fisicamente — só marca `deleted_at`).
+#
+# Só PAYMENTS e EXPENSES têm soft-delete (repos com `soft_delete_missing`).
+_RECONCILABLE = frozenset({Capability.PAYMENTS, Capability.EXPENSES})
+
+# Capabilities cuja reconciliação RE-UPSERTA cada registro do pull completo —
+# necessário pra capturar mudanças in-place (ex.: Expense cancelada, status C)
+# que o incremental, filtrado por data de emissão, não reprocessa. PAYMENTS
+# fica de fora: volume alto e sem campo de status; re-salvar tudo toda noite
+# explodiria as tabelas de history. Pra Payment só a detecção por ausência importa.
+_RECONCILE_REUPSERT = frozenset({Capability.EXPENSES})
+
+
+@shared_task(name="apps.sync.tasks.dispatch_reconciliation_for_all_orgs")
+def dispatch_reconciliation_for_all_orgs(
+    capabilities: list[str] | None = None,
+) -> dict[str, int]:
+    """Beat chama isso (madrugada): enfileira reconciliação por (org, capability)."""
+    caps = capabilities or [c.value for c in _RECONCILABLE]
+    return _dispatch_reconciliation(caps)
+
+
+@allow_cross_tenant(reason="reconciliation orchestrator itera Organization (não-TenantModel)")
+def _dispatch_reconciliation(capabilities: list[str]) -> dict[str, int]:
+    from apps.tenancy.models import OrganizationDataSource
+
+    configs = OrganizationDataSource.objects.filter(
+        is_active=True,
+        organization__is_active=True,
+        capability__in=capabilities,
+    ).select_related("organization")
+
+    n_tasks = 0
+    seen: set[tuple[int, str]] = set()
+    for cfg in configs:
+        org = cfg.organization
+        key = (org.pk, cfg.capability)
+        if key in seen:  # reconcile_capability já itera todos os sources da cap
+            continue
+        seen.add(key)
+        reconcile_capability.apply_async(
+            kwargs={"organization_id": org.pk, "capability": cfg.capability},
+            queue=org.celery_queue_name,
+        )
+        n_tasks += 1
+        _logger.info(
+            "reconciliation_dispatched",
+            organization=org.slug,
+            capability=cfg.capability,
+        )
+    return {"tasks_dispatched": n_tasks}
+
+
+@shared_task(
+    bind=True,
+    name="apps.sync.tasks.reconcile_capability",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=2,
+    acks_late=True,
+)
+def reconcile_capability(
+    self: Any,  # noqa: ARG001
+    *,
+    organization_id: int,
+    capability: str,
+) -> dict[str, Any]:
+    """Reconcilia uma capability: pull completo + soft-delete por ausência."""
+    log = _logger.bind(organization_id=organization_id, capability=capability)
+    log.info("reconcile_start")
+
+    cap = Capability(capability)
+    if cap not in _RECONCILABLE:
+        raise ValueError(f"Capability {cap.value} não é reconciliável")
+
+    return _run_reconciliation(organization_id=organization_id, capability=cap, log=log)
+
+
+@allow_cross_tenant(reason="reconciliation precisa iterar OrganizationDataSource")
+def _run_reconciliation(
+    *,
+    organization_id: int,
+    capability: Capability,
+    log: Any,
+) -> dict[str, Any]:
+    organization = Organization.objects.get(pk=organization_id)
+
+    sources = registry.get_sources(organization, capability)
+    if not sources:
+        log.warning("no_sources_configured")
+        return {"records_processed": 0, "sources": []}
+
+    port_call, repo_factory, _ = _DISPATCH[capability]
+    reupsert = capability in _RECONCILE_REUPSERT
+
+    total_seen = 0
+    per_source_summary: list[dict[str, Any]] = []
+
+    token = set_current_organization(organization)
+    try:
+        for source in sources:
+            source_type = source.source_type
+            slog = log.bind(source=source_type.value)
+
+            job = SyncJob.objects.create(
+                organization=organization,
+                source_type=source_type.value,
+                capability=capability.value,
+                mode=SyncMode.BOOTSTRAP.value,  # pull completo; NÃO mexe no checkpoint
+                status=SyncStatus.RUNNING,
+                started_at=timezone.now(),
+            )
+
+            try:
+                repository = repo_factory(organization)
+                seen_external_ids: set[str] = set()
+                skipped = 0
+
+                for dto in port_call(source, None):  # since=None → pull completo
+                    seen_external_ids.add(dto.external_id)
+                    if reupsert:
+                        try:
+                            repository.upsert_from_dto(dto, source_type=source_type)
+                        except Exception as record_exc:
+                            skipped += 1
+                            slog.warning(
+                                "reconcile_record_skipped",
+                                error=f"{type(record_exc).__name__}: {record_exc}"[:200],
+                                skipped_total=skipped,
+                            )
+                            if skipped > 100:
+                                slog.error("reconcile_too_many_skips", skipped=skipped)
+                                raise
+
+                result = repository.soft_delete_missing(
+                    seen_external_ids=seen_external_ids,
+                    source_type=source_type,
+                )
+
+                job.status = SyncStatus.COMPLETED
+                job.records_processed = len(seen_external_ids)
+                job.finished_at = timezone.now()
+                if result.get("aborted"):
+                    job.error_message = (
+                        f"guard-rail: pull trouxe {result['seen']} < "
+                        f"{result['active']} ativos — soft-delete abortado"
+                    )
+                job.save()
+
+                slog.info("source_reconcile_ok", **result)
+                total_seen += len(seen_external_ids)
+                per_source_summary.append(
+                    {"source": source_type.value, "status": "OK", **result}
+                )
+
+            except Exception as exc:
+                job.status = SyncStatus.FAILED
+                job.error_message = f"{type(exc).__name__}: {exc}"[:1000]
+                job.finished_at = timezone.now()
+                job.save()
+                slog.error("source_reconcile_failed", error=str(exc))
+                per_source_summary.append(
+                    {"source": source_type.value, "status": "FAILED", "error": str(exc)}
+                )
+
+    finally:
+        reset_current_organization(token)
+
+    log.info("reconcile_done", total_seen=total_seen, sources_count=len(sources))
+    # Dispara rebuild das fact (que dropa as linhas dos soft-deleted).
+    sync_completed.send(
+        sender=None,
+        organization=organization,
+        capability=capability.value,
+        records_processed=total_seen,
+    )
+
+    return {"records_processed": total_seen, "sources": per_source_summary}

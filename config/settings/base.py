@@ -332,6 +332,14 @@ CELERY_BEAT_SCHEDULE: dict = {
         "schedule": crontab(minute=40, hour=3),  # 03:40 — rede de segurança
         "options": {"queue": "celery"},
     },
+    "reconcile-financial-daily": {
+        # 01:00 SP (CELERY_TIMEZONE = America/Sao_Paulo). Pull completo de
+        # pagamentos/despesas pra soft-delete dos que sumiram do IXC.
+        "task": "apps.sync.tasks.dispatch_reconciliation_for_all_orgs",
+        "schedule": crontab(minute=0, hour=1),
+        "kwargs": {"capabilities": ["PAYMENTS", "EXPENSES"]},
+        "options": {"queue": "celery"},
+    },
     "capture-network-snapshot-every-3h": {
         "task": "apps.analytics.tasks.dispatch_network_snapshot_for_all_orgs",
         "schedule": crontab(minute=15, hour="*/3"),  # foto de rede a cada 3h

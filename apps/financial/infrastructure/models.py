@@ -114,6 +114,16 @@ class Payment(TenantModel):
 
     raw_extras = models.JSONField(default=dict, blank=True)
 
+    deleted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=_(
+            "Soft-delete: setado pela reconciliação quando o registro some do IXC "
+            "(fonte da verdade). Nunca removemos fisicamente — só marcamos."
+        ),
+    )
+
     history = HistoricalRecords()
 
     class Meta:
@@ -169,6 +179,16 @@ class Expense(TenantModel):
     )
     payment_type = models.CharField(max_length=64, blank=True, default="")
     raw_extras = models.JSONField(default=dict, blank=True)
+
+    deleted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=_(
+            "Soft-delete: setado pela reconciliação quando o registro some do IXC "
+            "(fonte da verdade). Nunca removemos fisicamente — só marcamos."
+        ),
+    )
 
     history = HistoricalRecords()
 

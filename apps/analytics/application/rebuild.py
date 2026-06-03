@@ -300,7 +300,9 @@ def _rebuild_fact_payment(organization: Organization) -> int:
         )
         return len(records)
 
-    payments = Payment.objects.filter(organization=organization)
+    payments = Payment.objects.filter(
+        organization=organization, deleted_at__isnull=True
+    )
     for pay in payments.iterator(chunk_size=_FACT_FINANCIAL_BATCH):
         batch.append(
             FactPayment(
@@ -316,6 +318,11 @@ def _rebuild_fact_payment(organization: Organization) -> int:
             batch = []
 
     count += _flush(batch)
+    # bulk_create só faz upsert — nunca remove. Limpa as fact de Payments
+    # soft-deleted (sumiram do IXC) pra não inflarem caixa/projeção.
+    FactPayment.objects.filter(
+        organization=organization, payment__deleted_at__isnull=False
+    ).delete()
     return count
 
 
@@ -339,7 +346,9 @@ def _rebuild_fact_expense(organization: Organization) -> int:
         )
         return len(records)
 
-    expenses = Expense.objects.filter(organization=organization)
+    expenses = Expense.objects.filter(
+        organization=organization, deleted_at__isnull=True
+    )
     for exp in expenses.iterator(chunk_size=_FACT_FINANCIAL_BATCH):
         batch.append(
             FactExpense(
@@ -362,6 +371,11 @@ def _rebuild_fact_expense(organization: Organization) -> int:
             batch = []
 
     count += _flush(batch)
+    # bulk_create só faz upsert — nunca remove. Limpa as fact de Expenses
+    # soft-deleted (sumiram do IXC) pra não distorcerem o DRE.
+    FactExpense.objects.filter(
+        organization=organization, expense__deleted_at__isnull=False
+    ).delete()
     return count
 
 
