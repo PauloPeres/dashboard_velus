@@ -37,7 +37,6 @@ from apps.analytics.infrastructure.models import (
     FactContractStatusDaily,
     FactExpense,
     FactInvoice,
-    FactPayment,
 )
 from apps.shared.decorators import allow_cross_tenant
 from apps.tenancy.models import Organization
@@ -512,13 +511,17 @@ def compute_cash_received_series(
 ) -> list[dict[str, Any]]:
     """Recebimentos por mês — entrada de caixa real.
 
-    Usa FactInvoice com status='PAID' e paid_date preenchida (pagamento_data do IXC).
-    Fallback para FactPayment se houver dados (futura integração de pagamentos direta).
+    Fonte única: FactInvoice com status='PAID' e paid_date preenchida
+    (pagamento_data do IXC), somando paid_amount. Cada fatura paga conta uma vez.
+
+    NÃO usar FactPayment aqui: ela vem das baixas (fn_areceber_baixas) e tem ~3,5x
+    mais linhas que faturas (≈12k baixas/mês para ≈3,4k faturas), inflando o caixa
+    para ~o dobro/triplo do real. O número correto bate com o MRR (~R$335k/mês);
+    a soma das baixas dava ~R$650k–1,3M/mês. Ver probe_caixa em 2026-06.
     """
     today = timezone.now().date()
     cutoff = _first_of_month_n_ago(today, months)
 
-    # Prefere FactInvoice.paid_date — populado pelo IXC pagamento_data
     by_month = (
         FactInvoice.objects.filter(
             organization=organization,
@@ -534,44 +537,16 @@ def compute_cash_received_series(
         )
         .order_by("month")
     )
-    invoice_rows = list(by_month)
 
-    # Adiciona FactPayment se existir (integração futura de pagamentos direta)
-    fp_by_month: dict[str, float] = {}
-    fp_qs = (
-        FactPayment.objects.filter(organization=organization, paid_date__gte=cutoff)
-        .annotate(month=TruncMonth("paid_date"))
-        .values("month")
-        .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
-    )
-    for row in fp_qs:
-        key = row["month"].strftime("%Y-%m")
-        fp_by_month[key] = float(row["total"])
-
-    result = []
-    for row in invoice_rows:
-        key = row["month"].strftime("%Y-%m")
-        invoice_total = float(row["total"])
-        # Merge: se FactPayment tem dados para esse mês, usa o maior (evita dupla contagem)
-        payment_total = fp_by_month.pop(key, 0.0)
-        total = max(invoice_total, payment_total)
-        result.append({
-            "month": key,
+    return [
+        {
+            "month": row["month"].strftime("%Y-%m"),
             "label": row["month"].strftime("%b/%y"),
-            "amount": total,
+            "amount": float(row["total"]),
             "count": row["count"],
-        })
-
-    # Meses só em FactPayment (sem FactInvoice nesse período)
-    for key, total in sorted(fp_by_month.items()):
-        try:
-            d = date_cls.fromisoformat(key + "-01")
-            label = d.strftime("%b/%y")
-        except ValueError:
-            label = key
-        result.append({"month": key, "label": label, "amount": total, "count": 0})
-
-    return sorted(result, key=lambda x: x["month"])
+        }
+        for row in by_month
+    ]
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
