@@ -157,7 +157,7 @@ def executive(request: HttpRequest) -> HttpResponse:
     last_sync = last_sync_job.finished_at if last_sync_job else None
 
     churn_pct_str = f"{kpis['churn_pct']:.1f}%"
-    churn_subtitle = f"{kpis['canceled_this_month']} cancelados · {kpis['new_this_month']} novos neste mês"
+    churn_subtitle = f"{kpis['churn_canceled']} cancelados em {kpis['churn_month_label']} (mês fechado)"
     mrr_delta_str = f"{kpis['mrr_delta_pct']:.1f}% vs mês anterior"
     mrr_subtitle = f"{_fmt_brl(kpis['mrr_prev'])} no mês anterior"
 

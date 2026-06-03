@@ -275,13 +275,22 @@ def compute_kpis(organization: Organization) -> dict[str, Any]:
         canceled_at__date__gte=month_first,
     ).count()
 
-    # Churn = cancelados no mês / ativos no início do mês * 100
-    active_at_start = FactContractStatusDaily.objects.filter(
+    # Churn do último mês FECHADO. O mês corrente é parcial (poucos dias de
+    # cancelamentos sobre a base cheia) e subestimava o churn ~15-30x. Usamos o
+    # mês anterior completo: cancelados em [last_month_first, month_first) ÷ base
+    # ativa no início desse mês (snapshot em last_month_first).
+    churn_canceled = Contract.objects.filter(
+        organization=organization,
+        canceled_at__date__gte=last_month_first,
+        canceled_at__date__lt=month_first,
+    ).count()
+    base_closed = FactContractStatusDaily.objects.filter(
         organization=organization, date=last_month_first, is_active=True
     ).count()
     churn_pct = (
-        float(canceled_count / active_at_start * 100) if active_at_start > 0 else 0.0
+        float(churn_canceled / base_closed * 100) if base_closed > 0 else 0.0
     )
+    churn_month_label = last_month_first.strftime("%b/%y")
 
     # Inadimplência — só faturas recuperáveis (contrato ACTIVE/BLOCKED na base).
     delinquency = FactInvoice.objects.filter(
@@ -309,6 +318,8 @@ def compute_kpis(organization: Organization) -> dict[str, Any]:
         "new_this_month": new_count,
         "canceled_this_month": canceled_count,
         "churn_pct": churn_pct,
+        "churn_canceled": churn_canceled,
+        "churn_month_label": churn_month_label,
         "delinquency_amount": delinquency_amount,
         "delinquency_count": delinquency["count"] or 0,
         "delinquency_pct_of_mrr": delinquency_pct_of_mrr,
