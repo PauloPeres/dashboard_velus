@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import pytest
 
-from apps.analytics.application.aggregations import _get_dre_section
+from apps.analytics.application.aggregations import (
+    _dre_tier_for_section,
+    _get_dre_section,
+)
 
 
 @pytest.mark.parametrize(
@@ -29,6 +32,8 @@ from apps.analytics.application.aggregations import _get_dre_section
         ("4.1.02", "Custos dos Serviços"),
         ("4", "Custos dos Serviços"),
         ("5", "Outras Despesas"),
+        # Override de impostos: Simples Nacional & cia (planejamento 64) → Impostos
+        ("4.2.01.003", "Impostos"),
         # Imobilizado / caixa
         ("1.2.01", "Investimentos & Imobilizado"),
         ("1.1.01", "Movimentações de Caixa"),
@@ -38,6 +43,31 @@ from apps.analytics.application.aggregations import _get_dre_section
 )
 def test_get_dre_section(cod: str, section: str) -> None:
     assert _get_dre_section(cod)[0] == section
+
+
+@pytest.mark.parametrize(
+    ("section", "tier"),
+    [
+        ("Custos dos Serviços", "operacional"),
+        ("Despesas Comerciais", "operacional"),
+        ("Despesas Operacionais", "operacional"),
+        ("Impostos", "impostos"),
+        ("Despesas Financeiras", "divida"),
+        ("Investimentos & Imobilizado", "investimento"),
+        ("Outras Despesas", "outras"),
+        ("Sem Categoria", "outras"),
+    ],
+)
+def test_dre_tier_for_section(section: str, tier: str) -> None:
+    assert _dre_tier_for_section(section) == tier
+
+
+def test_impostos_below_ebitda_distinct_from_custos() -> None:
+    # Impostos (Simples Nacional) NÃO entra no tier operacional — fica abaixo do
+    # EBITDA. Antes do #72 caía em "Custos dos Serviços" (operacional).
+    section, _ = _get_dre_section("4.2.01.003")
+    assert _dre_tier_for_section(section) == "impostos"
+    assert _dre_tier_for_section(_get_dre_section("4.1.02")[0]) == "operacional"
 
 
 def test_override_takes_priority_over_prefix() -> None:
