@@ -143,6 +143,56 @@ def _make_equipment(org: Organization, *, status: str, data: str | None) -> None
 
 
 @pytest.mark.django_db
+class TestComputeKpisChurnClosedMonth:
+    def test_churn_uses_last_closed_month_not_partial(
+        self, organization_a: Organization
+    ) -> None:
+        today = timezone.now().date()
+        month_first = today.replace(day=1)
+        last_month_first = (month_first - timedelta(days=1)).replace(day=1)
+
+        # Base ativa no início do mês fechado (anterior): 4 contratos.
+        for _ in range(4):
+            _active_snapshot(
+                organization_a, on=last_month_first, monthly=Decimal("100")
+            )
+
+        global _seq
+        set_current_organization(organization_a)
+        # 1 cancelado DENTRO do mês fechado → conta no churn (1/4 = 25%).
+        _seq += 1
+        Contract.objects.create(
+            organization=organization_a,
+            source_type="FAKE",
+            external_id=f"kpi-closed-{_seq}",
+            customer_external_id=f"kpi-closedc-{_seq}",
+            plan_name="Plano X",
+            monthly_amount=Decimal("100"),
+            status="CANCELED",
+            canceled_at=_aware(last_month_first + timedelta(days=10)),
+        )
+        # 1 cancelado no mês CORRENTE (parcial) → NÃO deve entrar no churn fechado.
+        _seq += 1
+        Contract.objects.create(
+            organization=organization_a,
+            source_type="FAKE",
+            external_id=f"kpi-curr-{_seq}",
+            customer_external_id=f"kpi-currc-{_seq}",
+            plan_name="Plano X",
+            monthly_amount=Decimal("100"),
+            status="CANCELED",
+            canceled_at=_aware(today),
+        )
+
+        kpis = compute_kpis(organization_a)
+        assert kpis["churn_canceled"] == 1
+        assert kpis["churn_pct"] == 25.0
+        assert kpis["churn_month_label"] == last_month_first.strftime("%b/%y")
+        # cancelado do mês corrente ainda aparece no MTD, separado do churn.
+        assert kpis["canceled_this_month"] == 1
+
+
+@pytest.mark.django_db
 class TestComputeKpisSnapshotFallback:
     def test_mrr_uses_latest_snapshot_when_today_missing(
         self, organization_a: Organization
