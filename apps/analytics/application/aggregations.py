@@ -48,6 +48,12 @@ _ZERO = Decimal("0.00")
 # Defensivo contra re-syncs que revertem CANCELED → UNKNOWN (bug histórico do adapter IXC).
 _CANCELED_Q = Q(status="CANCELED") | Q(status="UNKNOWN", canceled_at__isnull=False)
 
+# Inadimplência "recuperável": só faturas de contratos ainda na base — ACTIVE
+# (cobrança normal) ou BLOCKED (bloqueado por falta de pagamento, é exatamente o
+# que se recupera cobrando). Exclui faturas órfãs (sem contrato vinculado) e de
+# contratos CANCELED, que inflavam a inadimplência em ~15-30x (R$707k → ~R$43k).
+_RECOVERABLE_CONTRACT_STATUSES = ("ACTIVE", "BLOCKED")
+
 
 def _first_of_month_n_ago(base: date_cls, n: int) -> date_cls:
     """Retorna o primeiro dia do calendário N meses antes do mês de `base`.
@@ -277,11 +283,12 @@ def compute_kpis(organization: Organization) -> dict[str, Any]:
         float(canceled_count / active_at_start * 100) if active_at_start > 0 else 0.0
     )
 
-    # Inadimplência
+    # Inadimplência — só faturas recuperáveis (contrato ACTIVE/BLOCKED na base).
     delinquency = FactInvoice.objects.filter(
         organization=organization,
         status__in=("PENDING", "OVERDUE"),
         days_overdue__gt=0,
+        invoice__contract__status__in=_RECOVERABLE_CONTRACT_STATUSES,
     ).aggregate(
         total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
         count=Count("id"),
@@ -315,6 +322,7 @@ def compute_aging_distribution(organization: Organization) -> list[dict[str, Any
         FactInvoice.objects.filter(
             organization=organization,
             status__in=("PENDING", "OVERDUE"),
+            invoice__contract__status__in=_RECOVERABLE_CONTRACT_STATUSES,
         )
         .values("aging_bucket")
         .annotate(
