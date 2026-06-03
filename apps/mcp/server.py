@@ -26,6 +26,32 @@ from apps.shared.context import reset_current_organization, set_current_organiza
 _HEALTH_PATH = "/healthz"
 
 
+def _transport_security():
+    """Política anti DNS-rebinding do FastMCP a partir de MCP_ALLOWED_HOSTS.
+
+    Lista vazia → proteção desligada (dev/local, onde o Host é localhost:porta).
+    Lista preenchida → proteção ligada, aceitando os hosts configurados (mais a
+    variação com porta) — o header Host atrás do Ingress é o domínio público.
+    """
+    from django.conf import settings
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    hosts = list(settings.MCP_ALLOWED_HOSTS)
+    if not hosts:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    allowed = []
+    for h in hosts:
+        allowed.append(h)
+        if ":" not in h:
+            allowed.append(f"{h}:*")
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed,
+        allowed_origins=allowed,
+    )
+
+
 def _build_mcp():
     """Constrói o FastMCP e registra todas as ferramentas do catálogo."""
     from mcp.server.fastmcp import FastMCP
@@ -40,6 +66,7 @@ def _build_mcp():
             "Use para consultar MRR, churn, caixa, inadimplência e risco."
         ),
         stateless_http=True,
+        transport_security=_transport_security(),
     )
 
     for spec in TOOL_SPECS:

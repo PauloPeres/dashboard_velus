@@ -454,3 +454,4 @@ FERNET_KEY = env.FERNET_KEY.get_secret_value()
 MCP_ENABLED = env.MCP_ENABLED
 MCP_HOST = env.MCP_HOST
 MCP_PORT = env.MCP_PORT
+MCP_ALLOWED_HOSTS = [h.strip() for h in env.MCP_ALLOWED_HOSTS.split(",") if h.strip()]

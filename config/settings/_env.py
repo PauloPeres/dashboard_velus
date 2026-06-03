@@ -121,6 +121,10 @@ class Settings(BaseSettings):
     MCP_ENABLED: bool = False
     MCP_HOST: str = "0.0.0.0"  # noqa: S104 — bind interno ao Pod, exposto via Ingress
     MCP_PORT: int = 8800
+    # Hosts aceitos no header Host (proteção anti DNS-rebinding do FastMCP). CSV.
+    # Vazio = proteção desligada (conveniência em dev/local). Em prod, setar o
+    # host público do Ingress (ex.: "mcp.seujaime.com").
+    MCP_ALLOWED_HOSTS: str = ""
 
 
 # Singleton — importado por base.py
