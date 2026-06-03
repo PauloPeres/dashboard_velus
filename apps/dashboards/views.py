@@ -744,6 +744,21 @@ def compromissos(request: HttpRequest) -> HttpResponse:
         row["total_str"] = _fmt_brl(row["total"])
         row["last_label"] = label_by_month.get(row["last_month"], row["last_month"] or "—")
 
+    # Escala de alavancagem: dívida total ÷ faturamento mensal (em "meses de
+    # faturamento"). Faixas ancoradas em padrão de telecom (Dívida Líq./EBITDA
+    # ~3,5× de teto a ~35% de margem ≈ 15 meses de MRR). Quartos de 6/12/18/24.
+    mult = summary["divida_multiplo_faturamento"]
+    if mult <= 6:
+        mult_band, mult_color = "Saudável", "text-green-600"
+    elif mult <= 12:
+        mult_band, mult_color = "Atenção", "text-yellow-600"
+    elif mult <= 18:
+        mult_band, mult_color = "Alavancado", "text-orange-600"
+    else:
+        mult_band, mult_color = "Crítico", "text-red-600"
+    # Posição do marcador na barra (0–24× → 0–100%), com teto em 100%.
+    mult_marker_pct = min(mult / 24.0, 1.0) * 100.0
+
     return render(
         request,
         "dashboards/compromissos.html",
@@ -759,6 +774,9 @@ def compromissos(request: HttpRequest) -> HttpResponse:
             "divida_mult_str": (
                 f"{summary['divida_multiplo_faturamento']:.1f}×".replace(".", ",")
             ),
+            "divida_mult_band": mult_band,
+            "divida_mult_color": mult_color,
+            "divida_mult_marker_pct": round(mult_marker_pct, 1),
             "faturamento_mensal_str": _fmt_brl(summary["faturamento_mensal"]),
             "divida_last_label": label_by_month.get(
                 summary["divida_last_month"], "—"
