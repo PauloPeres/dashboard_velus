@@ -28,7 +28,7 @@ from django.db.models import (
     Sum,
 )
 from django.db.models.fields.json import KeyTextTransform
-from django.db.models.functions import Coalesce, TruncMonth
+from django.db.models.functions import Coalesce, ExtractDay, TruncMonth
 from django.utils import timezone
 
 from apps.analytics.infrastructure.models import (
@@ -547,6 +547,121 @@ def compute_cash_received_series(
         }
         for row in by_month
     ]
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_cash_mismatch(
+    organization: Organization, months: int = 6
+) -> dict[str, Any]:
+    """Descasamento de caixa intra-mês: perfil de entradas × saídas por dia.
+
+    Agrega os últimos `months` meses fechados de recebimentos (FactInvoice PAID,
+    paid_date/paid_amount) e pagamentos (FactExpense PAID, paid_date/amount) pelo
+    DIA DO MÊS (1-31), tirando a média por mês. Mostra QUANDO o caixa entra vs
+    QUANDO sai e o saldo acumulado dentro do mês — revela o aperto de liquidez
+    mesmo quando o total mensal fecha, porque a concentração de saídas no meio
+    do mês abre um buraco que os recebimentos (mais diluídos) só cobrem depois.
+
+    O saldo acumulado parte de ZERO a cada mês — é uma visão relativa intra-mês,
+    não a posição absoluta de caixa (que dependeria do saldo bancário inicial).
+    """
+    today = timezone.now().date()
+    month_start = today.replace(day=1)
+    cutoff = _first_of_month_n_ago(today, months)
+    n_months = max(months, 1)
+
+    # índice = dia do mês (1..31); posição 0 é ignorada para alinhar com o dia.
+    inflow = [0.0] * 32
+    outflow = [0.0] * 32
+
+    rec = (
+        FactInvoice.objects.filter(
+            organization=organization,
+            status="PAID",
+            paid_date__gte=cutoff,
+            paid_date__lt=month_start,
+            paid_date__isnull=False,
+        )
+        .annotate(day=ExtractDay("paid_date"))
+        .values("day")
+        .annotate(
+            total=Coalesce(
+                Sum("paid_amount"), Sum("amount"), _ZERO, output_field=DecimalField()
+            )
+        )
+    )
+    for r in rec:
+        d = r["day"]
+        if d:
+            inflow[min(int(d), 31)] += float(r["total"]) / n_months
+
+    pay = (
+        FactExpense.objects.filter(
+            organization=organization,
+            status="PAID",
+            paid_date__gte=cutoff,
+            paid_date__lt=month_start,
+            paid_date__isnull=False,
+        )
+        .annotate(day=ExtractDay("paid_date"))
+        .values("day")
+        .annotate(total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()))
+    )
+    for r in pay:
+        d = r["day"]
+        if d:
+            outflow[min(int(d), 31)] += float(r["total"]) / n_months
+
+    days = list(range(1, 32))
+    inflow_d = [inflow[d] for d in days]
+    outflow_d = [outflow[d] for d in days]
+
+    cumulative: list[float] = []
+    cin = cout = 0.0
+    worst = 0.0
+    worst_day = 0
+    days_negative = 0
+    seen_neg = False
+    breakeven_day: int | None = None
+    for d in days:
+        cin += inflow[d]
+        cout += outflow[d]
+        bal = cin - cout
+        cumulative.append(bal)
+        if bal < worst:
+            worst = bal
+            worst_day = d
+        if bal < 0:
+            days_negative += 1
+            seen_neg = True
+        elif seen_neg and breakeven_day is None:
+            breakeven_day = d  # dia em que o mês volta ao azul após o buraco
+
+    total_in = sum(inflow_d)
+    total_out = sum(outflow_d)
+    wday_in = (sum(d * inflow[d] for d in days) / total_in) if total_in > 0 else 0.0
+    wday_out = (sum(d * outflow[d] for d in days) / total_out) if total_out > 0 else 0.0
+
+    return {
+        "days": days,
+        "day_labels": [f"{d:02d}" for d in days],
+        "inflow": inflow_d,
+        "outflow": outflow_d,
+        "cumulative": cumulative,
+        "summary": {
+            "months": n_months,
+            "total_in": total_in,
+            "total_out": total_out,
+            "net": total_in - total_out,
+            "avg_day_in": wday_in,
+            "avg_day_out": wday_out,
+            "descasamento_dias": wday_in - wday_out,
+            "worst_balance": worst,
+            "worst_day": worst_day,
+            "days_negative": days_negative,
+            "breakeven_day": breakeven_day,
+        },
+    }
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")

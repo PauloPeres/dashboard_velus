@@ -62,7 +62,7 @@
             </a>
 
             <!-- ── Grupo Despesas ── -->
-            {% if u == 'cashflow' or u == 'dre' or u == 'dre_detalhe' or u == 'burn' or u == 'forecast' or u == 'pessoas' or u == 'compromissos' %}
+            {% if u == 'cashflow' or u == 'dre' or u == 'dre_detalhe' or u == 'burn' or u == 'forecast' or u == 'pessoas' or u == 'compromissos' or u == 'descasamento' %}
                 {% with despesas_open=True %}
                 {% include "dashboards/_sidebar_despesas.html" with u=u open=despesas_open %}
                 {% endwith %}

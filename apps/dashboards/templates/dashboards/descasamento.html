@@ -1,0 +1,66 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Descasamento de Caixa · Velus{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+    <div>
+        <h1 class="text-2xl font-bold">Descasamento de Caixa</h1>
+        <p class="text-sm text-gray-500 mt-1">
+            Quando o caixa entra × quando sai, por dia do mês — média dos últimos
+            {{ months }} meses. Mostra o aperto de liquidez intra-mês mesmo quando
+            o total mensal fecha.
+        </p>
+    </div>
+</div>
+
+<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
+    {% include "dashboards/_kpi_card.html" with label="Dia médio de recebimento" value=avg_day_in_str subtitle=total_in_str|add:"/mês entram" tooltip="Dia do mês em que, na média ponderada por valor, os recebimentos entram (FactInvoice pagas)." %}
+    {% include "dashboards/_kpi_card.html" with label="Dia médio de pagamento" value=avg_day_out_str subtitle=total_out_str|add:"/mês saem" tooltip="Dia do mês em que, na média ponderada por valor, os pagamentos saem (despesas pagas)." %}
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
+            Descasamento
+            <span class="relative inline-block group/tip shrink-0">
+                <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
+                <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
+                    Dia médio de recebimento menos dia médio de pagamento. Positivo = o dinheiro entra DEPOIS de sair (aperto). Próximo de zero = alinhado na média — mas veja o saldo acumulado, que revela a concentração de saídas no meio do mês.
+                    <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+                </span>
+            </span>
+        </p>
+        <p class="text-2xl font-bold {{ descasamento_color }}">{{ descasamento_str }}</p>
+        <p class="text-xs mt-1 leading-snug {{ descasamento_color }}">{{ descasamento_band }}</p>
+    </div>
+    {% include "dashboards/_kpi_card.html" with label="Pior saldo no mês" value=worst_balance_str subtitle="acumulado, "|add:worst_day_str variant="border-red-200" value_color="text-red-600" tooltip="Ponto mais baixo do saldo do mês (acumulado a partir de zero). É o vale de liquidez — quanto de caixa de giro o mês exige antes dos recebimentos cobrirem as saídas." %}
+    {% include "dashboards/_kpi_card.html" with label="Dias no vermelho" value=days_negative_str subtitle="vira positivo: "|add:breakeven_str tooltip="Quantidade de dias do mês em que o saldo acumulado (partindo de zero) fica negativo, e em que dia ele volta ao azul." %}
+</div>
+
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-8">
+    <h2 class="text-lg font-semibold mb-1">Entradas × saídas por dia do mês</h2>
+    <p class="text-sm text-gray-500 mb-4">
+        Barras: verde pra cima = recebimentos, vermelho pra baixo = pagamentos.
+        Linha (eixo direito) = saldo do mês acumulado, partindo de zero.
+    </p>
+    <div id="descasamento-chart" style="height:440px;"></div>
+</div>
+
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <h2 class="text-lg font-semibold mb-2">Como ler</h2>
+    <ul class="text-sm text-gray-600 space-y-1.5 list-disc pl-5">
+        <li>O saldo acumulado <strong>parte de zero</strong> em todo dia 1º — é uma visão
+            <em>relativa</em> do mês, não a posição absoluta da conta bancária.</li>
+        <li>Quando a linha mergulha, as <strong>saídas se concentraram</strong> antes dos
+            recebimentos chegarem — esse vale é o capital de giro que o mês exige.</li>
+        <li>O mês fecha em <strong class="{% if net_positive %}text-green-600{% else %}text-red-600{% endif %}">{{ net_str }}</strong>
+            ({{ total_in_str }} recebidos − {{ total_out_str }} pagos).</li>
+    </ul>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ cash_mismatch_chart_json|json_script:"descasamento-data" }}
+<script>
+    renderChart("descasamento-chart", "descasamento-data");
+</script>
+{% endblock %}

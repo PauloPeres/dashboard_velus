@@ -21,6 +21,7 @@ urlpatterns = [
     path("financial/burn/", views.burn, name="burn"),
     path("financial/pessoas/", views.pessoas, name="pessoas"),
     path("financial/compromissos/", views.compromissos, name="compromissos"),
+    path("financial/descasamento/", views.descasamento, name="descasamento"),
     path("churn/", views.churn, name="churn"),
     path("risk/", views.risk, name="risk"),
     path("operations/", views.operations, name="operations"),

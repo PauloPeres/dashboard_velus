@@ -1041,6 +1041,71 @@ def compromissos_futuros_stacked_bar(data: dict[str, Any]) -> str:
     return _to_json(fig)
 
 
+def cash_mismatch_chart(data: dict[str, Any]) -> str:
+    """Descasamento de caixa por dia do mês — entradas × saídas + saldo acum.
+
+    Barras divergentes: verde pra cima = recebimentos, vermelho pra baixo =
+    pagamentos (média por dia do mês). Linha no eixo secundário = saldo do mês
+    acumulado (parte de zero), que mergulha quando as saídas se concentram e só
+    se recupera quando os recebimentos chegam — é o "buraco" de liquidez.
+    """
+    labels = data.get("day_labels", [])
+    inflow = data.get("inflow", [])
+    outflow = data.get("outflow", [])
+    cumulative = data.get("cumulative", [])
+
+    traces: list[Any] = [
+        go.Bar(
+            name="Entra (recebimentos)",
+            x=labels,
+            y=inflow,
+            marker_color="#10b981",
+            hovertemplate="Dia %{x}<br>Entra: R$ %{y:,.0f}<extra></extra>",
+        ),
+        go.Bar(
+            name="Sai (pagamentos)",
+            x=labels,
+            y=[-v for v in outflow],
+            marker_color="#ef4444",
+            customdata=outflow,
+            hovertemplate="Dia %{x}<br>Sai: R$ %{customdata:,.0f}<extra></extra>",
+        ),
+        go.Scatter(
+            name="Saldo do mês (acumulado)",
+            x=labels,
+            y=cumulative,
+            mode="lines",
+            yaxis="y2",
+            line={"color": "#0f766e", "width": 2.5},
+            hovertemplate="Dia %{x}<br>Saldo acum.: R$ %{y:,.0f}<extra></extra>",
+        ),
+    ]
+
+    fig = go.Figure(
+        data=traces,
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "relative",
+            "showlegend": True,
+            "legend": {"orientation": "h", "y": -0.2, "font": {"size": 10}},
+            "xaxis": {"title": "Dia do mês", "tickmode": "linear", "dtick": 2},
+            "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f", "title": "Por dia"},
+            "yaxis2": {
+                "overlaying": "y",
+                "side": "right",
+                "tickprefix": "R$ ",
+                "tickformat": ",.0f",
+                "showgrid": False,
+                "title": "Saldo acum.",
+                "zeroline": True,
+                "zerolinecolor": "#94a3b8",
+            },
+            "margin": {"l": 60, "r": 60, "t": 30, "b": 80},
+        },
+    )
+    return _to_json(fig)
+
+
 def forecast_area(
     historical: list[dict[str, Any]], forecast: list[dict[str, Any]]
 ) -> str:

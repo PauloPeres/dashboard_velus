@@ -26,6 +26,7 @@ from apps.analytics.application.aggregations import (
     compute_blocked_at_risk_summary,
     compute_blocked_duration_distribution,
     compute_burn_rate,
+    compute_cash_mismatch,
     compute_cash_received_series,
     compute_cashflow_series,
     compute_churn_by_plan,
@@ -785,6 +786,59 @@ def compromissos(request: HttpRequest) -> HttpResponse:
                 summary["investimento_last_month"], "—"
             ),
             "compromissos_chart_json": charts.compromissos_futuros_stacked_bar(data),
+        },
+    )
+
+
+@login_required
+@never_cache
+def descasamento(request: HttpRequest) -> HttpResponse:
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    # Perfil intra-mês precisa de histórico — força no mínimo 3 meses de janela.
+    months = _get_months(request)
+    if months < 3:
+        months = 6
+
+    data = compute_cash_mismatch(org, months=months)
+    s = data["summary"]
+
+    # Descasamento em dias: positivo = recebe DEPOIS de pagar (ruim); ~0 alinhado.
+    desc = s["descasamento_dias"]
+    if abs(desc) < 1.0:
+        desc_band, desc_color = "Alinhado", "text-gray-900"
+    elif desc > 0:
+        desc_band, desc_color = "Recebe após pagar", "text-red-600"
+    else:
+        desc_band, desc_color = "Recebe antes de pagar", "text-green-600"
+
+    be = s["breakeven_day"]
+    breakeven_str = f"dia {be}" if be else "não vira positivo"
+
+    return render(
+        request,
+        "dashboards/descasamento.html",
+        {
+            "data": data,
+            "summary": s,
+            "months": months,
+            "avg_day_in_str": f"dia {s['avg_day_in']:.0f}",
+            "avg_day_out_str": f"dia {s['avg_day_out']:.0f}",
+            "descasamento_str": f"{desc:+.1f}".replace(".", ",") + " dias",
+            "descasamento_band": desc_band,
+            "descasamento_color": desc_color,
+            "worst_balance_str": _fmt_brl(s["worst_balance"]),
+            "worst_day_str": f"dia {s['worst_day']}" if s["worst_day"] else "—",
+            "days_negative_str": f"{s['days_negative']}/31",
+            "breakeven_str": breakeven_str,
+            "total_in_str": _fmt_brl(s["total_in"]),
+            "total_out_str": _fmt_brl(s["total_out"]),
+            "net_str": _fmt_brl(s["net"]),
+            "net_positive": s["net"] >= 0,
+            "cash_mismatch_chart_json": charts.cash_mismatch_chart(data),
         },
     )
 
