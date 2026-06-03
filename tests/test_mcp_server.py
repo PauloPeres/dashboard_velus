@@ -14,7 +14,7 @@ import pytest
 
 from apps.mcp.models import McpToken, _hash_token, authenticate_token
 from apps.mcp.registry import _json_safe, _normalize, _require_org
-from apps.mcp.server import BearerTenantMiddleware
+from apps.mcp.server import BearerTenantMiddleware, _transport_security
 from apps.shared.context import (
     get_current_organization,
     reset_current_organization,
@@ -109,6 +109,20 @@ class TestRegistryContext:
             reset_current_organization(token)
         assert isinstance(out, dict)
         assert "mrr_now" in out
+
+
+class TestTransportSecurity:
+    def test_empty_hosts_disables_protection(self, settings) -> None:
+        settings.MCP_ALLOWED_HOSTS = []
+        ts = _transport_security()
+        assert ts.enable_dns_rebinding_protection is False
+
+    def test_configured_host_is_allowed_with_port_wildcard(self, settings) -> None:
+        settings.MCP_ALLOWED_HOSTS = ["mcp.seujaime.com"]
+        ts = _transport_security()
+        assert ts.enable_dns_rebinding_protection is True
+        assert "mcp.seujaime.com" in ts.allowed_hosts
+        assert "mcp.seujaime.com:*" in ts.allowed_hosts
 
 
 async def _fake_downstream(captured: dict):
