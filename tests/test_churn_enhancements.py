@@ -525,6 +525,27 @@ class TestChurnDigest:
         assert digest["summary"]["total_at_risk"] >= 1
         assert digest["top"]
 
+    def test_weekly_carries_collections_not_strategic(
+        self, churn_scenario_min: Organization
+    ) -> None:
+        digest = build_digest(churn_scenario_min, "weekly")
+        assert digest["is_monthly"] is False
+        assert "collections" in digest and "strategic" not in digest
+        assert "over_90_str" in digest["collections"]
+
+    def test_monthly_carries_strategic_block(
+        self, churn_scenario_min: Organization
+    ) -> None:
+        digest = build_digest(churn_scenario_min, "monthly")
+        assert digest["is_monthly"] is True
+        assert "strategic" in digest and "collections" not in digest
+        strat = digest["strategic"]
+        for key in (
+            "mrr_now_str", "churn_pct", "net_adds", "cash_month_str",
+            "delinquency_str", "forecast_next_str",
+        ):
+            assert key in strat
+
     def test_send_only_to_optin_users(
         self, churn_scenario_min: Organization, user_a: User
     ) -> None:
@@ -535,7 +556,7 @@ class TestChurnDigest:
         assert result["recipients"] == 1
         assert result["sent"] == 1
         assert len(mail.outbox) == 1
-        assert "semanal" in mail.outbox[0].subject
+        assert "Foco da semana" in mail.outbox[0].subject
 
     def test_no_send_without_optin(
         self, churn_scenario_min: Organization, user_a: User
