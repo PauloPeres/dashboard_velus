@@ -3017,6 +3017,186 @@ def compute_dre_by_account(
     }
 
 
+# Rótulos das camadas gerenciais (#72) no contexto de compromissos futuros.
+_COMPROMISSO_TIER_LABELS = {
+    "operacional": "Operacional / Recorrente",
+    "impostos": "Impostos",
+    "divida": "Serviço da Dívida",
+    "investimento": "Investimento (M&A / Capex)",
+    "outras": "Outras",
+}
+# Camadas estruturais: compromissos não-recorrentes que um dia se encerram
+# (parcelas de aquisição/M&A e do serviço da dívida bancária).
+_COMPROMISSO_STRUCTURAL_TIERS = ("divida", "investimento")
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_compromissos_futuros(
+    organization: Organization,
+    months_ahead: int = 24,
+) -> dict[str, Any]:
+    """Compromissos futuros: despesas OPEN com vencimento à frente.
+
+    As parcelas de M&A (aquisições) e da dívida bancária já estão pré-lançadas
+    no IXC como Expenses status OPEN com `due_date` futura — não há projeção a
+    fazer, é agregação direta. Soma esses compromissos por mês de vencimento e
+    por camada gerencial (#72), destacando os estruturais (dívida + M&A) por
+    fornecedor/conta e em que mês cada frente se encerra.
+
+    Resolve `id_conta` (planejamento_analitico.id) → planejamento pai → seção
+    DRE → camada, exatamente como `compute_dre_by_account`.
+
+    Retorna:
+      - months / month_labels: meses contíguos de hoje até o horizonte
+      - tiers: {tier → {label, monthly: [float], total}}
+      - cumulative: saldo a quitar acumulado por mês (decrescente)
+      - structural: list[{tier, tier_label, name, conta_label, monthly, total,
+          first_month, last_month, parcelas}] — só dívida + M&A, desc por total
+      - summary: {total, recorrente, divida, investimento, impostos,
+          divida_last_month, investimento_last_month, horizon_label}
+    """
+    import calendar
+
+    from apps.financial.infrastructure.models import Expense as ExpenseModel
+
+    conta_map, plano_map = _load_plano_maps(organization)
+    supplier_map = _load_supplier_map(organization)
+    today = timezone.now().date()
+
+    # Horizonte: último dia do mês `months_ahead` à frente do mês atual.
+    h_total = (today.month - 1) + months_ahead
+    h_year = today.year + h_total // 12
+    h_month = h_total % 12 + 1
+    _, h_last_day = calendar.monthrange(h_year, h_month)
+    horizon = date_cls(h_year, h_month, h_last_day)
+
+    qs = (
+        ExpenseModel.objects.filter(
+            organization=organization,
+            status="OPEN",
+            deleted_at__isnull=True,
+            due_date__gt=today,
+            due_date__lte=horizon,
+        )
+        .annotate(
+            month=TruncMonth("due_date"),
+            id_conta_str=KeyTextTransform("id_conta", "raw_extras"),
+        )
+        .values("month", "id_conta_str", "supplier_external_id", "supplier_name")
+        .annotate(
+            total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            cnt=Count("id"),
+        )
+        .order_by("month")
+    )
+
+    # Lista contígua de meses do mês atual até o horizonte (para o eixo do gráfico).
+    sorted_months: list[str] = []
+    cy, cm = today.year, today.month
+    while (cy, cm) <= (horizon.year, horizon.month):
+        sorted_months.append(f"{cy:04d}-{cm:02d}")
+        cm += 1
+        if cm > 12:
+            cm, cy = 1, cy + 1
+
+    tiers_raw: dict[str, dict[str, float]] = {}  # tier → {YYYY-MM → valor}
+    # (tier, fornecedor, conta_label) → {monthly: {mk → valor}, cnt}
+    structural_raw: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    for row in qs:
+        mk = row["month"].strftime("%Y-%m")
+        val = float(row["total"])
+        ic = str(row["id_conta_str"] or "0")
+        entry = _resolve_conta(ic, conta_map=conta_map, plano_map=plano_map)
+        section, _ = _get_dre_section(entry.get("cod", ""))
+        tier = _dre_tier_for_section(section)
+
+        tiers_raw.setdefault(tier, {})
+        tiers_raw[tier][mk] = tiers_raw[tier].get(mk, 0.0) + val
+
+        if tier in _COMPROMISSO_STRUCTURAL_TIERS:
+            sup = _resolve_supplier_name(
+                row["supplier_external_id"], row["supplier_name"], supplier_map
+            )
+            conta_label = f"{entry.get('cod', '')} {entry.get('nome', '')}".strip()
+            key = (tier, sup, conta_label)
+            st = structural_raw.setdefault(key, {"monthly": {}, "cnt": 0})
+            st["monthly"][mk] = st["monthly"].get(mk, 0.0) + val
+            st["cnt"] += row["cnt"]
+
+    month_labels: list[str] = []
+    for mk in sorted_months:
+        try:
+            month_labels.append(date_cls.fromisoformat(mk + "-01").strftime("%b/%y"))
+        except ValueError:
+            month_labels.append(mk)
+
+    tiers_out: dict[str, dict[str, Any]] = {}
+    for tier, label in _COMPROMISSO_TIER_LABELS.items():
+        mdata = tiers_raw.get(tier, {})
+        series = [mdata.get(mk, 0.0) for mk in sorted_months]
+        tiers_out[tier] = {"label": label, "monthly": series, "total": sum(series)}
+
+    # Saldo a quitar acumulado: total geral menos o que já venceu mês a mês.
+    per_month_total = [
+        sum(tiers_out[t]["monthly"][i] for t in tiers_out)
+        for i in range(len(sorted_months))
+    ]
+    grand_total = sum(per_month_total)
+    cumulative: list[float] = []
+    remaining = grand_total
+    for amt in per_month_total:
+        cumulative.append(remaining)
+        remaining -= amt
+
+    structural_rows: list[dict[str, Any]] = []
+    for (tier, name, conta_label), st in structural_raw.items():
+        mdata = st["monthly"]
+        series = [mdata.get(mk, 0.0) for mk in sorted_months]
+        present = [mk for mk in sorted_months if mdata.get(mk)]
+        structural_rows.append({
+            "tier": tier,
+            "tier_label": _COMPROMISSO_TIER_LABELS[tier],
+            "name": name,
+            "conta_label": conta_label,
+            "monthly": series,
+            "total": sum(series),
+            "first_month": present[0] if present else None,
+            "last_month": present[-1] if present else None,
+            "parcelas": st["cnt"],
+        })
+    structural_rows.sort(key=lambda r: -r["total"])
+
+    def _tier_last_month(tier: str) -> str | None:
+        mdata = tiers_raw.get(tier, {})
+        present = [mk for mk in sorted_months if mdata.get(mk)]
+        return present[-1] if present else None
+
+    summary = {
+        "total": grand_total,
+        "recorrente": (
+            tiers_out["operacional"]["total"]
+            + tiers_out["impostos"]["total"]
+            + tiers_out["outras"]["total"]
+        ),
+        "divida": tiers_out["divida"]["total"],
+        "investimento": tiers_out["investimento"]["total"],
+        "impostos": tiers_out["impostos"]["total"],
+        "divida_last_month": _tier_last_month("divida"),
+        "investimento_last_month": _tier_last_month("investimento"),
+        "horizon_label": horizon.strftime("%b/%y"),
+    }
+
+    return {
+        "months": sorted_months,
+        "month_labels": month_labels,
+        "tiers": tiers_out,
+        "cumulative": cumulative,
+        "structural": structural_rows,
+        "summary": summary,
+    }
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_people_expenses(
     organization: Organization, months: int = 12

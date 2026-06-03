@@ -33,6 +33,7 @@ from apps.analytics.application.aggregations import (
     compute_churn_plan_detail,
     compute_churn_risk_summary,
     compute_churn_summary,
+    compute_compromissos_futuros,
     compute_contract_kpi_trend,
     compute_contract_status_trend,
     compute_customer_360,
@@ -710,6 +711,58 @@ def dre_detalhe(request: HttpRequest) -> HttpResponse:
             "selected_from": selected_from,
             "selected_to": selected_to,
             "dre_account_chart_json": charts.dre_by_account_stacked_bar(data),
+        },
+    )
+
+
+@login_required
+@never_cache
+def compromissos(request: HttpRequest) -> HttpResponse:
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    # Horizonte via ?months_ahead=N (12/24/36); default 24.
+    try:
+        months_ahead = int(request.GET.get("months_ahead", 24))
+    except (ValueError, TypeError):
+        months_ahead = 24
+    if months_ahead not in (12, 24, 36):
+        months_ahead = 24
+
+    data = compute_compromissos_futuros(org, months_ahead=months_ahead)
+    months = data["months"]
+    month_labels = data["month_labels"]
+    summary = data["summary"]
+
+    # Mapa YYYY-MM → 'Mmm/yy' para exibir o mês final de cada frente.
+    label_by_month = dict(zip(months, month_labels, strict=False))
+
+    structural = data["structural"]
+    for row in structural:
+        row["total_str"] = _fmt_brl(row["total"])
+        row["last_label"] = label_by_month.get(row["last_month"], row["last_month"] or "—")
+
+    return render(
+        request,
+        "dashboards/compromissos.html",
+        {
+            "data": data,
+            "structural": structural,
+            "summary": summary,
+            "months_ahead": months_ahead,
+            "total_str": _fmt_brl(summary["total"]),
+            "recorrente_str": _fmt_brl(summary["recorrente"]),
+            "divida_str": _fmt_brl(summary["divida"]),
+            "investimento_str": _fmt_brl(summary["investimento"]),
+            "divida_last_label": label_by_month.get(
+                summary["divida_last_month"], "—"
+            ),
+            "investimento_last_label": label_by_month.get(
+                summary["investimento_last_month"], "—"
+            ),
+            "compromissos_chart_json": charts.compromissos_futuros_stacked_bar(data),
         },
     )
 

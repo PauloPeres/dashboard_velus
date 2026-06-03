@@ -960,6 +960,81 @@ def dre_by_account_stacked_bar(data: dict[str, Any]) -> str:
     return _to_json(fig)
 
 
+def compromissos_futuros_stacked_bar(data: dict[str, Any]) -> str:
+    """Barras empilhadas — compromissos futuros por camada + saldo acumulado.
+
+    Empilha as despesas OPEN futuras por camada gerencial (recorrente, dívida,
+    M&A) e sobrepõe a linha do saldo a quitar (eixo secundário), que mostra a
+    desalavancagem mês a mês conforme as parcelas estruturais se encerram.
+    """
+    labels = data.get("month_labels", [])
+    tiers = data.get("tiers", {})
+    cumulative = data.get("cumulative", [])
+
+    # Recorrente agrega operacional + impostos + outras (ruído de fundo);
+    # dívida e M&A ganham destaque por serem as frentes que um dia acabam.
+    recorrente = [
+        a + b + c
+        for a, b, c in zip(
+            tiers.get("operacional", {}).get("monthly", [0.0] * len(labels)),
+            tiers.get("impostos", {}).get("monthly", [0.0] * len(labels)),
+            tiers.get("outras", {}).get("monthly", [0.0] * len(labels)),
+            strict=False,
+        )
+    ]
+    bar_specs = [
+        ("Operacional / Recorrente", recorrente, "#94a3b8"),
+        ("Serviço da Dívida", tiers.get("divida", {}).get("monthly", []), "#ef4444"),
+        ("Investimento (M&A)", tiers.get("investimento", {}).get("monthly", []), "#7c3aed"),
+    ]
+
+    traces: list[Any] = []
+    for name, values, color in bar_specs:
+        if values and any(v > 0 for v in values):
+            traces.append(
+                go.Bar(
+                    name=name,
+                    x=labels,
+                    y=values,
+                    marker_color=color,
+                    hovertemplate=f"<b>%{{x}}</b><br>{name}<br>R$ %{{y:,.0f}}<extra></extra>",
+                )
+            )
+
+    if cumulative and any(v > 0 for v in cumulative):
+        traces.append(
+            go.Scatter(
+                name="Saldo a quitar",
+                x=labels,
+                y=cumulative,
+                mode="lines",
+                yaxis="y2",
+                line={"color": "#0f766e", "width": 2, "dash": "dot"},
+                hovertemplate="<b>%{x}</b><br>Saldo a quitar: R$ %{y:,.0f}<extra></extra>",
+            )
+        )
+
+    fig = go.Figure(
+        data=traces,
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "legend": {"orientation": "h", "y": -0.35, "font": {"size": 10}},
+            "yaxis": {"tickprefix": "R$ ", "tickformat": ",.0f"},
+            "yaxis2": {
+                "overlaying": "y",
+                "side": "right",
+                "tickprefix": "R$ ",
+                "tickformat": ",.0f",
+                "showgrid": False,
+            },
+            "margin": {"l": 60, "r": 60, "t": 30, "b": 120},
+        },
+    )
+    return _to_json(fig)
+
+
 def forecast_area(
     historical: list[dict[str, Any]], forecast: list[dict[str, Any]]
 ) -> str:

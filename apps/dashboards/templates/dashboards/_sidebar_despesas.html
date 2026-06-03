@@ -49,5 +49,10 @@
                   {% if u == 'pessoas' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
             Pessoas &amp; Prestadores
         </a>
+        <a href="{% url 'dashboards:compromissos' %}"
+           class="block px-3 py-1.5 rounded-md text-xs
+                  {% if u == 'compromissos' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
+            Compromissos Futuros
+        </a>
     </div>
 </div>

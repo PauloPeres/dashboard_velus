@@ -1,0 +1,93 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Compromissos Futuros · Velus{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+    <div>
+        <h1 class="text-2xl font-bold">Compromissos Futuros</h1>
+        <p class="text-sm text-gray-500 mt-1">
+            Despesas em aberto com vencimento à frente — parcelas de M&amp;A e dívida
+            já lançadas no IXC. Horizonte até {{ summary.horizon_label }}.
+        </p>
+    </div>
+    <form method="get" class="flex items-center gap-2">
+        <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Horizonte</label>
+        <select name="months_ahead" onchange="this.form.submit()"
+                class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 cursor-pointer
+                       focus:outline-none focus:ring-2 focus:ring-blue-400">
+            <option value="12" {% if months_ahead == 12 %}selected{% endif %}>12 meses</option>
+            <option value="24" {% if months_ahead == 24 %}selected{% endif %}>24 meses</option>
+            <option value="36" {% if months_ahead == 36 %}selected{% endif %}>36 meses</option>
+        </select>
+    </form>
+</div>
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+    {% include "dashboards/_kpi_card.html" with label="Total a vencer" value=total_str %}
+    {% include "dashboards/_kpi_card.html" with label="Serviço da Dívida" value=divida_str subtitle="Encerra em "|add:divida_last_label %}
+    {% include "dashboards/_kpi_card.html" with label="Investimento (M&A)" value=investimento_str subtitle="Encerra em "|add:investimento_last_label %}
+    {% include "dashboards/_kpi_card.html" with label="Operacional / Recorrente" value=recorrente_str %}
+</div>
+
+<div class="grid grid-cols-1 gap-6 mb-8">
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+        <h2 class="text-lg font-semibold mb-1">Compromissos por mês &amp; camada</h2>
+        <p class="text-sm text-gray-500 mb-4">
+            Empilhado por camada gerencial; linha pontilhada = saldo a quitar acumulado.
+        </p>
+        <div id="compromissos-chart" style="height:420px;"></div>
+    </div>
+</div>
+
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <h2 class="text-lg font-semibold mb-1">Frentes estruturais (M&amp;A &amp; dívida)</h2>
+    <p class="text-sm text-gray-500 mb-4">
+        Compromissos não-recorrentes por fornecedor/conta — quando cada frente se encerra.
+    </p>
+    {% if structural %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+            <thead>
+                <tr class="text-left text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100">
+                    <th class="py-2 pr-4">Camada</th>
+                    <th class="py-2 pr-4">Fornecedor</th>
+                    <th class="py-2 pr-4">Conta</th>
+                    <th class="py-2 pr-4 text-right">Parcelas</th>
+                    <th class="py-2 pr-4">Encerra em</th>
+                    <th class="py-2 text-right">Total a vencer</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in structural %}
+                <tr class="border-b border-gray-50 hover:bg-gray-50">
+                    <td class="py-2 pr-4">
+                        {% if row.tier == 'divida' %}
+                        <span class="inline-block px-2 py-0.5 rounded text-xs font-medium bg-red-50 text-red-700">Dívida</span>
+                        {% else %}
+                        <span class="inline-block px-2 py-0.5 rounded text-xs font-medium bg-purple-50 text-purple-700">M&amp;A</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2 pr-4 font-medium text-gray-800">{{ row.name }}</td>
+                    <td class="py-2 pr-4 text-gray-500">{{ row.conta_label }}</td>
+                    <td class="py-2 pr-4 text-right text-gray-600">{{ row.parcelas }}</td>
+                    <td class="py-2 pr-4 text-gray-600">{{ row.last_label }}</td>
+                    <td class="py-2 text-right font-semibold text-gray-900">{{ row.total_str }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="text-sm text-gray-400 py-8 text-center">Sem compromissos estruturais no horizonte.</p>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ compromissos_chart_json|json_script:"compromissos-data" }}
+<script>
+    renderChart("compromissos-chart", "compromissos-data");
+</script>
+{% endblock %}
