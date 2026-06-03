@@ -3399,6 +3399,99 @@ def compute_bandwidth_summary(
     }
 
 
+@allow_cross_tenant(reason="roda no escopo da org passada explicitamente")
+def compute_offline_active_customers(
+    organization: Organization, *, limit: int = 200
+) -> dict[str, Any]:
+    """Clientes com contrato ATIVO mas conexão offline — receita em risco.
+
+    Cruza Contract(status=ACTIVE) com Connection: um cliente que paga (contrato
+    ativo) mas não tem sessão RADIUS é sintoma de churn silencioso, falha de
+    instalação ou problema de rede não reportado. Exige que o cliente NÃO tenha
+    nenhuma conexão online (uma conexão online já o desqualifica — está
+    conectado por outro login). Faturas/contratos órfãos (sem customer
+    resolvido) são ignorados porque não podem ser atribuídos a um cliente.
+
+    Retorna contagem, MRR líquido em risco (soma dos contratos ativos desses
+    clientes) e a lista ordenada do mais tempo offline para o menos.
+    """
+    from apps.customers.infrastructure.models import Contract
+    from apps.network.infrastructure.models import Connection
+
+    mrr_by_customer: dict[int, Decimal] = {}
+    plan_by_customer: dict[int, str] = {}
+    for c in Contract.objects.filter(
+        organization=organization, status="ACTIVE", customer_id__isnull=False
+    ).values(
+        "customer_id",
+        "plan_name",
+        "monthly_amount",
+        "monthly_amount_addons",
+        "monthly_amount_discounts",
+    ):
+        cid = c["customer_id"]
+        net = (
+            (c["monthly_amount"] or Decimal("0"))
+            + (c["monthly_amount_addons"] or Decimal("0"))
+            - (c["monthly_amount_discounts"] or Decimal("0"))
+        )
+        mrr_by_customer[cid] = mrr_by_customer.get(cid, Decimal("0")) + net
+        plan_by_customer.setdefault(cid, c["plan_name"])
+
+    active_ids = set(mrr_by_customer)
+    if not active_ids:
+        return {"count": 0, "mrr_at_risk": 0.0, "rows": []}
+
+    online_customers: set[int] = set()
+    offline_info: dict[int, dict[str, Any]] = {}
+    for row in Connection.objects.filter(
+        organization=organization, customer_id__in=active_ids
+    ).values(
+        "customer_id", "status", "last_connection_at", "login", "customer__name"
+    ):
+        cid = row["customer_id"]
+        if row["status"] == Connection.Status.ONLINE:
+            online_customers.add(cid)
+        elif row["status"] == Connection.Status.OFFLINE:
+            last = row["last_connection_at"]
+            cur = offline_info.get(cid)
+            if cur is None or (last and (cur["last"] is None or last > cur["last"])):
+                offline_info[cid] = {
+                    "last": last,
+                    "login": row["login"],
+                    "name": row["customer__name"],
+                }
+
+    now = timezone.now()
+    rows: list[dict[str, Any]] = []
+    total_mrr = Decimal("0")
+    for cid, info in offline_info.items():
+        if cid in online_customers:
+            continue  # tem outra conexão online → está conectado, não conta
+        mrr = mrr_by_customer[cid]
+        total_mrr += mrr
+        last = info["last"]
+        days_offline = (now - last).days if last else None
+        rows.append({
+            "customer_id": cid,
+            "customer_name": info["name"] or f"Cliente #{cid}",
+            "plan_name": plan_by_customer.get(cid, ""),
+            "login": info["login"],
+            "mrr": float(mrr),
+            "last_connection_at": last,
+            "days_offline": days_offline,
+        })
+
+    # Mais tempo offline primeiro; sem data de última conexão vai pro fim.
+    rows.sort(key=lambda r: (r["days_offline"] is None, -(r["days_offline"] or 0)))
+
+    return {
+        "count": len(rows),
+        "mrr_at_risk": float(total_mrr),
+        "rows": rows[:limit],
+    }
+
+
 def compute_support_sla(
     organization: Organization, *, period_days: int = 30
 ) -> list[dict[str, Any]]:

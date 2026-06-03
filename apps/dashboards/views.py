@@ -54,6 +54,7 @@ from apps.analytics.application.aggregations import (
     compute_pipeline_by_status,
     compute_lead_origin,
     compute_net_adds_series,
+    compute_offline_active_customers,
     compute_pipeline_aging,
     compute_priority_customers,
     compute_recovery_rate,
@@ -1301,11 +1302,20 @@ def network(request: HttpRequest) -> HttpResponse:
     # Histórico temporal — série de snapshots de rede (#35)
     history = compute_network_history(org, days=30)
 
+    # Clientes pagantes (contrato ativo) sem conexão online — receita em risco
+    offline_active = compute_offline_active_customers(org)
+
     return render(
         request,
         "dashboards/network.html",
         {
             "total": total,
+            "offline_active": offline_active,
+            "offline_active_mrr_str": (
+                f"{offline_active['mrr_at_risk']:,.2f}".replace(",", "X")
+                .replace(".", ",")
+                .replace("X", ".")
+            ),
             "online_count": online_count,
             "offline_count": offline_count,
             "blocked_count": blocked_count,
