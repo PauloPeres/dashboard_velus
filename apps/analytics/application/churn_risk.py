@@ -53,7 +53,14 @@ W_BANDWIDTH_DROP = 15
 W_ML = 30  # sinal de alta probabilidade prevista pelo modelo ML
 
 # ── ML ──────────────────────────────────────────────────────────────────
-ML_SIGNAL_THRESHOLD = Decimal("0.5")  # prob ≥ 50% dispara o sinal de ML
+# O score do modelo é um ÍNDICE de risco relativo (similaridade ao perfil de
+# quem já cancelou), não uma probabilidade calibrada de churn mensal — o rótulo
+# de treino é "já cancelou alguma vez vs. ativo" (base ~55% churned por efeito
+# das aquisições), então um corte absoluto de 0,5 acendia ~25% da base ativa e
+# ficava inacionável. Por isso o sinal dispara de forma RELATIVA: só o topo da
+# distribuição da própria base, respeitando um piso mínimo de índice.
+ML_SIGNAL_FLOOR = Decimal("0.5")  # piso: abaixo disto o sinal nunca dispara
+ML_FLAG_TOP_FRACTION = 0.10  # dispara só p/ o ~topo 10% da base ativa pontuada
 
 # ── Limiares ────────────────────────────────────────────────────────────
 BLOCKED_MIN_DAYS = 30
@@ -431,15 +438,27 @@ def _apply_ml_signal(
         cid: vec for cid, vec in features_all.items() if cid in active_customers
     }
     probs = predict_probabilities(model, features)
+    if not probs:
+        return probs
 
-    threshold = float(ML_SIGNAL_THRESHOLD)
+    # Limiar RELATIVO: o maior entre o piso e o índice do corte de topo
+    # (percentil 1 - top_fraction). Mantém o sinal preso ao ~topo 10% da base,
+    # em vez de acender em todo cliente acima de um 0,5 absoluto.
+    floor = float(ML_SIGNAL_FLOOR)
+    ordered = sorted(probs.values(), reverse=True)
+    cut_idx = max(0, int(len(ordered) * ML_FLAG_TOP_FRACTION) - 1)
+    threshold = max(floor, ordered[cut_idx])
+
     for cid, prob in probs.items():
         if prob < threshold:
             continue
         signals[cid].append({
             "code": "ML_HIGH_RISK",
-            "label": "ML: alta probabilidade",
-            "detail": f"Modelo prevê {int(prob * 100)}% de chance de churn",
+            "label": "ML: alto índice de risco",
+            "detail": (
+                f"Índice de risco ML {int(prob * 100)}/100 — perfil entre os de "
+                f"maior risco da base (parecido com quem já cancelou)"
+            ),
             "weight": W_ML,
         })
     return probs

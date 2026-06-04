@@ -68,7 +68,7 @@
   <div class="p-5 pb-0 flex items-baseline justify-between">
     <div>
       <h2 class="text-sm font-semibold text-gray-700">Clientes em maior risco</h2>
-      <p class="text-xs text-gray-400 mt-0.5">Top 20 por score — clique para abrir o Customer 360</p>
+      <p class="text-xs text-gray-400 mt-0.5">Top 20 por receita esperada em risco (MRR × risco) — clique para abrir o Customer 360</p>
     </div>
   </div>
   <table class="min-w-full text-sm mt-4">
@@ -77,9 +77,10 @@
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
         <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Nível</th>
         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Score</th>
-        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">ML</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase" title="Índice de risco do modelo (0–100). É relativo — similaridade ao perfil de quem já cancelou, não % de chance de churn.">Índice ML</th>
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Sinais</th>
         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">MRR</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase" title="Receita esperada em risco = MRR × risco">Em risco/mês</th>
         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase"></th>
       </tr>
     </thead>
@@ -96,7 +97,7 @@
           {% else %}<span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-medium">Baixo</span>{% endif %}
         </td>
         <td class="px-4 py-3 text-right tabular-nums font-semibold {% if r.level == 'HIGH' %}text-red-700{% elif r.level == 'MEDIUM' %}text-orange-600{% else %}text-gray-700{% endif %}">{{ r.score }}</td>
-        <td class="px-4 py-3 text-right tabular-nums text-gray-500">{% if r.ml_probability_pct is not None %}{{ r.ml_probability_pct }}%{% else %}—{% endif %}</td>
+        <td class="px-4 py-3 text-right tabular-nums text-gray-500">{% if r.ml_probability_pct is not None %}{{ r.ml_probability_pct }}{% else %}—{% endif %}</td>
         <td class="px-4 py-3">
           <div class="flex flex-wrap gap-1">
             {% for s in r.signals %}
@@ -105,6 +106,7 @@
           </div>
         </td>
         <td class="px-4 py-3 text-right tabular-nums text-gray-600">R$ {{ r.monthly_amount|floatformat:0 }}</td>
+        <td class="px-4 py-3 text-right tabular-nums font-semibold text-gray-800">R$ {{ r.expected_loss|floatformat:0 }}</td>
         <td class="px-4 py-3 text-right">
           <a href="{% url 'dashboards:customer_detail' r.customer_id %}" class="text-xs text-blue-600 hover:underline font-medium">Ver 360 →</a>
         </td>

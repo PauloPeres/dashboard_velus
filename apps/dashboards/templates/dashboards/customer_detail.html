@@ -72,7 +72,7 @@
       {% if churn.level == 'HIGH' %}<span class="inline-flex px-2.5 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-medium">Alto</span>
       {% elif churn.level == 'MEDIUM' %}<span class="inline-flex px-2.5 py-0.5 text-xs rounded-full bg-orange-100 text-orange-700 font-medium">Médio</span>
       {% else %}<span class="inline-flex px-2.5 py-0.5 text-xs rounded-full bg-gray-200 text-gray-600 font-medium">Baixo</span>{% endif %}
-      {% if churn.ml_probability_pct is not None %}<span class="text-xs text-gray-500">ML {{ churn.ml_probability_pct }}%</span>{% endif %}
+      {% if churn.ml_probability_pct is not None %}<span class="text-xs text-gray-500" title="Índice de risco do modelo (0–100), relativo — não é % de chance de churn">Índice ML {{ churn.ml_probability_pct }}</span>{% endif %}
     </div>
     <span class="text-xs text-gray-500">Score {{ churn.score }}/100 · atualizado {{ churn.computed_at|date:"d/m/Y" }}</span>
   </div>

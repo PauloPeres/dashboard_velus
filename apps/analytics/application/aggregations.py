@@ -4669,20 +4669,37 @@ def compute_churn_risk_summary(organization: Organization) -> dict[str, Any]:
     }
 
 
+def _churn_risk_fraction(score_row: "ChurnRiskScore") -> float:
+    """Risco do cliente em 0–1: índice ML quando há modelo, senão o score de
+    regras normalizado. Usado pra rankear por receita esperada em risco."""
+    if score_row.ml_probability is not None:
+        return float(score_row.ml_probability)
+    return (score_row.score or 0) / 100.0
+
+
+def _expected_loss(score_row: "ChurnRiskScore") -> float:
+    """Receita esperada em risco = MRR × risco (MRR × prob — fix #churn)."""
+    return float(score_row.monthly_amount or 0) * _churn_risk_fraction(score_row)
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_top_risk_customers(
     organization: Organization, limit: int = 20
 ) -> list[dict[str, Any]]:
-    """Top clientes em risco de churn, ordenados por score desc.
+    """Top clientes em risco de churn, ordenados por receita esperada em risco.
 
-    Junta o score materializado com o cliente (nome/documento/status) pra
-    alimentar a tabela do dashboard de alertas, com link pro Customer 360.
+    Ordena por **receita esperada em risco = MRR × risco** (não só pelo score
+    de regras): quem é caro E arriscado sobe ao topo, que é onde está o caixa a
+    proteger. Risco = índice ML quando há modelo; sem ele, o score de regras
+    normalizado (0–1) serve de proxy. Junta o score materializado com o cliente
+    (nome/documento/status) pra alimentar a tabela do dashboard de alertas.
     """
-    rows = (
-        ChurnRiskScore.objects.filter(organization=organization)
-        .select_related("customer")
-        .order_by("-score", "-monthly_amount")[:limit]
+    rows = list(
+        ChurnRiskScore.objects.filter(organization=organization).select_related(
+            "customer"
+        )
     )
+    rows.sort(key=lambda r: (_expected_loss(r), r.score), reverse=True)
     return [
         {
             "customer_id": r.customer_id,
@@ -4692,6 +4709,7 @@ def compute_top_risk_customers(
             "score": r.score,
             "level": r.level,
             "monthly_amount": float(r.monthly_amount or 0),
+            "expected_loss": round(_expected_loss(r), 2),
             "ml_probability": float(r.ml_probability) if r.ml_probability is not None else None,
             "ml_probability_pct": (
                 int(round(float(r.ml_probability) * 100))
@@ -4700,7 +4718,7 @@ def compute_top_risk_customers(
             ),
             "signals": r.signals or [],
         }
-        for r in rows
+        for r in rows[:limit]
     ]
 
 
@@ -4715,10 +4733,12 @@ def compute_priority_customers(
     """Clientes a focar — prioriza por valor × risco e sugere a ação (#28).
 
     A página de clientes era só busca plana. Aqui combinamos o score de churn já
-    materializado (`ChurnRiskScore`) com o valor do cliente (MRR líquido) num
-    **índice de foco** = (valor norm.) × (risco norm.) — quem é caro E arriscado
-    sobe ao topo. O pool de foco são os níveis HIGH/MEDIUM (os acionáveis p/
-    retenção, mesma base de `revenue_at_risk`).
+    materializado (`ChurnRiskScore`) com o valor do cliente (MRR líquido) e
+    ordenamos por **receita esperada em risco = MRR × risco** (índice ML quando
+    há modelo; senão score de regras normalizado). O `focus_index` é essa
+    receita esperada normalizada (0–100) pra alimentar a barra de prioridade —
+    quem é caro E arriscado sobe ao topo. O pool de foco são os níveis
+    HIGH/MEDIUM (os acionáveis p/ retenção, mesma base de `revenue_at_risk`).
 
     A ação sai dos sinais: sinal financeiro (atraso/bloqueio) → **COBRAR**; senão
     → **RETER**. Em paralelo, listamos candidatos a **UPSELL**: clientes ACTIVE
@@ -4733,8 +4753,7 @@ def compute_priority_customers(
         .order_by("-score", "-monthly_amount")
     )
 
-    max_value = max((float(s.monthly_amount or 0) for s in scores), default=0.0) or 1.0
-    max_score = max((s.score for s in scores), default=0) or 1
+    max_loss = max((_expected_loss(s) for s in scores), default=0.0) or 1.0
 
     focus: list[dict[str, Any]] = []
     cobrar_count = 0
@@ -4742,9 +4761,9 @@ def compute_priority_customers(
     revenue_in_focus = 0.0
     for s in scores:
         value = float(s.monthly_amount or 0)
-        value_norm = value / max_value
-        risk_norm = s.score / max_score
-        focus_index = round(value_norm * risk_norm * 100, 1)
+        expected_loss = _expected_loss(s)
+        # índice de foco = receita esperada em risco, normalizada (0–100).
+        focus_index = round(expected_loss / max_loss * 100, 1)
 
         sigs = sorted(
             s.signals or [], key=lambda x: x.get("weight", 0), reverse=True
@@ -4767,6 +4786,7 @@ def compute_priority_customers(
                 "level": s.level,
                 "score": s.score,
                 "monthly_amount": value,
+                "expected_loss": round(expected_loss, 2),
                 "focus_index": focus_index,
                 "action": action,
                 "reason": " · ".join(reason_labels) or "Risco elevado",
@@ -4778,7 +4798,7 @@ def compute_priority_customers(
             }
         )
 
-    focus.sort(key=lambda r: r["focus_index"], reverse=True)
+    focus.sort(key=lambda r: r["expected_loss"], reverse=True)
 
     # UPSELL: clientes ACTIVE de maior MRR fora do radar de risco.
     risk_ids = set(

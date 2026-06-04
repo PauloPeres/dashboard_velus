@@ -65,7 +65,7 @@
             {% else %}<span class="inline-flex px-2 py-0.5 text-xs rounded-full bg-orange-50 text-orange-700">Reter</span>{% endif %}
           </td>
           <td class="px-4 py-3 text-gray-500 text-xs truncate max-w-[260px]">
-            {{ f.reason }}{% if f.ml_probability_pct is not None %} · ML {{ f.ml_probability_pct }}%{% endif %}
+            {{ f.reason }}{% if f.ml_probability_pct is not None %} · Índice ML {{ f.ml_probability_pct }}{% endif %}
           </td>
           <td class="px-4 py-3 text-right tabular-nums text-gray-700">R$ {{ f.monthly_amount|floatformat:0|intcomma }}</td>
           <td class="px-4 py-3 text-right">
