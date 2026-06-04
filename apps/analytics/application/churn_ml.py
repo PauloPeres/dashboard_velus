@@ -17,9 +17,14 @@ Features point-in-time (v3 — corrige o vazamento temporal do #15):
         negativos (ativos)  → agora.
     Todas as features usam apenas dados observáveis ATÉ essa data — nada que só
     existiria depois do ponto de observação:
-        tenure_days · mrr · n_contracts · late_payments · tickets_total ·
+        tenure_days · mrr · n_contracts · late_payments · tickets_per_year ·
         pay_delay_baseline · pay_delay_recent_dev ·
         os_recent_90d · os_recurrence
+    Contagens acumuladas viram TAXAS normalizadas por tenure (v6 — corrige o
+    artefato temporal do #3): `tickets_per_year` substitui o `tickets_total`
+    cru, que crescia com a janela de observação (ativos vistos até hoje somam
+    mais chamados que churned fotografados no cancelamento) e por isso invertia
+    o sinal. A taxa mede intensidade de atrito, não há quanto tempo olhamos.
     As de pagamento (v4) medem inadimplência *relativa ao próprio cliente*:
     quanto atrasar faz parte do perfil dele (mediana histórica) e o quanto ele
     está atrasando além do normal nos últimos 90 dias. Assim "sempre atrasa e
@@ -70,12 +75,16 @@ FEATURES = (
     "mrr",
     "n_contracts",
     "late_payments",
-    "tickets_total",
+    "tickets_per_year",
     "pay_delay_baseline",
     "pay_delay_recent_dev",
     "os_recent_90d",
     "os_recurrence",
 )
+
+# Piso de tenure (dias) ao normalizar contagens acumuladas em taxas — evita que
+# clientes muito novos estourem a taxa por dividir por um tenure ínfimo.
+TICKET_RATE_FLOOR_DAYS = 90
 
 # ── Limiares de viabilidade do treino ───────────────────────────────────
 MIN_SAMPLES = 50
@@ -314,6 +323,13 @@ def compute_features(
         tickets_total = sum(
             1 for opened, _subj in cust_tickets if opened is not None and opened <= r
         )
+        # Normaliza a contagem acumulada por tenure → chamados/ano. A contagem
+        # crua virava proxy da janela de observação (ativos vistos até hoje
+        # acumulam mais que churned fotografados no cancelamento), invertendo o
+        # sinal (#3 — artefato temporal). A taxa mede intensidade de atrito,
+        # independente de há quanto tempo observamos o cliente.
+        tenure_years = max(tenure_days, TICKET_RATE_FLOOR_DAYS) / 365.0
+        tickets_per_year = tickets_total / tenure_years
 
         # Inadimplência relativa ao próprio perfil do cliente (point-in-time).
         pay_baseline, pay_recent_dev = _payment_profile(
@@ -328,7 +344,7 @@ def compute_features(
             "mrr": float(mrr_val),
             "n_contracts": float(n_contracts),
             "late_payments": float(late),
-            "tickets_total": float(tickets_total),
+            "tickets_per_year": float(tickets_per_year),
             "pay_delay_baseline": pay_baseline,
             "pay_delay_recent_dev": pay_recent_dev,
             "os_recent_90d": os_recent_90d,
