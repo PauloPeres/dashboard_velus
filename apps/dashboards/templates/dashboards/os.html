@@ -137,6 +137,7 @@
     </div>
     <span class="text-xs text-gray-400">{{ type_rows|length }} tipo{{ type_rows|length|pluralize }}</span>
   </div>
+  <div class="overflow-x-auto">
   <table class="min-w-full text-sm mt-4">
     <thead class="bg-gray-50 border-t border-gray-200">
       <tr>
@@ -171,6 +172,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% endblock %}
 

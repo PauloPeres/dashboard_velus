@@ -45,6 +45,7 @@
   {% if priority.focus %}
   <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
     <h3 class="text-sm font-semibold text-gray-700 p-4 pb-3">Prioridade — alto valor + alto risco</h3>
+    <div class="overflow-x-auto">
     <table class="min-w-full text-sm">
       <thead class="bg-gray-50 border-t border-gray-200">
         <tr>
@@ -83,6 +84,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </div>
   {% endif %}
 
@@ -90,6 +92,7 @@
   {% if priority.upsell %}
   <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden mt-4">
     <h3 class="text-sm font-semibold text-gray-700 p-4 pb-3">Upsell — maior valor, sem risco no radar</h3>
+    <div class="overflow-x-auto">
     <table class="min-w-full text-sm">
       <thead class="bg-gray-50 border-t border-gray-200">
         <tr>
@@ -110,6 +113,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </div>
   {% endif %}
 </div>
@@ -197,6 +201,7 @@
     </h2>
     <span class="text-xs text-gray-400">{{ result_count|intcomma }} cliente{{ result_count|pluralize }}</span>
   </div>
+  <div class="overflow-x-auto">
   <table class="min-w-full text-sm mt-4">
     <thead class="bg-gray-50 border-t border-gray-200">
       <tr>
@@ -243,5 +248,6 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% endblock %}

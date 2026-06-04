@@ -222,6 +222,7 @@
     </div>
     <span class="text-xs text-gray-400">Últimos 12 meses · planos com base registrada</span>
   </div>
+  <div class="overflow-x-auto">
   <table class="min-w-full text-sm mt-4">
     <thead class="bg-gray-50 border-t border-gray-200">
       <tr>
@@ -318,6 +319,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 
 <!-- Tabela: Motivos de cancelamento -->
@@ -327,6 +329,7 @@
     <h2 class="text-sm font-semibold text-gray-700">Motivos de cancelamento — detalhe</h2>
     <span class="text-xs text-gray-400">Últimos 12 meses · Pareto por MRR perdido</span>
   </div>
+  <div class="overflow-x-auto">
   <table class="min-w-full text-sm mt-4">
     <thead class="bg-gray-50 border-t border-gray-200">
       <tr>
@@ -363,6 +366,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% endif %}
 {% endblock %}

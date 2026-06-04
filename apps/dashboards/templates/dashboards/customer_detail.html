@@ -115,6 +115,7 @@
     <h2 class="text-sm font-semibold text-gray-700">Contratos</h2>
     <span class="text-xs text-gray-400">{{ contracts_count }} contrato{{ contracts_count|pluralize }}</span>
   </summary>
+  <div class="overflow-x-auto">
   <table class="min-w-full text-sm border-t border-gray-200">
     <thead class="bg-gray-50">
       <tr>
@@ -149,6 +150,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </details>
 
 <!-- ═══════════ FINANCEIRO ═══════════ -->
@@ -163,6 +165,7 @@
     <!-- Faturas recentes -->
     <div class="bg-white">
       <h3 class="px-4 pt-4 pb-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Faturas recentes</h3>
+      <div class="overflow-x-auto">
       <table class="min-w-full text-sm">
         <tbody class="divide-y divide-gray-100">
           {% for inv in financial.recent_invoices %}
@@ -182,10 +185,12 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     </div>
     <!-- Pagamentos -->
     <div class="bg-white">
       <h3 class="px-4 pt-4 pb-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Histórico de pagamento</h3>
+      <div class="overflow-x-auto">
       <table class="min-w-full text-sm">
         <tbody class="divide-y divide-gray-100">
           {% for p in financial.recent_payments %}
@@ -199,6 +204,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     </div>
   </div>
 </details>
@@ -212,6 +218,7 @@
       {% if support.avg_resolution_hours is not None %}· SLA médio {{ support.avg_resolution_hours }}h{% endif %}
     </span>
   </summary>
+  <div class="overflow-x-auto">
   <table class="min-w-full text-sm border-t border-gray-200">
     <thead class="bg-gray-50">
       <tr>
@@ -242,6 +249,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </details>
 
 <!-- ═══════════ REDE ═══════════ -->
@@ -250,6 +258,7 @@
     <h2 class="text-sm font-semibold text-gray-700">Rede</h2>
     <span class="text-xs text-gray-400">Consumo total {{ network_total_gb_str }} GB</span>
   </summary>
+  <div class="overflow-x-auto">
   <table class="min-w-full text-sm border-t border-gray-200">
     <thead class="bg-gray-50">
       <tr>
@@ -279,8 +288,10 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% if equipment %}
   <h3 class="px-4 pt-4 pb-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-t border-gray-100">Equipamentos em comodato</h3>
+  <div class="overflow-x-auto">
   <table class="min-w-full text-sm">
     <tbody class="divide-y divide-gray-100">
       {% for e in equipment %}
@@ -294,6 +305,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% endif %}
 </details>
 

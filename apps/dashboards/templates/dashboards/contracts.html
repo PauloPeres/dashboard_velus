@@ -150,6 +150,7 @@
     <h2 class="text-sm font-semibold text-gray-700">Contratos bloqueados há mais de 30 dias — lista de ação</h2>
     <span class="text-xs text-gray-400">{{ at_risk_list|length }} contrato{{ at_risk_list|length|pluralize }}</span>
   </div>
+  <div class="overflow-x-auto">
   <table class="min-w-full text-sm mt-4">
     <thead class="bg-gray-50 border-t border-gray-200">
       <tr>
@@ -181,6 +182,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% endblock %}
 
