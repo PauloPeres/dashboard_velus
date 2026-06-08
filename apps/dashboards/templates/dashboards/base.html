@@ -256,6 +256,14 @@ function renderChart(divId, dataId) {
         var parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
         var traces = parsed.data || [];
         var layout = Object.assign({}, parsed.layout || {}, { responsive: true });
+        // No celular a legenda à direita/sobre o plot espreme o gráfico:
+        // joga ela na horizontal abaixo e estreita as margens pra ganhar largura útil.
+        if (window.matchMedia("(max-width: 767px)").matches) {
+            layout.legend = Object.assign({}, layout.legend || {}, {
+                orientation: "h", x: 0, xanchor: "left", y: -0.2, yanchor: "top"
+            });
+            layout.margin = Object.assign({ l: 50, r: 14, t: 28, b: 64 }, layout.margin || {});
+        }
         var hasData = traces.length > 0 && (
             (traces[0].x      && traces[0].x.length      > 0) ||
             (traces[0].labels && traces[0].labels.length  > 0) ||
