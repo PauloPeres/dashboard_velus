@@ -324,6 +324,13 @@ CELERY_BEAT_SCHEDULE: dict = {
         "kwargs": {"capabilities": ["LEADS", "OPPORTUNITIES"]},
         "options": {"queue": "celery"},
     },
+    # Opa! Suite (atendimento) tem fluxo dedicado fora do dispatch genérico.
+    # 1x/dia, fora do horário comercial — atendimento não precisa ser realtime.
+    "sync-opa-atendimento-daily": {
+        "task": "apps.atendimento.tasks.sync_opa_for_all_orgs",
+        "schedule": crontab(minute=0, hour=5),  # 05:00 todo dia
+        "options": {"queue": "celery"},
+    },
     "sync-plano-contas-daily": {
         "task": "apps.analytics.tasks.dispatch_plano_contas_for_all_orgs",
         "schedule": crontab(minute=30, hour=3),  # 03:30 todo dia

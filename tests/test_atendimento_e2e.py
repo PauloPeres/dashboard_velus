@@ -8,7 +8,7 @@ isolamento por organizacao.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -28,11 +28,13 @@ from apps.atendimento.infrastructure.repositories import (
     AtendimentoRepository,
     DepartamentoRepository,
 )
+from apps.atendimento.tasks import sync_opa_for_all_orgs
 from apps.customers.infrastructure.models import Customer
 from apps.integrations.fake.atendimento import FakeAtendimentoSource
-from apps.integrations.shared.enums import SourceType
+from apps.integrations.shared.enums import Capability, SourceType
 from apps.shared.context import set_current_organization
-from apps.tenancy.models import Organization
+from apps.sync.models import SyncCheckpoint
+from apps.tenancy.models import Organization, OrganizationDataSource
 
 
 def _make_customer(org: Organization, *, document: str, name: str) -> Customer:
@@ -243,3 +245,77 @@ class TestOpaSyncE2E:
         assert Atendimento.objects.count() == 0
         set_current_organization(organization_a)
         assert Atendimento.objects.count() == 2
+
+
+# =============================================================================
+# sync_opa_for_all_orgs — task Celery agendada (recorrência dedicada do Opa!)
+# =============================================================================
+@pytest.mark.django_db
+class TestOpaBeatTask:
+    def _make_datasource(self, org: Organization) -> None:
+        set_current_organization(org)
+        ds = OrganizationDataSource.objects.create(
+            organization=org,
+            source_type=SourceType.OPA.value,
+            capability=Capability.ATENDIMENTO.value,
+            priority=100,
+            is_active=True,
+        )
+        ds.set_credentials({"base_url": "https://opa.test", "token": "tok-xyz"})
+        ds.save()
+
+    def _seed(self) -> None:
+        FakeAtendimentoSource.set_seed(
+            departamentos=[
+                DepartamentoDTO(external_id="dep-suporte", nome="Suporte", status="A"),
+            ],
+            clientes=[
+                ClienteRefDTO(
+                    external_id="cli-opaco-1", document="12345678901", nome="Bruna"
+                ),
+            ],
+            atendimentos=[
+                # Dentro da janela de 90 dias da task (since = now - 90d).
+                _atendimento_dto(
+                    external_id="a1",
+                    opened_at=datetime.now(UTC) - timedelta(days=1),
+                ),
+            ],
+        )
+
+    def test_syncs_orgs_with_active_datasource(
+        self, organization_a: Organization, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _make_customer(organization_a, document="12345678901", name="Bruna Carvalho")
+        self._make_datasource(organization_a)
+        self._seed()
+        # OpaAtendimentoSource recebe base_url/token — FakeAtendimentoSource os ignora.
+        monkeypatch.setattr(
+            "apps.atendimento.tasks.OpaAtendimentoSource", FakeAtendimentoSource
+        )
+
+        result = sync_opa_for_all_orgs()
+
+        assert result == {"orgs": 1, "atendimentos": 1}
+        set_current_organization(organization_a)
+        assert Atendimento.objects.count() == 1
+        # Checkpoint avançou — próxima execução é incremental.
+        cp = SyncCheckpoint.objects.get(
+            source_type=SourceType.OPA.value,
+            capability=Capability.ATENDIMENTO.value,
+        )
+        assert cp.last_processed_at is not None
+
+    def test_skips_orgs_without_datasource(
+        self, organization_a: Organization, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._seed()
+        monkeypatch.setattr(
+            "apps.atendimento.tasks.OpaAtendimentoSource", FakeAtendimentoSource
+        )
+
+        result = sync_opa_for_all_orgs()
+
+        assert result == {"orgs": 0, "atendimentos": 0}
+        set_current_organization(organization_a)
+        assert Atendimento.objects.count() == 0
