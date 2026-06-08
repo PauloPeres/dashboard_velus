@@ -17,6 +17,7 @@ import pytest
 from apps.customers.domain.dto import ContractDTO, CustomerDTO
 from apps.financial.domain.dto import InvoiceDTO, PaymentDTO
 from apps.helpdesk.domain.dto import TicketDTO
+from apps.integrations.fake.atendimento import FakeAtendimentoSource
 from apps.integrations.fake.bandwidth import FakeBandwidthUsageSource
 from apps.integrations.fake.connections import FakeConnectionSource
 from apps.integrations.fake.contracts import FakeContractSource
@@ -56,6 +57,7 @@ def _clean_state_around_test() -> Iterator[None]:
     FakeEquipmentSource.reset_seed()
     FakeLeadSource.reset_seed()
     FakeOpportunitySource.reset_seed()
+    FakeAtendimentoSource.reset_seed()
     try:
         yield
     finally:
@@ -70,6 +72,7 @@ def _clean_state_around_test() -> Iterator[None]:
         FakeEquipmentSource.reset_seed()
         FakeLeadSource.reset_seed()
         FakeOpportunitySource.reset_seed()
+        FakeAtendimentoSource.reset_seed()
 
 
 # =============================================================================

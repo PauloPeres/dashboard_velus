@@ -17,6 +17,7 @@ class SourceType(models.TextChoices):
     """Sistemas externos com adapter implementado ou planejado."""
 
     IXC = "IXC", "IXC Soft"
+    OPA = "OPA", "Opa! Suite"  # atendimento/WhatsApp omnichannel
     SGP = "SGP", "SGP"  # ERP alternativo p/ ISPs (placeholder)
     CONTAAZUL = "CONTAAZUL", "Conta Azul"  # accounting (placeholder)
     CSV = "CSV", "CSV upload"  # import manual (placeholder)
@@ -32,6 +33,7 @@ class Capability(models.TextChoices):
         INVOICES   → apps.financial.domain.ports.InvoiceSourcePort
         PAYMENTS   → apps.financial.domain.ports.PaymentSourcePort
         TICKETS    → apps.helpdesk.domain.ports.TicketSourcePort
+        ATENDIMENTO → apps.atendimento.domain.ports.AtendimentoSourcePort
         CONNECTIONS → apps.network.domain.ports.ConnectionSourcePort
         BANDWIDTH   → apps.network.domain.ports.BandwidthUsageSourcePort
         EQUIPMENT  → apps.inventory.domain.ports.EquipmentSourcePort
@@ -45,6 +47,7 @@ class Capability(models.TextChoices):
     PAYMENTS = "PAYMENTS", "Pagamentos"
     EXPENSES = "EXPENSES", "Despesas"
     TICKETS = "TICKETS", "Chamados"
+    ATENDIMENTO = "ATENDIMENTO", "Atendimentos (Opa! Suite)"
     CONNECTIONS = "CONNECTIONS", "Conexões"
     BANDWIDTH = "BANDWIDTH", "Consumo de banda"
     EQUIPMENT = "EQUIPMENT", "Equipamentos em comodato"

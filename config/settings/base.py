@@ -56,12 +56,14 @@ LOCAL_APPS: list[str] = [
     "apps.customers",
     "apps.financial",
     "apps.helpdesk",
+    "apps.atendimento",
     "apps.network",
     "apps.inventory",
     "apps.sales",
     "apps.analytics",
     "apps.integrations.fake",
     "apps.integrations.ixc",
+    "apps.integrations.opa",
     "apps.sync",
     "apps.dashboards",
     "apps.scenarios",
@@ -455,6 +457,12 @@ CONTENT_SECURITY_POLICY = {
 # Fernet key (consumido por apps.shared.fields.EncryptedField)
 # =============================================================================
 FERNET_KEY = env.FERNET_KEY.get_secret_value()
+
+# =============================================================================
+# Opa! Suite (atendimento/WhatsApp) — consumido por setup_opa_credentials
+# =============================================================================
+OPA_LINK = env.OPA_LINK
+OPA_TOKEN = env.OPA_TOKEN.get_secret_value()
 
 # =============================================================================
 # Servidor MCP (read-only) — consumido por apps.mcp.server

@@ -116,6 +116,12 @@ class Settings(BaseSettings):
     SENTRY_DSN: str = ""
 
     # -------------------------------------------------------------------------
+    # Opa! Suite (atendimento/WhatsApp) — base read-only p/ ingestão
+    # -------------------------------------------------------------------------
+    OPA_LINK: str = ""  # ex.: https://opasuite.sorocabana.net.br/
+    OPA_TOKEN: SecretStr = SecretStr("")  # JWT Bearer
+
+    # -------------------------------------------------------------------------
     # Servidor MCP (read-only, autenticado por token por organização)
     # -------------------------------------------------------------------------
     MCP_ENABLED: bool = False
