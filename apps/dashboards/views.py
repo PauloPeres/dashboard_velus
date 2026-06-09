@@ -22,6 +22,7 @@ from apps.analytics.application.aggregations import (
     compute_aging_distribution,
     compute_arpu_by_plan,
     compute_at_risk_contracts,
+    compute_atendimento_triagem,
     compute_bandwidth_summary,
     compute_blocked_at_risk_summary,
     compute_blocked_duration_distribution,
@@ -1275,6 +1276,40 @@ def os_dashboard(request: HttpRequest) -> HttpResponse:
             "resolution_chart_json": charts.os_avg_resolution_by_type(top_types),
             "trend_chart_json": charts.os_monthly_trend(trend_series),
             "status_chart_json": charts.os_status_pie(status_dist),
+        },
+    )
+
+
+@login_required
+@never_cache
+def atendimento(request: HttpRequest) -> HttpResponse:
+    """Triagem de atendimentos Opa! Suite por departamento (issue #48)."""
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+    months = _get_months(request)
+
+    departamento_id: int | None = None
+    raw_dep = request.GET.get("departamento", "")
+    if raw_dep.isdigit():
+        departamento_id = int(raw_dep)
+
+    data = compute_atendimento_triagem(
+        org, months=months, departamento_id=departamento_id
+    )
+
+    return render(
+        request,
+        "dashboards/atendimento.html",
+        {
+            **data,
+            "volume_chart_json": charts.atendimento_volume_by_departamento(
+                data["by_departamento"]
+            ),
+            "status_chart_json": charts.atendimento_status_pie(data["status_dist"]),
+            "trend_chart_json": charts.atendimento_monthly_trend(data["trend"]),
+            "motivos_chart_json": charts.atendimento_top_motivos(data["top_motivos"]),
         },
     )
 

@@ -1689,3 +1689,86 @@ def churn_risk_signal_bar(distribution: list[dict[str, Any]]) -> str:
         },
     )
     return _to_json(fig)
+
+
+# =============================================================================
+# Atendimento (Opa! Suite) — triagem por departamento (issue #48)
+# =============================================================================
+def atendimento_volume_by_departamento(rows: list[dict[str, Any]]) -> str:
+    """Barras horizontais — volume de atendimentos por departamento."""
+    ordered = sorted(rows, key=lambda r: r["total"])
+    labels = [r["nome"] for r in ordered]
+    values = [r["total"] for r in ordered]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=values, y=labels, orientation="h",
+                marker_color="#6366f1",
+                hovertemplate="<b>%{y}</b><br>%{x} atendimentos<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "xaxis": {"title": "Atendimentos"}},
+    )
+    return _to_json(fig)
+
+
+def atendimento_status_pie(data: list[dict[str, Any]]) -> str:
+    """Donut — distribuição de atendimentos por status."""
+    colors_map = {
+        "OPEN": "#2563eb",
+        "IN_PROGRESS": "#f59e0b",
+        "CLOSED": "#10b981",
+        "UNKNOWN": "#9ca3af",
+    }
+    labels = [d["status"] for d in data]
+    values = [d["count"] for d in data]
+    colors = [colors_map.get(d.get("status_key", ""), "#6b7280") for d in data]
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.4,
+                marker={"colors": colors},
+                hovertemplate="<b>%{label}</b><br>%{value} (%{percent})<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "showlegend": True},
+    )
+    return _to_json(fig)
+
+
+def atendimento_monthly_trend(series: list[dict[str, Any]]) -> str:
+    """Linha — atendimentos abertos por mês."""
+    labels = [s["label"] for s in series]
+    values = [s["count"] for s in series]
+    fig = go.Figure(
+        data=[
+            go.Scatter(
+                x=labels, y=values, mode="lines+markers",
+                line={"color": "#6366f1", "width": 3},
+                marker={"size": 8},
+                hovertemplate="<b>%{x}</b><br>%{y} atendimentos<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "yaxis": {"title": "Atendimentos"}},
+    )
+    return _to_json(fig)
+
+
+def atendimento_top_motivos(rows: list[dict[str, Any]]) -> str:
+    """Barras horizontais — motivos mais frequentes de atendimento."""
+    ordered = sorted(rows, key=lambda r: r["count"])
+    labels = [r["motivo"] for r in ordered]
+    values = [r["count"] for r in ordered]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=values, y=labels, orientation="h",
+                marker_color="#06b6d4",
+                hovertemplate="<b>%{y}</b><br>%{x} atendimentos<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "xaxis": {"title": "Atendimentos"}},
+    )
+    return _to_json(fig)

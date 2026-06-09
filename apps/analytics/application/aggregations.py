@@ -12,12 +12,16 @@ from __future__ import annotations
 import calendar
 import math
 import statistics
+from collections import Counter
 from datetime import date as date_cls
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
+from dateutil.relativedelta import relativedelta
+
 from django.db.models import (
+    Avg,
     Count,
     DecimalField,
     Exists,
@@ -4839,4 +4843,178 @@ def compute_priority_customers(
         "reter_count": reter_count,
         "upsell_count": len(upsell),
         "revenue_in_focus": revenue_in_focus,
+    }
+
+
+# =============================================================================
+# Atendimento (Opa! Suite) — triagem por departamento (issue #48)
+# =============================================================================
+def _fmt_duration(seconds: float | None) -> str:
+    """Formata uma duração em segundos como '1.2 dias' / '3.4h' / '—'."""
+    if not seconds or seconds <= 0:
+        return "—"
+    hours = seconds / 3600
+    if hours >= 24:
+        return f"{hours / 24:.1f} dias"
+    return f"{hours:.1f}h"
+
+
+_ATENDIMENTO_STATUS_LABELS = {
+    "OPEN": "Aberto",
+    "IN_PROGRESS": "Em andamento",
+    "CLOSED": "Fechado",
+    "UNKNOWN": "Desconhecido",
+}
+
+
+@allow_cross_tenant(reason="aggregation read-only; org passada explicitamente")
+def compute_atendimento_triagem(
+    organization: Organization,
+    *,
+    months: int = 3,
+    departamento_id: int | None = None,
+) -> dict[str, Any]:
+    """Triagem de atendimentos Opa! Suite por departamento (read-only, issue #48).
+
+    Janela = últimos `months` meses por `opened_at`. Filtro opcional por
+    departamento. Retorna KPIs (volume, TMA, nota média, % ligados a cliente),
+    distribuição por status, top motivos, série mensal e o recorte por
+    departamento — tudo pronto pro template/charts.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento, Departamento
+
+    now = timezone.now()
+    window_start = (now - relativedelta(months=months)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    qs = Atendimento.objects.filter(
+        organization=organization, opened_at__gte=window_start
+    )
+    if departamento_id is not None:
+        qs = qs.filter(departamento_id=departamento_id)
+
+    # --- KPIs globais ---
+    total = qs.count()
+    linked = qs.filter(customer__isnull=False).count()
+    linked_pct = round(linked / total * 100, 1) if total else 0.0
+
+    tma = qs.filter(
+        status="CLOSED", opened_at__isnull=False, closed_at__isnull=False
+    ).aggregate(avg=Avg(F("closed_at") - F("opened_at")))["avg"]
+    tma_str = _fmt_duration(tma.total_seconds() if tma else None)
+
+    rating_agg = qs.filter(rating__isnull=False).aggregate(
+        avg=Avg("rating"), n=Count("id")
+    )
+    avg_rating = round(rating_agg["avg"], 2) if rating_agg["avg"] is not None else None
+    rated_count = rating_agg["n"]
+
+    # --- Distribuição por status ---
+    status_qs = qs.values("status").annotate(count=Count("id")).order_by("-count")
+    status_dist = [
+        {
+            "status": _ATENDIMENTO_STATUS_LABELS.get(r["status"], r["status"]),
+            "status_key": r["status"],
+            "count": r["count"],
+        }
+        for r in status_qs
+    ]
+
+    # --- Recorte por departamento ---
+    by_dep_qs = (
+        qs.values("departamento_id", "departamento__nome")
+        .annotate(
+            total=Count("id"),
+            closed=Count("id", filter=Q(status="CLOSED")),
+            avg_res=Avg(
+                F("closed_at") - F("opened_at"),
+                filter=Q(
+                    status="CLOSED",
+                    opened_at__isnull=False,
+                    closed_at__isnull=False,
+                ),
+            ),
+            avg_rating=Avg("rating", filter=Q(rating__isnull=False)),
+        )
+        .order_by("-total")
+    )
+    by_departamento = []
+    for r in by_dep_qs:
+        dep_total = r["total"]
+        avg_res = r["avg_res"]
+        by_departamento.append(
+            {
+                "departamento_id": r["departamento_id"],
+                "nome": r["departamento__nome"] or "Sem departamento",
+                "total": dep_total,
+                "pct": round(dep_total / total * 100, 1) if total else 0.0,
+                "closed_pct": (
+                    round(r["closed"] / dep_total * 100, 1) if dep_total else 0.0
+                ),
+                "tma_str": _fmt_duration(
+                    avg_res.total_seconds() if avg_res else None
+                ),
+                "avg_rating_str": (
+                    f"{r['avg_rating']:.2f}" if r["avg_rating"] is not None else "—"
+                ),
+            }
+        )
+
+    # --- Top motivos (JSONField list[str] desnormalizado em Python) ---
+    motivo_counter: Counter[str] = Counter()
+    for motivos in qs.values_list("motivos", flat=True):
+        if motivos:
+            motivo_counter.update(m for m in motivos if m)
+    top_motivos = [
+        {"motivo": m, "count": c} for m, c in motivo_counter.most_common(12)
+    ]
+
+    # --- Tendência mensal (volume por mês de abertura) ---
+    trend_qs = (
+        qs.annotate(m=TruncMonth("opened_at"))
+        .values("m")
+        .annotate(count=Count("id"))
+        .order_by("m")
+    )
+    trend_map = {r["m"].strftime("%Y-%m"): r["count"] for r in trend_qs if r["m"]}
+    trend = []
+    for i in range(months - 1, -1, -1):
+        m_first = _first_of_month_n_ago(now.date(), i)
+        key = m_first.strftime("%Y-%m")
+        trend.append(
+            {
+                "month": key,
+                "label": m_first.strftime("%b/%y"),
+                "count": trend_map.get(key, 0),
+            }
+        )
+
+    # --- Lista de departamentos pro filtro ---
+    departamentos = list(
+        Departamento.objects.filter(organization=organization)
+        .order_by("nome")
+        .values("id", "nome")
+    )
+    selected_nome = None
+    if departamento_id is not None:
+        selected_nome = next(
+            (d["nome"] for d in departamentos if d["id"] == departamento_id), None
+        )
+
+    return {
+        "total": total,
+        "tma_str": tma_str,
+        "avg_rating": avg_rating,
+        "avg_rating_str": f"{avg_rating:.2f}" if avg_rating is not None else "—",
+        "rated_count": rated_count,
+        "linked_pct": linked_pct,
+        "linked_pct_str": f"{linked_pct:.1f}%",
+        "status_dist": status_dist,
+        "by_departamento": by_departamento,
+        "top_motivos": top_motivos,
+        "trend": trend,
+        "departamentos": departamentos,
+        "selected_departamento_id": departamento_id,
+        "selected_departamento_nome": selected_nome,
     }
