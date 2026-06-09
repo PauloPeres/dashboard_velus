@@ -10,7 +10,7 @@ adapter novo aparece. Adição de nova capability é dispatch case no `_PORT_TO_
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import structlog
@@ -193,6 +193,18 @@ _DISPATCH: dict[
 }
 
 
+# Janela default quando o checkpoint está vazio num sync INCREMENTAL. Só
+# capabilities de volume alto entram aqui — sem entrada = pull completo
+# (comportamento padrão das demais). BANDWIDTH (radusuarios_consumo) tem
+# ~213k linhas/dia; sem janela, checkpoint vazio vira since=None -> pull total
+# que estoura o soft time limit do Celery, o checkpoint nunca avança e o sync
+# entra em death spiral. A janela curta garante que o 1º run termine e grave
+# checkpoint; os runs seguintes filtram pelo delta normalmente.
+_DEFAULT_INCREMENTAL_WINDOW: dict[Capability, timedelta] = {
+    Capability.BANDWIDTH: timedelta(days=2),
+}
+
+
 # =============================================================================
 # Task principal
 # =============================================================================
@@ -290,6 +302,13 @@ def _run_sync(
                     if mode == SyncMode.INCREMENTAL
                     else None
                 )
+                # Checkpoint vazio em INCREMENTAL faria since=None -> pull total.
+                # Pra capabilities de volume alto isso estoura o time limit; uma
+                # janela default curta quebra o death spiral (ver mapa acima).
+                if since is None and mode == SyncMode.INCREMENTAL:
+                    window = _DEFAULT_INCREMENTAL_WINDOW.get(capability)
+                    if window is not None:
+                        since = timezone.now() - window
 
                 repository = repo_factory(organization)
                 count = 0

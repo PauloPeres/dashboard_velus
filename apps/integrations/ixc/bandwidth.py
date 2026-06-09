@@ -41,8 +41,11 @@ class IxcBandwidthUsageSource:
 
         with self._client_factory() as client:
             skipped = 0
+            # page_size alto (vs default 100) corta o nº de requisições ~10x —
+            # radusuarios_consumo tem volume alto e o IXC limita a 3 req/s, então
+            # menos páginas é o que mantém o pull dentro do time limit do Celery.
             for raw in client.paginate_ixc(
-                "radusuarios_consumo", body_filter=body_filter
+                "radusuarios_consumo", body_filter=body_filter, page_size=1000
             ):
                 try:
                     schema = IxcBandwidthSchema.model_validate(raw)
