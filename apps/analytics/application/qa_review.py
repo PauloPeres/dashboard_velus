@@ -26,6 +26,7 @@ from django.utils import timezone
 from apps.analytics.infrastructure.models import QAReview
 from apps.atendimento.application.messages import get_or_fetch_messages
 from apps.atendimento.application.redaction import redact
+from apps.atendimento.domain.bots import is_bot_atendente
 from apps.atendimento.infrastructure.models import Atendimento, Mensagem
 from apps.shared.decorators import allow_cross_tenant
 from apps.tenancy.models import Organization
@@ -59,6 +60,72 @@ Responda APENAS com um objeto JSON válido, sem texto antes ou depois, no format
 "categoria": "sem conexão", "resumo": "...", "melhoria": "...", \
 "overall_score": 78}
 """
+
+# Rubrica do juiz para BOT de autoatendimento (Gi/Felipe). De um bot NÃO se
+# espera empatia/cordialidade humana — espera-se resolver sozinho (deflexão) ou,
+# quando não der, ESCALAR rápido pro humano sem prender o cliente em loop.
+# Avaliar bot com a rubrica humana o pune injustamente (era por isso que os bots
+# apareciam como "piores atendentes"). As dimensões do bot reusam as colunas
+# likert do QAReview (ver `_BOT_TO_COLUMNS`); o JSON nomeado fica em `raw`.
+QA_BOT_SYSTEM_PROMPT = """\
+Você é um supervisor de qualidade avaliando um BOT de autoatendimento de um \
+provedor de internet (ISP) no WhatsApp. NÃO avalie cordialidade ou empatia \
+humana: de um bot esperamos RESOLVER sozinho (deflexão) ou, quando não \
+conseguir, ESCALAR rápido para um atendente humano sem deixar o cliente preso \
+em loop. Avalie de forma objetiva e em português do Brasil.
+
+Considere:
+- deflexao: o bot resolveu o pedido do cliente SEM precisar de um humano?
+- escalou_corretamente: quando NÃO resolveu, encaminhou para um humano de forma \
+limpa (sem loop, sem abandonar o cliente)? Se o bot resolveu sozinho, marque true.
+- compreensao: entendeu a intenção do cliente, sem forçar menu errado nem \
+repetir a mesma pergunta (1 péssimo a 5 perfeito).
+- clareza: respostas objetivas e acionáveis, sem muro de texto robótico (1 a 5).
+- atrito: o cliente ficou frustrado (pediu humano várias vezes, xingou, \
+desistiu)? Use 5 = nenhum atrito, 1 = muito atrito.
+- categoria: motivo principal em poucas palavras (ex.: "2ª via boleto", \
+"desbloqueio", "consulta de plano", "fora do escopo do bot").
+- resumo: 1 frase do que aconteceu.
+- melhoria: 1 frase com a principal oportunidade de melhoria do fluxo (ou "nenhuma").
+- overall_score: nota geral do desempenho do bot de 0 a 100. O PIOR caso é NÃO \
+resolver E NÃO escalar (cliente abandonado).
+
+Os dados pessoais foram mascarados ([NOME], [CPF], [TELEFONE], ...) — ignore os \
+marcadores ao avaliar.
+
+Responda APENAS com um objeto JSON válido, sem texto antes ou depois, no formato:
+{"deflexao": true, "escalou_corretamente": true, "compreensao": 4, \
+"clareza": 4, "atrito": 5, "categoria": "2ª via boleto", "resumo": "...", \
+"melhoria": "...", "overall_score": 82}
+"""
+
+# Mapeia as chaves da rubrica do bot -> colunas do QAReview (reuso de schema, sem
+# migração). O scorecard mostra os rótulos certos por coorte (bot vs humano).
+_BOT_TO_COLUMNS = {
+    "deflexao": "resolveu",
+    "escalou_corretamente": "sla_ok",
+    "clareza": "tom",
+    "compreensao": "empatia",
+    "atrito": "aderencia",
+}
+
+
+def _bot_data_to_columns(data: dict[str, Any]) -> dict[str, Any]:
+    """Traduz o JSON da rubrica do bot para as chaves de coluna que `_persist` lê.
+
+    Campos compartilhados (categoria/resumo/melhoria/overall_score) passam
+    direto; as dimensões do bot caem nas colunas likert reusadas.
+    """
+    cols = {
+        k: data[bot_key]
+        for bot_key, k in _BOT_TO_COLUMNS.items()
+        if bot_key in data
+    }
+    for shared in ("categoria", "resumo", "melhoria", "overall_score"):
+        if shared in data:
+            cols[shared] = data[shared]
+    return cols
+
 
 _DIRECTION_LABELS = {
     Mensagem.Direction.CLIENT: "[CLIENTE]",
@@ -139,29 +206,35 @@ def review_conversation(
 
     transcript = build_transcript(atendimento, messages)
     model = model or settings.QA_LLM_MODEL
+    # Bot de autoatendimento usa rubrica própria (deflexão/escalonamento) em vez
+    # da humana (empatia/tom). Identidade vem da fonte única no domínio.
+    is_bot = is_bot_atendente(atendimento.atendente_nome)
+    system_prompt = QA_BOT_SYSTEM_PROMPT if is_bot else QA_SYSTEM_PROMPT
     log = _logger.bind(
         organization=organization.slug, atendimento=atendimento.external_id
     )
 
     try:
         if client is not None:
-            text = client.judge(
-                system=QA_SYSTEM_PROMPT, user=transcript, model=model
-            )
+            text = client.judge(system=system_prompt, user=transcript, model=model)
         else:
             if not settings.QA_LLM_ENABLED:
                 return None
             from apps.integrations.gemini.client import GeminiClient
 
             with GeminiClient(api_key=settings.GEMINI_API_KEY) as c:
-                text = c.judge(
-                    system=QA_SYSTEM_PROMPT, user=transcript, model=model
-                )
+                text = c.judge(system=system_prompt, user=transcript, model=model)
         data = _parse_review(text)
     except Exception:
         log.warning("qa_review_failed", exc_info=True)
         return None
 
+    if is_bot:
+        # Guarda o JSON nomeado do bot em `raw` (auditoria) e persiste as colunas.
+        raw = {**data, "judge_kind": "bot"}
+        return _persist(
+            organization, atendimento, _bot_data_to_columns(data), model, raw=raw
+        )
     return _persist(organization, atendimento, data, model)
 
 
@@ -170,6 +243,8 @@ def _persist(
     atendimento: Atendimento,
     data: dict[str, Any],
     model: str,
+    *,
+    raw: dict[str, Any] | None = None,
 ) -> QAReview:
     review, _created = QAReview.objects.update_or_create(
         organization=organization,
@@ -187,7 +262,7 @@ def _persist(
             "atendente_external_id": atendimento.atendente_external_id,
             "atendente_nome": atendimento.atendente_nome,
             "model_name": model,
-            "raw": data,
+            "raw": raw if raw is not None else data,
             "reviewed_at": timezone.now(),
         },
     )

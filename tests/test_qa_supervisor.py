@@ -14,6 +14,8 @@ import pytest
 from django.utils import timezone
 
 from apps.analytics.application.qa_review import (
+    QA_BOT_SYSTEM_PROMPT,
+    QA_SYSTEM_PROMPT,
     _parse_review,
     review_conversation,
     select_conversations_for_qa,
@@ -251,6 +253,58 @@ class TestReviewConversation:
         assert review.tom == 5  # capado em 5
         assert review.overall_score == 100  # capado em 100
         assert review.empatia is None  # não-numérico → None
+
+
+# =============================================================================
+# Juiz do BOT — rubrica própria (deflexão/escalonamento), reusa colunas
+# =============================================================================
+@pytest.mark.django_db
+class TestBotJudge:
+    def test_human_uses_human_rubric(self, organization_a: Organization) -> None:
+        at = _atendimento(
+            organization_a, external_id="hj1", atendente_nome="Atendente Maria"
+        )
+        _mensagem(organization_a, at, ext="m1", direction="CLIENT", texto="oi")
+        judge = _FakeJudge({"overall_score": 70})
+        review_conversation(organization_a, at, client=judge)
+        assert judge.calls[0]["system"] == QA_SYSTEM_PROMPT
+
+    def test_bot_uses_bot_rubric(self, organization_a: Organization) -> None:
+        at = _atendimento(organization_a, external_id="bj1", atendente_nome="Felipe")
+        _mensagem(organization_a, at, ext="m1", direction="CLIENT", texto="2ª via")
+        judge = _FakeJudge({"deflexao": True, "overall_score": 80})
+        review_conversation(organization_a, at, client=judge)
+        assert judge.calls[0]["system"] == QA_BOT_SYSTEM_PROMPT
+
+    def test_bot_keys_map_to_columns(self, organization_a: Organization) -> None:
+        at = _atendimento(organization_a, external_id="bj2", atendente_nome="Gi")
+        _mensagem(organization_a, at, ext="m1", direction="CLIENT", texto="desbloqueio")
+        judge = _FakeJudge({
+            "deflexao": True, "escalou_corretamente": False,
+            "compreensao": 4, "clareza": 5, "atrito": 2,
+            "categoria": "desbloqueio", "resumo": "Cliente pediu desbloqueio.",
+            "melhoria": "Confirmar liberação.", "overall_score": 75,
+        })
+        review = review_conversation(organization_a, at, client=judge)
+        assert review is not None
+        # deflexao->resolveu, escalou_corretamente->sla_ok
+        assert review.resolveu is True
+        assert review.sla_ok is False
+        # clareza->tom, compreensao->empatia, atrito->aderencia
+        assert review.tom == 5
+        assert review.empatia == 4
+        assert review.aderencia == 2
+        assert review.overall_score == 75
+        assert review.categoria == "desbloqueio"
+
+    def test_bot_raw_keeps_named_dims(self, organization_a: Organization) -> None:
+        at = _atendimento(organization_a, external_id="bj3", atendente_nome="Felipe")
+        _mensagem(organization_a, at, ext="m1", direction="CLIENT", texto="plano")
+        judge = _FakeJudge({"deflexao": True, "clareza": 4, "overall_score": 60})
+        review = review_conversation(organization_a, at, client=judge)
+        assert review.raw["judge_kind"] == "bot"
+        assert review.raw["deflexao"] is True
+        assert review.raw["clareza"] == 4
 
 
 # =============================================================================

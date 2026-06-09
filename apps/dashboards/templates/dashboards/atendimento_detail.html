@@ -63,23 +63,23 @@
   </div>
   <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
     <div>
-      <p class="text-xs text-gray-500">Resolveu</p>
+      <p class="text-xs text-gray-500">{% if qa.raw.judge_kind == 'bot' %}Deflexão{% else %}Resolveu{% endif %}</p>
       <p class="font-semibold {% if qa.resolveu %}text-emerald-600{% else %}text-red-600{% endif %}">{% if qa.resolveu %}Sim{% else %}Não{% endif %}</p>
     </div>
     <div>
-      <p class="text-xs text-gray-500">SLA</p>
+      <p class="text-xs text-gray-500">{% if qa.raw.judge_kind == 'bot' %}Escalou{% else %}SLA{% endif %}</p>
       <p class="font-semibold {% if qa.sla_ok %}text-emerald-600{% else %}text-red-600{% endif %}">{% if qa.sla_ok %}Ok{% else %}Falhou{% endif %}</p>
     </div>
     <div>
-      <p class="text-xs text-gray-500">Tom</p>
+      <p class="text-xs text-gray-500">{% if qa.raw.judge_kind == 'bot' %}Clareza{% else %}Tom{% endif %}</p>
       <p class="font-semibold text-gray-900 tabular-nums">{{ qa.tom|default:"—" }}<span class="text-xs font-normal text-gray-400">/5</span></p>
     </div>
     <div>
-      <p class="text-xs text-gray-500">Empatia</p>
+      <p class="text-xs text-gray-500">{% if qa.raw.judge_kind == 'bot' %}Compreensão{% else %}Empatia{% endif %}</p>
       <p class="font-semibold text-gray-900 tabular-nums">{{ qa.empatia|default:"—" }}<span class="text-xs font-normal text-gray-400">/5</span></p>
     </div>
     <div>
-      <p class="text-xs text-gray-500">Aderência</p>
+      <p class="text-xs text-gray-500">{% if qa.raw.judge_kind == 'bot' %}Atrito{% else %}Aderência{% endif %}</p>
       <p class="font-semibold text-gray-900 tabular-nums">{{ qa.aderencia|default:"—" }}<span class="text-xs font-normal text-gray-400">/5</span></p>
     </div>
   </div>

@@ -86,7 +86,7 @@
 {% else %}
 
 {% if selected_cohort == 'bot' %}
-<p class="text-xs text-gray-400 mb-3">O bot é avaliado pela mesma rubrica por ora — priorize <strong>% resolvido</strong> (deflexão) sobre tom/empatia.</p>
+<p class="text-xs text-gray-400 mb-3">Bot avaliado por rubrica própria: <strong>deflexão</strong> (resolveu sozinho), <strong>escalonamento</strong> (passou pro humano sem loop), clareza, compreensão e atrito do cliente — não por empatia humana.</p>
 {% endif %}
 
 <!-- KPI Cards -->
@@ -102,24 +102,24 @@
     <p class="text-xs text-gray-500 mt-1">qualidade geral (0–100)</p>
   </div>
   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-    <p class="text-sm text-gray-500 mb-1">% Resolvido</p>
+    <p class="text-sm text-gray-500 mb-1">{% if selected_cohort == 'bot' %}% Deflexão{% else %}% Resolvido{% endif %}</p>
     <p class="text-2xl font-bold text-gray-900">{{ pct_resolveu }}%</p>
-    <p class="text-xs text-gray-500 mt-1">problema solucionado</p>
+    <p class="text-xs text-gray-500 mt-1">{% if selected_cohort == 'bot' %}resolvido pelo bot{% else %}problema solucionado{% endif %}</p>
   </div>
   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-    <p class="text-sm text-gray-500 mb-1">% SLA</p>
+    <p class="text-sm text-gray-500 mb-1">{% if selected_cohort == 'bot' %}% Escalou{% else %}% SLA{% endif %}</p>
     <p class="text-2xl font-bold text-gray-900">{{ pct_sla }}%</p>
-    <p class="text-xs text-gray-500 mt-1">tempo de resposta ok</p>
+    <p class="text-xs text-gray-500 mt-1">{% if selected_cohort == 'bot' %}passou pro humano ok{% else %}tempo de resposta ok{% endif %}</p>
   </div>
   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-    <p class="text-sm text-gray-500 mb-1">Tom médio</p>
+    <p class="text-sm text-gray-500 mb-1">{% if selected_cohort == 'bot' %}Clareza média{% else %}Tom médio{% endif %}</p>
     <p class="text-2xl font-bold text-gray-900">{{ avg_tom|default:"—" }}</p>
-    <p class="text-xs text-gray-500 mt-1">cordialidade (1–5)</p>
+    <p class="text-xs text-gray-500 mt-1">{% if selected_cohort == 'bot' %}objetividade (1–5){% else %}cordialidade (1–5){% endif %}</p>
   </div>
   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-    <p class="text-sm text-gray-500 mb-1">Empatia média</p>
+    <p class="text-sm text-gray-500 mb-1">{% if selected_cohort == 'bot' %}Compreensão média{% else %}Empatia média{% endif %}</p>
     <p class="text-2xl font-bold text-gray-900">{{ avg_empatia|default:"—" }}</p>
-    <p class="text-xs text-gray-500 mt-1">escuta do cliente (1–5)</p>
+    <p class="text-xs text-gray-500 mt-1">{% if selected_cohort == 'bot' %}entendeu intenção (1–5){% else %}escuta do cliente (1–5){% endif %}</p>
   </div>
 </div>
 
@@ -136,11 +136,11 @@
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Atendente</th>
         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Avaliadas</th>
         <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Score</th>
-        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Tom</th>
-        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Empatia</th>
-        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Aderência</th>
-        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">% Resolv.</th>
-        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">% SLA</th>
+        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">{% if selected_cohort == 'bot' %}Clareza{% else %}Tom{% endif %}</th>
+        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">{% if selected_cohort == 'bot' %}Compreensão{% else %}Empatia{% endif %}</th>
+        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">{% if selected_cohort == 'bot' %}Atrito{% else %}Aderência{% endif %}</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{% if selected_cohort == 'bot' %}% Defl.{% else %}% Resolv.{% endif %}</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{% if selected_cohort == 'bot' %}% Escal.{% else %}% SLA{% endif %}</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">

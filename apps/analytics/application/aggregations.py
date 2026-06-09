@@ -44,6 +44,7 @@ from apps.analytics.infrastructure.models import (
     FactInvoice,
     QAReview,
 )
+from apps.atendimento.domain.bots import BOT_ATENDENTE_NOMES, is_bot_atendente
 from apps.shared.decorators import allow_cross_tenant
 from apps.tenancy.models import Organization
 
@@ -5033,12 +5034,11 @@ _SENSITIVE_DEPARTAMENTOS = {"ouvidoria", "renegociacoes", "renegociacao"}
 # atendimento (é uso rotineiro do autoatendimento) — fica fora da reabertura.
 _TRIAGEM_DEPARTAMENTOS = {"triagem"}
 
-# Atendentes que são BOTS de autoatendimento, não pessoas (confirmado c/ Paulo
-# 2026-06-09: "Gi" e "Felipe"). Conversa resolvida pelo bot é deflexão bem
-# sucedida, NÃO conversa ruim — o que qualifica é o desfecho (resolveu/nota),
-# nunca o fato de ter sido o bot. Match por nome normalizado: o bot "Felipe"
-# não colide com a pessoa "Felipe P." (vira "felipe p.").
-_BOT_ATENDENTE_NOMES = {"gi", "felipe"}
+# Identidade de bot vem da fonte única no domínio (apps.atendimento.domain.bots).
+# Conversa resolvida pelo bot é deflexão bem sucedida, NÃO conversa ruim — o que
+# qualifica é o desfecho (resolveu/nota), nunca o fato de ter sido o bot.
+_BOT_ATENDENTE_NOMES = BOT_ATENDENTE_NOMES
+_is_bot_atendente = is_bot_atendente
 
 # Pesos dos sinais de "conversa ruim" (somados, cap 100). Âncora no DESFECHO:
 # não-resolveu (juiz QA) e nota baixa do cliente pesam mais que os proxies.
@@ -5068,11 +5068,6 @@ def _strip_accents(text: str) -> str:
     return "".join(
         c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)
     )
-
-
-def _is_bot_atendente(nome: str | None) -> bool:
-    """True se o atendente é um bot de autoatendimento (Gi/Felipe), não pessoa."""
-    return _strip_accents(nome or "").strip().lower() in _BOT_ATENDENTE_NOMES
 
 
 def _is_triagem(dep_nome: str | None) -> bool:
