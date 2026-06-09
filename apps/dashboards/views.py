@@ -57,6 +57,7 @@ from apps.analytics.application.aggregations import (
     compute_mao_de_obra_detail,
     compute_people_expenses,
     compute_pipeline_by_status,
+    compute_qa_overview,
     compute_lead_origin,
     compute_net_adds_series,
     compute_offline_active_customers,
@@ -1372,6 +1373,7 @@ def atendimento_detail(request: HttpRequest, atendimento_id: int) -> HttpRespons
 
     detail = compute_atendimento_detail(org, at)
     messages = get_or_fetch_messages(org, at)
+    qa_review = at.qa_reviews.filter(organization=org).first()
 
     return render(
         request,
@@ -1380,6 +1382,7 @@ def atendimento_detail(request: HttpRequest, atendimento_id: int) -> HttpRespons
             "at": at,
             "status_label": at.get_status_display(),
             "messages": messages,
+            "qa": qa_review,
             "mrr_str": _fmt_brl(detail["mrr"]),
             "expected_loss_str": _fmt_brl(detail["expected_loss"]),
             "risk_label": detail["risk_label"],
@@ -1389,6 +1392,25 @@ def atendimento_detail(request: HttpRequest, atendimento_id: int) -> HttpRespons
             "tma_str": detail["tma_str"],
         },
     )
+
+
+@login_required
+@never_cache
+def qa_supervisor(request: HttpRequest) -> HttpResponse:
+    """Scorecard da IA supervisora de QA (LLM-as-judge) — issue #51."""
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+    months = _get_months(request)
+
+    departamento_id: int | None = None
+    raw_dep = request.GET.get("departamento", "")
+    if raw_dep.isdigit():
+        departamento_id = int(raw_dep)
+
+    data = compute_qa_overview(org, months=months, departamento_id=departamento_id)
+    return render(request, "dashboards/qa_supervisor.html", data)
 
 
 @login_required

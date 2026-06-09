@@ -418,3 +418,83 @@ def _run_churn_digest(*, organization_id: int, period: str) -> dict[str, Any]:
     org = Organization.objects.get(pk=organization_id)
     set_current_organization(org)
     return send_churn_digest(org, period)
+
+
+# =============================================================================
+# IA supervisora de QA — LLM-as-judge por amostragem (Beat diário) — issue #51
+# =============================================================================
+# Lote pequeno por org: o juiz é uma chamada de rede paga por conversa. A
+# seleção prioriza as piores (nota baixa); o resto fica pro dia seguinte.
+QA_REVIEW_BATCH_SIZE = 20
+
+
+@shared_task(name="apps.analytics.tasks.dispatch_qa_reviews_for_all_orgs")
+def dispatch_qa_reviews_for_all_orgs() -> dict[str, int]:
+    """Enfileira a amostragem de QA por LLM para cada org ativa, se habilitado.
+
+    Guard global: sem `QA_LLM_ENABLED` (que já exige a API key), nada é
+    enfileirado — o painel de QA simplesmente fica vazio até o LLM ser ligado.
+    """
+    return _dispatch_qa_reviews()
+
+
+@allow_cross_tenant(reason="dispatch_qa itera Organization (não-TenantModel)")
+def _dispatch_qa_reviews() -> dict[str, int]:
+    from django.conf import settings
+
+    from apps.tenancy.models import Organization
+
+    if not settings.QA_LLM_ENABLED:
+        _logger.info("qa_reviews_skipped_disabled")
+        return {"dispatched": 0}
+
+    n = 0
+    for org in Organization.objects.filter(is_active=True):
+        run_qa_reviews_for_org.apply_async(
+            kwargs={"organization_id": org.pk},
+            queue=org.celery_queue_name,
+        )
+        n += 1
+        _logger.info("qa_reviews_dispatched", org=org.slug)
+
+    return {"dispatched": n}
+
+
+@shared_task(
+    name="apps.analytics.tasks.run_qa_reviews_for_org",
+    acks_late=True,
+)
+def run_qa_reviews_for_org(
+    *, organization_id: int, limit: int = QA_REVIEW_BATCH_SIZE
+) -> dict[str, Any]:
+    """Avalia uma amostra de conversas fechadas de uma org com o juiz LLM."""
+    return _run_qa_reviews(organization_id=organization_id, limit=limit)
+
+
+@allow_cross_tenant(reason="QA review opera fora de request HTTP")
+def _run_qa_reviews(*, organization_id: int, limit: int) -> dict[str, Any]:
+    from django.conf import settings
+
+    from apps.analytics.application.qa_review import (
+        review_conversation,
+        select_conversations_for_qa,
+    )
+    from apps.tenancy.models import Organization
+
+    org = Organization.objects.get(pk=organization_id)
+    set_current_organization(org)
+
+    # Defesa em profundidade: o dispatcher já filtra, mas a sub-task pode ser
+    # disparada manualmente — não gaste tokens com o QA desligado.
+    if not settings.QA_LLM_ENABLED:
+        return {"reviewed": 0, "skipped": "disabled"}
+
+    candidates = select_conversations_for_qa(org, limit=limit)
+    reviewed = sum(
+        1 for at in candidates if review_conversation(org, at) is not None
+    )
+    _logger.info(
+        "qa_reviews_done", org=org.slug,
+        reviewed=reviewed, candidates=len(candidates),
+    )
+    return {"reviewed": reviewed, "candidates": len(candidates)}

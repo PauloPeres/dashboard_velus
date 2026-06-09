@@ -55,6 +55,41 @@
 </div>
 {% endif %}
 
+{% if qa %}
+<div class="bg-white rounded-lg shadow-sm border border-blue-200 p-5 mb-6">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-sm font-semibold text-gray-700">Avaliação da IA supervisora</h2>
+    <span class="text-2xl font-bold {% if qa.overall_score >= 70 %}text-emerald-600{% elif qa.overall_score >= 50 %}text-orange-500{% else %}text-red-600{% endif %}">{{ qa.overall_score }}<span class="text-sm font-normal text-gray-400">/100</span></span>
+  </div>
+  <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
+    <div>
+      <p class="text-xs text-gray-500">Resolveu</p>
+      <p class="font-semibold {% if qa.resolveu %}text-emerald-600{% else %}text-red-600{% endif %}">{% if qa.resolveu %}Sim{% else %}Não{% endif %}</p>
+    </div>
+    <div>
+      <p class="text-xs text-gray-500">SLA</p>
+      <p class="font-semibold {% if qa.sla_ok %}text-emerald-600{% else %}text-red-600{% endif %}">{% if qa.sla_ok %}Ok{% else %}Falhou{% endif %}</p>
+    </div>
+    <div>
+      <p class="text-xs text-gray-500">Tom</p>
+      <p class="font-semibold text-gray-900 tabular-nums">{{ qa.tom|default:"—" }}<span class="text-xs font-normal text-gray-400">/5</span></p>
+    </div>
+    <div>
+      <p class="text-xs text-gray-500">Empatia</p>
+      <p class="font-semibold text-gray-900 tabular-nums">{{ qa.empatia|default:"—" }}<span class="text-xs font-normal text-gray-400">/5</span></p>
+    </div>
+    <div>
+      <p class="text-xs text-gray-500">Aderência</p>
+      <p class="font-semibold text-gray-900 tabular-nums">{{ qa.aderencia|default:"—" }}<span class="text-xs font-normal text-gray-400">/5</span></p>
+    </div>
+  </div>
+  {% if qa.categoria %}<p class="text-xs text-gray-500 mb-2">Motivo: <span class="text-gray-700">{{ qa.categoria }}</span></p>{% endif %}
+  {% if qa.resumo %}<p class="text-sm text-gray-700 mb-1"><span class="text-gray-400">Resumo:</span> {{ qa.resumo }}</p>{% endif %}
+  {% if qa.melhoria %}<p class="text-sm text-gray-700"><span class="text-gray-400">Melhoria:</span> {{ qa.melhoria }}</p>{% endif %}
+  <p class="text-[10px] text-gray-300 mt-3">Avaliado por {{ qa.model_name|default:"LLM" }} em {{ qa.reviewed_at|date:"d/m/Y H:i" }} · PII redigida antes do envio</p>
+</div>
+{% endif %}
+
 <!-- Timeline de mensagens -->
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
   <h2 class="text-sm font-semibold text-gray-700 mb-4">Conversa completa</h2>

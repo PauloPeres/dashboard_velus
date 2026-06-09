@@ -374,6 +374,13 @@ CELERY_BEAT_SCHEDULE: dict = {
         "schedule": crontab(minute=0, hour=8, day_of_month=1),  # dia 1, 08:00
         "options": {"queue": "celery"},
     },
+    # IA supervisora de QA — roda após o sync Opa! (05:00), com PII redigida.
+    # No-op enquanto QA_LLM_ENABLED estiver desligado (sem API key).
+    "qa-reviews-daily": {
+        "task": "apps.analytics.tasks.dispatch_qa_reviews_for_all_orgs",
+        "schedule": crontab(minute=30, hour=6),  # 06:30 todo dia
+        "options": {"queue": "celery"},
+    },
 }
 
 # =============================================================================
@@ -470,6 +477,14 @@ FERNET_KEY = env.FERNET_KEY.get_secret_value()
 # =============================================================================
 OPA_LINK = env.OPA_LINK
 OPA_TOKEN = env.OPA_TOKEN.get_secret_value()
+
+# =============================================================================
+# IA supervisora de atendimento (LLM-as-judge) — consumida por apps.analytics
+# =============================================================================
+ANTHROPIC_API_KEY = env.ANTHROPIC_API_KEY.get_secret_value()
+QA_LLM_MODEL = env.QA_LLM_MODEL
+# QA só roda se habilitado E com chave presente — desligado é o default seguro.
+QA_LLM_ENABLED = env.QA_LLM_ENABLED and bool(ANTHROPIC_API_KEY)
 
 # =============================================================================
 # Servidor MCP (read-only) — consumido por apps.mcp.server

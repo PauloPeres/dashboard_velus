@@ -122,6 +122,16 @@ class Settings(BaseSettings):
     OPA_TOKEN: SecretStr = SecretStr("")  # JWT Bearer
 
     # -------------------------------------------------------------------------
+    # IA supervisora de atendimento (LLM-as-judge) — QA das conversas (#50/#51)
+    # -------------------------------------------------------------------------
+    # Chave global da API Anthropic; vazia desliga o QA por LLM (fallback: só o
+    # léxico/heurística). Em prod vira K8s Secret. Haiku é barato e suficiente
+    # pra avaliar conversa contra rubrica; pode subir pra Sonnet se precisar.
+    ANTHROPIC_API_KEY: SecretStr = SecretStr("")
+    QA_LLM_MODEL: str = "claude-haiku-4-5-20251001"
+    QA_LLM_ENABLED: bool = False
+
+    # -------------------------------------------------------------------------
     # Servidor MCP (read-only, autenticado por token por organização)
     # -------------------------------------------------------------------------
     MCP_ENABLED: bool = False

@@ -42,6 +42,7 @@ from apps.analytics.infrastructure.models import (
     FactContractStatusDaily,
     FactExpense,
     FactInvoice,
+    QAReview,
 )
 from apps.shared.decorators import allow_cross_tenant
 from apps.tenancy.models import Organization
@@ -5294,4 +5295,135 @@ def compute_atendimento_detail(
         "expected_loss": expected_loss,
         "churn_signals": churn_signals,
         "tma_str": _fmt_duration(tma_h * 3600 if tma_h else None),
+    }
+
+
+def _avg1(value: float | None) -> float | None:
+    """Arredonda uma média likert a 1 casa (None se não houver dado)."""
+    return round(value, 1) if value is not None else None
+
+
+@allow_cross_tenant(reason="aggregation read-only; org passada explicitamente")
+def compute_qa_overview(
+    organization: Organization,
+    *,
+    months: int = 3,
+    departamento_id: int | None = None,
+    worst_limit: int = 20,
+) -> dict[str, Any]:
+    """Scorecard da IA supervisora de QA (LLM-as-judge) — issue #51.
+
+    Agrega os `QAReview` já persistidos (1 por atendimento) na janela: KPIs
+    globais, médias por atendente, distribuição de categorias e as piores
+    conversas (menor score) com link pro drill-down. Não chama o LLM — só lê o
+    que o juiz já avaliou. A janela usa `atendimento.opened_at` pra casar com o
+    seletor de período dos outros painéis de atendimento.
+    """
+    from apps.atendimento.infrastructure.models import Departamento
+
+    now = timezone.now()
+    window_start = (now - relativedelta(months=months)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    base = QAReview.objects.filter(
+        organization=organization,
+        atendimento__opened_at__gte=window_start,
+    )
+    if departamento_id is not None:
+        base = base.filter(atendimento__departamento_id=departamento_id)
+
+    total = base.count()
+    agg = base.aggregate(
+        avg_score=Avg("overall_score"),
+        avg_tom=Avg("tom"),
+        avg_empatia=Avg("empatia"),
+        avg_aderencia=Avg("aderencia"),
+        n_resolveu=Count("id", filter=Q(resolveu=True)),
+        n_sla=Count("id", filter=Q(sla_ok=True)),
+    )
+
+    by_atendente: list[dict[str, Any]] = []
+    for r in (
+        base.values("atendente_external_id", "atendente_nome")
+        .annotate(
+            n=Count("id"),
+            avg_score=Avg("overall_score"),
+            avg_tom=Avg("tom"),
+            avg_empatia=Avg("empatia"),
+            avg_aderencia=Avg("aderencia"),
+            n_resolveu=Count("id", filter=Q(resolveu=True)),
+            n_sla=Count("id", filter=Q(sla_ok=True)),
+        )
+        .order_by("avg_score")
+    ):
+        n = r["n"]
+        by_atendente.append(
+            {
+                "atendente_nome": r["atendente_nome"] or "—",
+                "atendente_external_id": r["atendente_external_id"],
+                "n": n,
+                "avg_score": round(r["avg_score"] or 0),
+                "avg_tom": _avg1(r["avg_tom"]),
+                "avg_empatia": _avg1(r["avg_empatia"]),
+                "avg_aderencia": _avg1(r["avg_aderencia"]),
+                "pct_resolveu": round(100 * r["n_resolveu"] / n) if n else 0,
+                "pct_sla": round(100 * r["n_sla"] / n) if n else 0,
+            }
+        )
+
+    categorias = [
+        {"categoria": r["categoria"], "n": r["n"]}
+        for r in (
+            base.exclude(categoria="")
+            .values("categoria")
+            .annotate(n=Count("id"))
+            .order_by("-n")[:12]
+        )
+    ]
+
+    worst = [
+        {
+            "atendimento_id": r["atendimento_id"],
+            "protocol": r["atendimento__protocol"] or f"#{r['atendimento_id']}",
+            "customer_name": r["atendimento__customer_name"] or "—",
+            "atendente_nome": r["atendente_nome"] or "—",
+            "overall_score": r["overall_score"],
+            "categoria": r["categoria"] or "—",
+            "resumo": r["resumo"],
+            "melhoria": r["melhoria"],
+            "resolveu": r["resolveu"],
+        }
+        for r in (
+            base.values(
+                "atendimento_id",
+                "atendimento__protocol",
+                "atendimento__customer_name",
+                "atendente_nome",
+                "overall_score",
+                "categoria",
+                "resumo",
+                "melhoria",
+                "resolveu",
+            ).order_by("overall_score", "-reviewed_at")[:worst_limit]
+        )
+    ]
+
+    return {
+        "total_reviews": total,
+        "avg_score": round(agg["avg_score"] or 0),
+        "avg_tom": _avg1(agg["avg_tom"]),
+        "avg_empatia": _avg1(agg["avg_empatia"]),
+        "avg_aderencia": _avg1(agg["avg_aderencia"]),
+        "pct_resolveu": round(100 * agg["n_resolveu"] / total) if total else 0,
+        "pct_sla": round(100 * agg["n_sla"] / total) if total else 0,
+        "by_atendente": by_atendente,
+        "categorias": categorias,
+        "worst": worst,
+        "departamentos": list(
+            Departamento.objects.filter(organization=organization)
+            .order_by("nome")
+            .values("id", "nome")
+        ),
+        "selected_departamento_id": departamento_id,
     }

@@ -377,6 +377,67 @@ class ChurnRiskModel(TenantModel):
         return f"ChurnModel {self.organization_id} · n={self.n_samples}"
 
 
+class QAReview(TenantModel):
+    """Avaliação de qualidade de um atendimento por IA supervisora (LLM-as-judge).
+
+    Uma conversa fechada é redigida (PII mascarada) e enviada ao Claude com uma
+    rubrica PT-BR; a resposta estruturada é persistida aqui — 1 linha por
+    atendimento (upsert). Puramente analítico: alimenta o scorecard de QA, não
+    dispara nenhuma ação no atendimento.
+
+    Dimensões likert 1–5 (tom, empatia, aderência ao script). `overall_score`
+    0–100 é o índice agregado devolvido pelo juiz. `categoria` resume o motivo
+    da conversa; `resumo`/`melhoria` são texto curto pro gestor. `raw` guarda o
+    JSON bruto do juiz pra auditoria/recálculo sem nova chamada.
+    """
+
+    atendimento = models.ForeignKey(
+        "atendimento.Atendimento",
+        on_delete=models.CASCADE,
+        related_name="qa_reviews",
+    )
+
+    resolveu = models.BooleanField(default=False)
+    sla_ok = models.BooleanField(default=False)
+    tom = models.PositiveSmallIntegerField(null=True, blank=True)
+    empatia = models.PositiveSmallIntegerField(null=True, blank=True)
+    aderencia = models.PositiveSmallIntegerField(null=True, blank=True)
+    overall_score = models.PositiveSmallIntegerField(default=0, db_index=True)
+
+    categoria = models.CharField(max_length=64, blank=True, default="")
+    resumo = models.TextField(blank=True, default="")
+    melhoria = models.TextField(blank=True, default="")
+
+    # Snapshot do atendente avaliado — agrega o scorecard sem novo join e
+    # sobrevive a re-sync que mexa na conversa.
+    atendente_external_id = models.CharField(
+        max_length=128, blank=True, default="", db_index=True
+    )
+    atendente_nome = models.CharField(max_length=255, blank=True, default="")
+
+    model_name = models.CharField(max_length=64, blank=True, default="")
+    raw = models.JSONField(default=dict, blank=True)
+    reviewed_at = models.DateTimeField()
+
+    class Meta:
+        verbose_name = _("Avaliação de QA de atendimento")
+        verbose_name_plural = _("Avaliações de QA de atendimento")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "atendimento"],
+                name="unique_qa_review_per_atendimento",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "-overall_score"]),
+            models.Index(fields=["organization", "atendente_external_id"]),
+            models.Index(fields=["organization", "reviewed_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"QAReview at={self.atendimento_id} score={self.overall_score}"
+
+
 # =============================================================================
 # Plano de Contas IXC — cache sincronizado via `sync_planejamento`
 # =============================================================================
