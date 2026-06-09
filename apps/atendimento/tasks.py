@@ -24,7 +24,7 @@ from apps.integrations.opa.atendimento import OpaAtendimentoSource
 from apps.integrations.shared.enums import Capability, SourceType
 from apps.shared.context import reset_current_organization, set_current_organization
 from apps.shared.decorators import allow_cross_tenant
-from apps.sync.models import SyncCheckpoint
+from apps.sync.models import SyncCheckpoint, SyncJob, SyncMode, SyncStatus
 from apps.tenancy.models import OrganizationDataSource
 
 _logger = structlog.get_logger(__name__)
@@ -77,24 +77,50 @@ def _sync_opa_for_all_orgs() -> dict[str, int]:
             )
             if checkpoint.last_processed_at:
                 since = checkpoint.last_processed_at
+                mode = SyncMode.INCREMENTAL
             else:
                 since = timezone.now() - timedelta(days=_DEFAULT_WINDOW_DAYS)
+                mode = SyncMode.BOOTSTRAP
 
             started_at = timezone.now()
-            source = OpaAtendimentoSource(
-                base_url=creds["base_url"], token=creds["token"]
+            # SyncJob faz o Opa! aparecer no painel /sync/ como as outras fontes
+            # (a recorrência tem fluxo proprio e nao passava pelo sync_capability,
+            # entao so mantinha checkpoint — o painel mostrava "nunca rodou").
+            job = SyncJob.objects.create(
+                organization=org,
+                source_type=SourceType.OPA.value,
+                capability=Capability.ATENDIMENTO.value,
+                mode=mode.value,
+                status=SyncStatus.RUNNING,
+                started_at=started_at,
             )
-            result = run_opa_sync(org, source, since=since)
+            try:
+                source = OpaAtendimentoSource(
+                    base_url=creds["base_url"], token=creds["token"]
+                )
+                result = run_opa_sync(org, source, since=since)
 
-            checkpoint.last_processed_at = started_at
-            checkpoint.save(update_fields=["last_processed_at", "updated_at"])
+                checkpoint.last_processed_at = started_at
+                checkpoint.save(update_fields=["last_processed_at", "updated_at"])
 
-            n_atendimentos += result.atendimentos
-            log.info(
-                "opa_beat_synced",
-                atendimentos=result.atendimentos,
-                customers_linked=result.customers_linked,
-            )
+                job.status = SyncStatus.COMPLETED
+                job.records_processed = result.atendimentos
+                job.finished_at = timezone.now()
+                job.save()
+
+                n_atendimentos += result.atendimentos
+                log.info(
+                    "opa_beat_synced",
+                    atendimentos=result.atendimentos,
+                    customers_linked=result.customers_linked,
+                )
+            except Exception as exc:
+                job.status = SyncStatus.FAILED
+                job.error_message = f"{type(exc).__name__}: {exc}"[:1000]
+                job.finished_at = timezone.now()
+                job.save()
+                log.error("opa_beat_failed", error=str(exc))
+                raise
         finally:
             reset_current_organization(token)
 

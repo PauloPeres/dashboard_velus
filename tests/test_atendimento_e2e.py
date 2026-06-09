@@ -34,7 +34,7 @@ from apps.customers.infrastructure.models import Customer
 from apps.integrations.fake.atendimento import FakeAtendimentoSource
 from apps.integrations.shared.enums import Capability, SourceType
 from apps.shared.context import set_current_organization
-from apps.sync.models import SyncCheckpoint
+from apps.sync.models import SyncCheckpoint, SyncJob, SyncMode, SyncStatus
 from apps.tenancy.models import Organization, OrganizationDataSource
 
 
@@ -311,6 +311,17 @@ class TestOpaBeatTask:
             capability=Capability.ATENDIMENTO.value,
         )
         assert cp.last_processed_at is not None
+        # SyncJob gravado pro Opa! aparecer no painel /sync/. Sem checkpoint
+        # prévio, o primeiro run é BOOTSTRAP.
+        job = SyncJob.objects.get(
+            organization=organization_a,
+            source_type=SourceType.OPA.value,
+            capability=Capability.ATENDIMENTO.value,
+        )
+        assert job.status == SyncStatus.COMPLETED.value
+        assert job.mode == SyncMode.BOOTSTRAP.value
+        assert job.records_processed == 1
+        assert job.finished_at is not None
 
     def test_skips_orgs_without_datasource(
         self, organization_a: Organization, monkeypatch: pytest.MonkeyPatch
