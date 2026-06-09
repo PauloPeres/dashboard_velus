@@ -105,8 +105,12 @@ class IxcConnectionSource:
     def _build_since_filter(since: datetime) -> dict[str, str]:
         from zoneinfo import ZoneInfo
         sp = since.astimezone(ZoneInfo("America/Sao_Paulo"))
+        # `ultima_conexao` deixou de existir como coluna no radusuarios (o IXC
+        # renomeou p/ ultima_conexao_inicial/final) e o filtro passou a devolver
+        # página HTML de erro. `ultima_atualizacao` é o last-modified da linha —
+        # pega qualquer mudança (status incluso), melhor que só novas conexões.
         return {
-            "qtype": "radusuarios.ultima_conexao",
+            "qtype": "ultima_atualizacao",
             "query": sp.strftime("%Y-%m-%d %H:%M:%S"),
             "oper": ">=",
         }

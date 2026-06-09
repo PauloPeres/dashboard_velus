@@ -123,8 +123,11 @@ class IxcPaymentSource:
     def _build_since_filter(since: datetime) -> dict[str, str]:
         from zoneinfo import ZoneInfo
         sp = since.astimezone(ZoneInfo("America/Sao_Paulo"))
+        # qtype precisa ser o nome cru da coluna (`data`); o IXC passou a
+        # rejeitar o prefixo de tabela (`fn_areceber_baixas.data`) nesse recurso
+        # de função, devolvendo página HTML de erro e derrubando o sync.
         return {
-            "qtype": "fn_areceber_baixas.data",
+            "qtype": "data",
             "query": sp.strftime("%Y-%m-%d %H:%M:%S"),
             "oper": ">=",
         }

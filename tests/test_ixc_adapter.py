@@ -704,6 +704,15 @@ class TestIxcRadUserSchema:
         )
         assert schema.ultima_conexao is None
 
+    def test_reads_renamed_ultima_conexao_inicial(self) -> None:
+        # IXC renomeou a coluna; sem alias o last_connection_at viraria None.
+        raw = _sample_ixc_raduser()
+        del raw["ultima_conexao"]
+        raw["ultima_conexao_inicial"] = "2025-05-20 08:00:00"
+        schema = IxcRadUserSchema.model_validate(raw)
+        assert schema.ultima_conexao is not None
+        assert schema.ultima_conexao.year == 2025
+
     def test_defaults_when_flags_missing(self) -> None:
         raw = _sample_ixc_raduser()
         del raw["ativo"]
@@ -728,6 +737,17 @@ class TestIxcConnectionSourceDeclaration:
     def test_implements_port_contract(self) -> None:
         assert IxcConnectionSource.source_type == SourceType.IXC
         assert IxcConnectionSource.capabilities == frozenset({Capability.CONNECTIONS})
+
+
+class TestIxcConnectionSinceFilter:
+    def test_filters_by_ultima_atualizacao_bare_column(self) -> None:
+        # `radusuarios.ultima_conexao` (prefixo + coluna inexistente) era
+        # rejeitado pelo IXC; o filtro usa o last-modified cru da linha.
+        f = IxcConnectionSource._build_since_filter(
+            datetime(2026, 6, 2).astimezone()
+        )
+        assert f["qtype"] == "ultima_atualizacao"
+        assert f["oper"] == ">="
 
 
 class TestIxcConnectionToDto:
@@ -880,6 +900,17 @@ class TestIxcPaymentSourceDeclaration:
     def test_implements_port_contract(self) -> None:
         assert IxcPaymentSource.source_type == SourceType.IXC
         assert IxcPaymentSource.capabilities == frozenset({Capability.PAYMENTS})
+
+
+class TestIxcPaymentSinceFilter:
+    def test_filters_by_bare_data_column(self) -> None:
+        # O IXC rejeita o prefixo de tabela (`fn_areceber_baixas.data`) nesse
+        # recurso de função — o qtype tem que ser o nome cru da coluna.
+        f = IxcPaymentSource._build_since_filter(
+            datetime(2026, 6, 2).astimezone()
+        )
+        assert f["qtype"] == "data"
+        assert f["oper"] == ">="
 
 
 class TestIxcPaymentToDto:

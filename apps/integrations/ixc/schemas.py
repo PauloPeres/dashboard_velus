@@ -525,7 +525,12 @@ class IxcRadUserSchema(BaseModel):
     upload: str = Field(default="")
     bytes_recebidos: int = Field(default=0)
     bytes_enviados: int = Field(default=0)
-    ultima_conexao: datetime | None = Field(default=None)
+    # O IXC renomeou `ultima_conexao` p/ `ultima_conexao_inicial` (início da
+    # última sessão); aceita os dois p/ não perder o last_connection_at.
+    ultima_conexao: datetime | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ultima_conexao", "ultima_conexao_inicial"),
+    )
 
     @field_validator(
         "id", "id_cliente", "id_contrato", "login", "ativo", "online",
