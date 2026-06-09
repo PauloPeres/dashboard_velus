@@ -70,7 +70,7 @@ def _review(
         aderencia=aderencia, overall_score=overall_score, categoria=categoria,
         resumo="Resumo.", melhoria=melhoria,
         atendente_external_id=at.atendente_external_id,
-        atendente_nome=at.atendente_nome, model_name="claude-haiku-4-5-20251001",
+        atendente_nome=at.atendente_nome, model_name="gemini-2.0-flash",
         reviewed_at=timezone.now(),
     )
 

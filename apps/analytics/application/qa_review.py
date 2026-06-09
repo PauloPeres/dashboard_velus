@@ -129,7 +129,7 @@ def review_conversation(
     """Avalia um atendimento com o juiz LLM e persiste o `QAReview` (upsert).
 
     `client` é injetável (fake nos testes) — qualquer objeto com `.judge(...)`.
-    Sem client, constrói o `AnthropicClient` a partir das settings, mas só se
+    Sem client, constrói o `GeminiClient` a partir das settings, mas só se
     `QA_LLM_ENABLED`. Retorna None quando não há mensagens, o QA está desligado
     ou a resposta do juiz não pôde ser parseada (tolerante a falha).
     """
@@ -151,9 +151,9 @@ def review_conversation(
         else:
             if not settings.QA_LLM_ENABLED:
                 return None
-            from apps.integrations.anthropic.client import AnthropicClient
+            from apps.integrations.gemini.client import GeminiClient
 
-            with AnthropicClient(api_key=settings.ANTHROPIC_API_KEY) as c:
+            with GeminiClient(api_key=settings.GEMINI_API_KEY) as c:
                 text = c.judge(
                     system=QA_SYSTEM_PROMPT, user=transcript, model=model
                 )

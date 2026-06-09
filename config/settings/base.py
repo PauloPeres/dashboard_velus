@@ -481,10 +481,10 @@ OPA_TOKEN = env.OPA_TOKEN.get_secret_value()
 # =============================================================================
 # IA supervisora de atendimento (LLM-as-judge) — consumida por apps.analytics
 # =============================================================================
-ANTHROPIC_API_KEY = env.ANTHROPIC_API_KEY.get_secret_value()
+GEMINI_API_KEY = env.GEMINI_API_KEY.get_secret_value()
 QA_LLM_MODEL = env.QA_LLM_MODEL
 # QA só roda se habilitado E com chave presente — desligado é o default seguro.
-QA_LLM_ENABLED = env.QA_LLM_ENABLED and bool(ANTHROPIC_API_KEY)
+QA_LLM_ENABLED = env.QA_LLM_ENABLED and bool(GEMINI_API_KEY)
 
 # =============================================================================
 # Servidor MCP (read-only) — consumido por apps.mcp.server

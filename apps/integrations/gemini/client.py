@@ -1,12 +1,14 @@
-"""Cliente HTTP da API Anthropic (Claude) — Messages API.
+"""Cliente HTTP da API Google Gemini (Generative Language) — generateContent.
 
 Herda retry/throttle/classificação de erro do `BaseHttpAdapter`, evitando uma
 dependência nova no cluster (não usamos o SDK oficial — mesma motivação da ML
 pure-Python: deploy leve). Só expõe o necessário pra IA supervisora de QA:
 `judge()` manda um system prompt + uma mensagem do usuário e devolve o texto.
 
-Auth por header `x-api-key` (não Bearer). A versão da API vai no header
-`anthropic-version`. Ver: https://docs.anthropic.com/en/api/messages
+Auth pelo header `x-goog-api-key` (mantém a chave fora da URL/logs). O modelo
+entra no path: `/v1beta/models/{model}:generateContent`. A assinatura de
+`judge()` é a mesma usada pelo `qa_review` — que é agnóstico de provedor.
+Ver: https://ai.google.dev/api/generate-content
 """
 
 from __future__ import annotations
@@ -15,16 +17,15 @@ from typing import Any, ClassVar
 
 from apps.integrations.shared.http_client import BaseHttpAdapter
 
-ANTHROPIC_API_BASE = "https://api.anthropic.com"
-ANTHROPIC_VERSION = "2023-06-01"
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com"
 
 
-class AnthropicClient(BaseHttpAdapter):
-    """Cliente mínimo da Messages API do Claude.
+class GeminiClient(BaseHttpAdapter):
+    """Cliente mínimo da API generateContent do Gemini.
 
     Uso como context manager (herdado):
 
-        with AnthropicClient(api_key=...) as client:
+        with GeminiClient(api_key=...) as client:
             texto = client.judge(system=rubrica, user=transcricao, model="...")
     """
 
@@ -37,7 +38,7 @@ class AnthropicClient(BaseHttpAdapter):
         self,
         *,
         api_key: str,
-        base_url: str = ANTHROPIC_API_BASE,
+        base_url: str = GEMINI_API_BASE,
         timeout: float | None = None,
         rate_limit_per_second: int | None = None,
     ) -> None:
@@ -50,8 +51,7 @@ class AnthropicClient(BaseHttpAdapter):
 
     def _build_headers(self) -> dict[str, str]:
         headers = super()._build_headers()
-        headers["x-api-key"] = self._api_key
-        headers["anthropic-version"] = ANTHROPIC_VERSION
+        headers["x-goog-api-key"] = self._api_key
         return headers
 
     def judge(
@@ -69,24 +69,27 @@ class AnthropicClient(BaseHttpAdapter):
         criatividade. Levanta `AdapterError`/`AdapterAuthError`/... em falha.
         """
         payload: dict[str, Any] = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [{"text": user}]}],
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": max_tokens,
+            },
         }
-        response = self.post("/v1/messages", json=payload)
+        response = self.post(f"/v1beta/models/{model}:generateContent", json=payload)
         return self._extract_text(response)
 
     @staticmethod
     def _extract_text(response: Any) -> str:
-        """Concatena os blocos `type=text` do campo `content` da resposta."""
+        """Concatena o texto das `parts` do primeiro candidato da resposta."""
         if not isinstance(response, dict):
             return ""
-        blocks = response.get("content") or []
-        parts = [
-            block.get("text", "")
-            for block in blocks
-            if isinstance(block, dict) and block.get("type") == "text"
-        ]
-        return "".join(parts).strip()
+        parts_text: list[str] = []
+        for candidate in response.get("candidates") or []:
+            content = candidate.get("content") if isinstance(candidate, dict) else None
+            if not isinstance(content, dict):
+                continue
+            for part in content.get("parts") or []:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    parts_text.append(part["text"])
+        return "".join(parts_text).strip()

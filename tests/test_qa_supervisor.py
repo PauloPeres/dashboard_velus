@@ -2,7 +2,7 @@
 
 Cobre redação de PII (pura), parse da resposta do juiz, `review_conversation`
 com um juiz fake (zero rede) e o seletor de amostragem. Nenhum teste toca a API
-Anthropic — o cliente é injetado.
+Gemini — o cliente é injetado; só o parse da resposta do juiz é testado direto.
 """
 
 from __future__ import annotations
@@ -72,6 +72,28 @@ class TestParseReview:
     def test_raises_without_json(self) -> None:
         with pytest.raises(ValueError, match="sem objeto JSON"):
             _parse_review("não consegui avaliar")
+
+
+# =============================================================================
+# Extração de texto da resposta do Gemini — função pura (sem rede)
+# =============================================================================
+class TestGeminiExtractText:
+    def test_concatenates_candidate_parts(self) -> None:
+        from apps.integrations.gemini.client import GeminiClient
+
+        response = {
+            "candidates": [
+                {"content": {"parts": [{"text": '{"overall_score":'}, {"text": " 80}"}]}}
+            ]
+        }
+        assert GeminiClient._extract_text(response) == '{"overall_score": 80}'
+
+    def test_empty_on_malformed(self) -> None:
+        from apps.integrations.gemini.client import GeminiClient
+
+        assert GeminiClient._extract_text({}) == ""
+        assert GeminiClient._extract_text("oops") == ""
+        assert GeminiClient._extract_text({"candidates": [{}]}) == ""
 
 
 # =============================================================================

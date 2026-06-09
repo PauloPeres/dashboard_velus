@@ -124,11 +124,11 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     # IA supervisora de atendimento (LLM-as-judge) — QA das conversas (#50/#51)
     # -------------------------------------------------------------------------
-    # Chave global da API Anthropic; vazia desliga o QA por LLM (fallback: só o
-    # léxico/heurística). Em prod vira K8s Secret. Haiku é barato e suficiente
-    # pra avaliar conversa contra rubrica; pode subir pra Sonnet se precisar.
-    ANTHROPIC_API_KEY: SecretStr = SecretStr("")
-    QA_LLM_MODEL: str = "claude-haiku-4-5-20251001"
+    # Chave global da API Google Gemini; vazia desliga o QA por LLM (fallback: só
+    # o léxico/heurística). Em prod vira K8s Secret. Flash é barato e suficiente
+    # pra avaliar conversa contra rubrica; pode subir pra Pro se precisar.
+    GEMINI_API_KEY: SecretStr = SecretStr("")
+    QA_LLM_MODEL: str = "gemini-2.0-flash"
     QA_LLM_ENABLED: bool = False
 
     # -------------------------------------------------------------------------
