@@ -1409,7 +1409,13 @@ def qa_supervisor(request: HttpRequest) -> HttpResponse:
     if raw_dep.isdigit():
         departamento_id = int(raw_dep)
 
-    data = compute_qa_overview(org, months=months, departamento_id=departamento_id)
+    cohort = request.GET.get("cohort", "human")
+    if cohort not in ("human", "bot", "all"):
+        cohort = "human"
+
+    data = compute_qa_overview(
+        org, months=months, departamento_id=departamento_id, cohort=cohort
+    )
     return render(request, "dashboards/qa_supervisor.html", data)
 
 

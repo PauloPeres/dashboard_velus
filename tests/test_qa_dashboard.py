@@ -146,6 +146,63 @@ class TestComputeQaOverview:
 
 
 @pytest.mark.django_db
+class TestQaCohorts:
+    """QA do bot (Gi/Felipe) é medido separado do humano (Paulo 2026-06-09)."""
+
+    @pytest.fixture
+    def mixed(self, organization_a: Organization) -> dict[str, Any]:
+        tri = _departamento(organization_a, external_id="dep-tri", nome="Triagem")
+        sup = _departamento(organization_a, external_id="dep-sup", nome="Suporte")
+        # Bot "Felipe": deflexão boa (resolveu) mas empatia baixa.
+        bot_at = _atendimento(
+            organization_a, external_id="b1", departamento=tri,
+            atendente_external_id="bot-fe", atendente_nome="Felipe",
+        )
+        _review(organization_a, bot_at, overall_score=55, tom=2, empatia=1,
+                resolveu=True, categoria="2ª via")
+        # Humano "Maria": resolveu, boa qualidade.
+        hum_at = _atendimento(
+            organization_a, external_id="h1", departamento=sup,
+            atendente_external_id="ag-1", atendente_nome="Atendente Maria",
+        )
+        _review(organization_a, hum_at, overall_score=85)
+        return {"bot_at": bot_at, "hum_at": hum_at}
+
+    def test_summary_splits_bot_and_human(
+        self, organization_a: Organization, mixed: dict[str, Any]
+    ) -> None:
+        data = compute_qa_overview(organization_a, months=3)
+        assert data["cohorts_summary"]["bot"]["n"] == 1
+        assert data["cohorts_summary"]["human"]["n"] == 1
+        assert data["cohorts_summary"]["bot"]["avg_score"] == 55
+        assert data["cohorts_summary"]["human"]["avg_score"] == 85
+
+    def test_default_cohort_excludes_bot(
+        self, organization_a: Organization, mixed: dict[str, Any]
+    ) -> None:
+        data = compute_qa_overview(organization_a, months=3)
+        assert data["selected_cohort"] == "human"
+        assert data["total_reviews"] == 1
+        nomes = [a["atendente_nome"] for a in data["by_atendente"]]
+        assert "Felipe" not in nomes
+        assert "Atendente Maria" in nomes
+
+    def test_bot_cohort_isolates_bot(
+        self, organization_a: Organization, mixed: dict[str, Any]
+    ) -> None:
+        data = compute_qa_overview(organization_a, months=3, cohort="bot")
+        assert data["total_reviews"] == 1
+        assert data["by_atendente"][0]["atendente_nome"] == "Felipe"
+        assert data["by_atendente"][0]["is_bot"] is True
+
+    def test_all_cohort_includes_both(
+        self, organization_a: Organization, mixed: dict[str, Any]
+    ) -> None:
+        data = compute_qa_overview(organization_a, months=3, cohort="all")
+        assert data["total_reviews"] == 2
+
+
+@pytest.mark.django_db
 @pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
 class TestQaSupervisorView:
     def test_requires_login(self, client: Any) -> None:

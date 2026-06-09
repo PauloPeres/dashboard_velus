@@ -5029,23 +5029,37 @@ _RISK_LEVEL_LABELS = {"HIGH": "Alto", "MEDIUM": "Médio", "LOW": "Baixo"}
 # Departamentos cuja simples presença já é sinal de fricção (sem acento/caixa).
 _SENSITIVE_DEPARTAMENTOS = {"ouvidoria", "renegociacoes", "renegociacao"}
 
-# Pesos dos sinais objetivos de "conversa ruim" (somados, cap 100).
+# Triagem = porta de entrada do bot/menu. Voltar pra cá não é falha de
+# atendimento (é uso rotineiro do autoatendimento) — fica fora da reabertura.
+_TRIAGEM_DEPARTAMENTOS = {"triagem"}
+
+# Atendentes que são BOTS de autoatendimento, não pessoas (confirmado c/ Paulo
+# 2026-06-09: "Gi" e "Felipe"). Conversa resolvida pelo bot é deflexão bem
+# sucedida, NÃO conversa ruim — o que qualifica é o desfecho (resolveu/nota),
+# nunca o fato de ter sido o bot. Match por nome normalizado: o bot "Felipe"
+# não colide com a pessoa "Felipe P." (vira "felipe p.").
+_BOT_ATENDENTE_NOMES = {"gi", "felipe"}
+
+# Pesos dos sinais de "conversa ruim" (somados, cap 100). Âncora no DESFECHO:
+# não-resolveu (juiz QA) e nota baixa do cliente pesam mais que os proxies.
 _BAD_SIGNAL_WEIGHTS = {
-    "low_rating": 40,  # nota likert 1-2
+    "nao_resolveu": 40,  # juiz QA disse que não resolveu (desfecho; bot-aware)
+    "low_rating": 40,  # nota likert 1-2 (voz do cliente)
     "mid_rating": 15,  # nota likert 3
+    "reabertura": 25,  # voltou ao MESMO setor (humano) dentro da janela
     "sensitive_dep": 25,  # Ouvidoria / Renegociações
     "high_tma": 20,  # resolução acima de _BAD_TMA_THRESHOLD_H
-    "reincidencia": 25,  # cliente reincidente na janela
 }
 _BAD_SIGNAL_LABELS = {
+    "nao_resolveu": "Não resolveu (QA)",
     "low_rating": "Nota baixa (1-2)",
     "mid_rating": "Nota média (3)",
+    "reabertura": "Reabertura <7d (mesmo setor)",
     "sensitive_dep": "Departamento sensível",
     "high_tma": "Tempo de resolução alto",
-    "reincidencia": "Cliente reincidente",
 }
 _BAD_TMA_THRESHOLD_H = 72.0  # 3 dias
-_BAD_REINCIDENCIA_MIN = 3
+_REABERTURA_JANELA_DIAS = 7
 
 
 def _strip_accents(text: str) -> str:
@@ -5054,6 +5068,15 @@ def _strip_accents(text: str) -> str:
     return "".join(
         c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)
     )
+
+
+def _is_bot_atendente(nome: str | None) -> bool:
+    """True se o atendente é um bot de autoatendimento (Gi/Felipe), não pessoa."""
+    return _strip_accents(nome or "").strip().lower() in _BOT_ATENDENTE_NOMES
+
+
+def _is_triagem(dep_nome: str | None) -> bool:
+    return _strip_accents(dep_nome or "").strip().lower() in _TRIAGEM_DEPARTAMENTOS
 
 
 @allow_cross_tenant(reason="aggregation read-only; org passada explicitamente")
@@ -5066,12 +5089,17 @@ def compute_bad_conversations(
 ) -> dict[str, Any]:
     """Ranqueia atendimentos "ruins" por receita em risco (MRR × score) — issue #49.
 
-    Score heurístico (sem ML) a partir de sinais objetivos: nota likert baixa,
-    departamento sensível (Ouvidoria/Renegociações), tempo de resolução alto e
-    reincidência do cliente na janela. Cruza com o MRR e o risco de churn do
-    cliente (via FK resolvida por documento) e prioriza por **MRR × score** —
-    quem dói mais perder sobe ao topo.
+    Qualifica pela ótica de CX, ancorando no **desfecho**, não em quem atendeu:
+    não-resolveu (juiz QA) e nota baixa do cliente pesam mais; reabertura no
+    mesmo setor (humano) ≤7d é proxy de FCR falho; depto sensível e TMA alto
+    entram com peso menor. **Atendimento resolvido pelo bot (Gi/Felipe) não é
+    conversa ruim** — só o desfecho qualifica, então o bot é excluído da
+    reabertura e do TMA. Cruza com MRR + risco de churn (FK por documento) e
+    prioriza por **MRR × score** — quem dói mais perder sobe ao topo.
     """
+    import bisect
+    from collections import defaultdict
+
     from apps.atendimento.infrastructure.models import Atendimento, Departamento
     from apps.customers.infrastructure.models import Contract
 
@@ -5080,19 +5108,60 @@ def compute_bad_conversations(
         hour=0, minute=0, second=0, microsecond=0
     )
 
-    # Reincidência: nº de atendimentos por documento na janela (escopo da org
-    # inteira, mesmo com filtro de departamento — captura múltiplos contatos).
-    recont_map = {
-        r["customer_document"]: r["n"]
-        for r in (
-            Atendimento.objects.filter(
-                organization=organization, opened_at__gte=window_start
-            )
-            .exclude(customer_document="")
-            .values("customer_document")
-            .annotate(n=Count("id"))
+    # Reabertura (FCR falho): cliente voltou pro MESMO departamento, atendido por
+    # HUMANO, dentro de _REABERTURA_JANELA_DIAS. Exclui Triagem (menu do bot) e
+    # conversas atendidas por bot — repetir o autoatendimento ou escalar
+    # bot→humano é fluxo normal, não falha. Só conta "falei com humano, não
+    # resolveu, voltei a falar com humano". Escopo da org inteira (mesmo com
+    # filtro de depto) pra não perder o contato anterior.
+    human_contacts: dict[tuple[str, int], list[Any]] = defaultdict(list)
+    for c in (
+        Atendimento.objects.filter(
+            organization=organization, opened_at__gte=window_start
         )
-    }
+        .exclude(customer_document="")
+        .exclude(opened_at__isnull=True)
+        .exclude(departamento__isnull=True)
+        .values(
+            "customer_document", "departamento_id", "departamento__nome",
+            "atendente_nome", "opened_at",
+        )
+    ):
+        if _is_triagem(c["departamento__nome"]) or _is_bot_atendente(
+            c["atendente_nome"]
+        ):
+            continue
+        human_contacts[(c["customer_document"], c["departamento_id"])].append(
+            c["opened_at"]
+        )
+    for times in human_contacts.values():
+        times.sort()
+
+    janela = timedelta(days=_REABERTURA_JANELA_DIAS)
+
+    def _is_reabertura(doc: str, dep_id: int | None, opened_at: Any) -> bool:
+        """Há um contato HUMANO anterior no mesmo setor dentro da janela?"""
+        if not doc or dep_id is None or opened_at is None:
+            return False
+        times = human_contacts.get((doc, dep_id))
+        if not times:
+            return False
+        i = bisect.bisect_left(times, opened_at)  # só os estritamente anteriores
+        for j in range(i - 1, -1, -1):
+            delta = opened_at - times[j]
+            if delta <= janela:
+                return True
+            break  # lista ordenada: o anterior mais próximo já passou da janela
+        return False
+
+    # Desfecho do juiz de QA (1 review por atendimento): resolveu? Só lê o que já
+    # foi avaliado — sem chamar LLM.
+    qa_resolveu = dict(
+        QAReview.objects.filter(
+            organization=organization,
+            atendimento__opened_at__gte=window_start,
+        ).values_list("atendimento_id", "resolveu")
+    )
 
     base = Atendimento.objects.filter(
         organization=organization, opened_at__gte=window_start
@@ -5102,7 +5171,8 @@ def compute_bad_conversations(
 
     rows = base.values(
         "id", "protocol", "status", "canal", "rating", "opened_at", "closed_at",
-        "customer_id", "customer_name", "customer_document", "departamento__nome",
+        "customer_id", "customer_name", "customer_document",
+        "departamento_id", "departamento__nome", "atendente_nome",
     )
 
     scored: list[dict[str, Any]] = []
@@ -5110,6 +5180,13 @@ def compute_bad_conversations(
     for r in rows:
         signals: list[str] = []
         score = 0
+        is_bot = _is_bot_atendente(r["atendente_nome"])
+
+        # Desfecho (juiz QA): não resolveu → sinal forte. Bot-aware: o juiz lê a
+        # conversa, então se o bot entregou o que o cliente queria, marca resolveu.
+        if qa_resolveu.get(r["id"]) is False:
+            signals.append("nao_resolveu")
+            score += _BAD_SIGNAL_WEIGHTS["nao_resolveu"]
 
         rating = r["rating"]
         if rating is not None:
@@ -5128,15 +5205,16 @@ def compute_bad_conversations(
         tma_h: float | None = None
         if r["opened_at"] and r["closed_at"]:
             tma_h = (r["closed_at"] - r["opened_at"]).total_seconds() / 3600
-            if tma_h >= _BAD_TMA_THRESHOLD_H:
+            # TMA não pune o bot: conversa de autoatendimento fica aberta sem ser
+            # "atendimento humano lento".
+            if tma_h >= _BAD_TMA_THRESHOLD_H and not is_bot:
                 signals.append("high_tma")
                 score += _BAD_SIGNAL_WEIGHTS["high_tma"]
 
         doc = r["customer_document"]
-        reinc = recont_map.get(doc, 0) if doc else 0
-        if reinc >= _BAD_REINCIDENCIA_MIN:
-            signals.append("reincidencia")
-            score += _BAD_SIGNAL_WEIGHTS["reincidencia"]
+        if _is_reabertura(doc, r["departamento_id"], r["opened_at"]):
+            signals.append("reabertura")
+            score += _BAD_SIGNAL_WEIGHTS["reabertura"]
 
         if not signals:
             continue
@@ -5158,7 +5236,7 @@ def compute_bad_conversations(
                 "customer_name": r["customer_name"] or "—",
                 "customer_document": doc,
                 "tma_str": _fmt_duration(tma_h * 3600 if tma_h else None),
-                "reincidencia": reinc,
+                "is_bot": is_bot,
                 "bad_score": score,
                 "signals": [
                     {"code": s, "label": _BAD_SIGNAL_LABELS[s]} for s in signals
@@ -5303,36 +5381,36 @@ def _avg1(value: float | None) -> float | None:
     return round(value, 1) if value is not None else None
 
 
-@allow_cross_tenant(reason="aggregation read-only; org passada explicitamente")
-def compute_qa_overview(
-    organization: Organization,
-    *,
-    months: int = 3,
-    departamento_id: int | None = None,
-    worst_limit: int = 20,
-) -> dict[str, Any]:
-    """Scorecard da IA supervisora de QA (LLM-as-judge) — issue #51.
+# Coortes de QA: o bot (Gi/Felipe) é avaliado SEPARADO das pessoas — a "sensação
+# de qualidade" do autoatendimento é outra coisa que a do atendimento humano.
+_QA_COHORTS = {"human": "Humanos", "bot": "Bot", "all": "Todos"}
 
-    Agrega os `QAReview` já persistidos (1 por atendimento) na janela: KPIs
-    globais, médias por atendente, distribuição de categorias e as piores
-    conversas (menor score) com link pro drill-down. Não chama o LLM — só lê o
-    que o juiz já avaliou. A janela usa `atendimento.opened_at` pra casar com o
-    seletor de período dos outros painéis de atendimento.
-    """
-    from apps.atendimento.infrastructure.models import Departamento
 
-    now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
+def _qa_bot_q() -> Q:
+    """Q que casa `QAReview` atendidos por bot (por nome de atendente)."""
+    q = Q()
+    for nome in _BOT_ATENDENTE_NOMES:
+        q |= Q(atendente_nome__iexact=nome)
+    return q
+
+
+def _qa_cohort_headline(qs: Any) -> dict[str, Any]:
+    """Resumo de uma coorte: nº avaliadas, score médio e % resolvido."""
+    a = qs.aggregate(
+        n=Count("id"),
+        avg=Avg("overall_score"),
+        nres=Count("id", filter=Q(resolveu=True)),
     )
+    n = a["n"] or 0
+    return {
+        "n": n,
+        "avg_score": round(a["avg"] or 0),
+        "pct_resolveu": round(100 * a["nres"] / n) if n else 0,
+    }
 
-    base = QAReview.objects.filter(
-        organization=organization,
-        atendimento__opened_at__gte=window_start,
-    )
-    if departamento_id is not None:
-        base = base.filter(atendimento__departamento_id=departamento_id)
 
+def _qa_detail_stats(base: Any, worst_limit: int) -> dict[str, Any]:
+    """KPIs + scorecard por atendente + categorias + piores de uma coorte."""
     total = base.count()
     agg = base.aggregate(
         avg_score=Avg("overall_score"),
@@ -5362,6 +5440,7 @@ def compute_qa_overview(
             {
                 "atendente_nome": r["atendente_nome"] or "—",
                 "atendente_external_id": r["atendente_external_id"],
+                "is_bot": _is_bot_atendente(r["atendente_nome"]),
                 "n": n,
                 "avg_score": round(r["avg_score"] or 0),
                 "avg_tom": _avg1(r["avg_tom"]),
@@ -5420,6 +5499,68 @@ def compute_qa_overview(
         "by_atendente": by_atendente,
         "categorias": categorias,
         "worst": worst,
+    }
+
+
+@allow_cross_tenant(reason="aggregation read-only; org passada explicitamente")
+def compute_qa_overview(
+    organization: Organization,
+    *,
+    months: int = 3,
+    departamento_id: int | None = None,
+    cohort: str = "human",
+    worst_limit: int = 20,
+) -> dict[str, Any]:
+    """Scorecard da IA supervisora de QA (LLM-as-judge) — issue #51.
+
+    Agrega os `QAReview` já persistidos (1 por atendimento) na janela: KPIs,
+    médias por atendente, categorias e as piores conversas (menor score). Não
+    chama o LLM — só lê o que o juiz já avaliou. A janela usa
+    `atendimento.opened_at` pra casar com o seletor de período.
+
+    **Coortes (Paulo 2026-06-09):** o bot de autoatendimento (Gi/Felipe) é
+    avaliado SEPARADO das pessoas — a sensação de qualidade do bot e a do humano
+    são medidas distintas. `cohort` ∈ {human, bot, all} escolhe o recorte do
+    detalhamento; `cohorts_summary` traz sempre o headline das duas pra
+    comparação lado a lado. Default = humanos (foco de coaching).
+    """
+    from apps.atendimento.infrastructure.models import Departamento
+
+    now = timezone.now()
+    window_start = (now - relativedelta(months=months)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    base = QAReview.objects.filter(
+        organization=organization,
+        atendimento__opened_at__gte=window_start,
+    )
+    if departamento_id is not None:
+        base = base.filter(atendimento__departamento_id=departamento_id)
+
+    bot_q = _qa_bot_q()
+    bot_qs = base.filter(bot_q)
+    human_qs = base.exclude(bot_q)
+    cohorts_summary = {
+        "bot": _qa_cohort_headline(bot_qs),
+        "human": _qa_cohort_headline(human_qs),
+    }
+
+    if cohort == "bot":
+        scoped = bot_qs
+    elif cohort == "all":
+        scoped = base
+    else:
+        cohort = "human"
+        scoped = human_qs
+
+    stats = _qa_detail_stats(scoped, worst_limit)
+
+    return {
+        **stats,
+        "cohorts_summary": cohorts_summary,
+        "selected_cohort": cohort,
+        "cohort_label": _QA_COHORTS[cohort],
         "departamentos": list(
             Departamento.objects.filter(organization=organization)
             .order_by("nome")

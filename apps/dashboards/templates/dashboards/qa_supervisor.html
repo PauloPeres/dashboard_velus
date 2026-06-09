@@ -8,7 +8,7 @@
 <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
   <div>
     <h1 class="text-2xl font-bold text-gray-900">QA de Atendimento — IA supervisora</h1>
-    <p class="text-xs text-gray-400 mt-0.5">Conversas fechadas avaliadas por LLM-as-judge (PII redigida) contra rubrica de qualidade</p>
+    <p class="text-xs text-gray-400 mt-0.5">Conversas fechadas avaliadas por LLM-as-judge (PII redigida) — bot e humano medidos separadamente</p>
   </div>
   <!-- Filtro de departamento -->
   <div class="relative">
@@ -32,12 +32,62 @@
   </div>
 </div>
 
+<!-- Comparativo de coortes: sensação de qualidade Humano vs Bot -->
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+  {% with h=cohorts_summary.human b=cohorts_summary.bot %}
+  <div class="bg-white rounded-lg shadow-sm border {% if selected_cohort == 'human' %}border-blue-300 ring-1 ring-blue-200{% else %}border-gray-200{% endif %} p-5">
+    <div class="flex items-center justify-between mb-2">
+      <p class="text-sm font-semibold text-gray-700">👤 Humanos</p>
+      <span class="text-xs text-gray-400">{{ h.n|intcomma }} avaliadas</span>
+    </div>
+    <div class="flex items-end gap-6">
+      <div>
+        <p class="text-2xl font-bold {% if h.avg_score >= 70 %}text-emerald-600{% elif h.avg_score >= 50 %}text-orange-500{% else %}text-red-600{% endif %}">{{ h.avg_score }}</p>
+        <p class="text-xs text-gray-500">score médio</p>
+      </div>
+      <div>
+        <p class="text-2xl font-bold text-gray-900">{{ h.pct_resolveu }}%</p>
+        <p class="text-xs text-gray-500">resolvido</p>
+      </div>
+    </div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm border {% if selected_cohort == 'bot' %}border-blue-300 ring-1 ring-blue-200{% else %}border-gray-200{% endif %} p-5">
+    <div class="flex items-center justify-between mb-2">
+      <p class="text-sm font-semibold text-gray-700">🤖 Bot (autoatendimento)</p>
+      <span class="text-xs text-gray-400">{{ b.n|intcomma }} avaliadas</span>
+    </div>
+    <div class="flex items-end gap-6">
+      <div>
+        <p class="text-2xl font-bold {% if b.avg_score >= 70 %}text-emerald-600{% elif b.avg_score >= 50 %}text-orange-500{% else %}text-red-600{% endif %}">{{ b.avg_score }}</p>
+        <p class="text-xs text-gray-500">score médio</p>
+      </div>
+      <div>
+        <p class="text-2xl font-bold text-gray-900">{{ b.pct_resolveu }}%</p>
+        <p class="text-xs text-gray-500">resolvido (deflexão)</p>
+      </div>
+    </div>
+  </div>
+  {% endwith %}
+</div>
+
+<!-- Seletor de coorte para o detalhe -->
+<div class="flex items-center gap-2 mb-4">
+  <span class="text-xs text-gray-400 mr-1">Detalhar:</span>
+  <button onclick="setCohort('human')" class="text-xs px-3 py-1.5 rounded-full border {% if selected_cohort == 'human' %}bg-blue-600 text-white border-blue-600{% else %}bg-white text-gray-600 border-gray-200 hover:border-gray-300{% endif %}">👤 Humanos</button>
+  <button onclick="setCohort('bot')" class="text-xs px-3 py-1.5 rounded-full border {% if selected_cohort == 'bot' %}bg-blue-600 text-white border-blue-600{% else %}bg-white text-gray-600 border-gray-200 hover:border-gray-300{% endif %}">🤖 Bot</button>
+  <button onclick="setCohort('all')" class="text-xs px-3 py-1.5 rounded-full border {% if selected_cohort == 'all' %}bg-blue-600 text-white border-blue-600{% else %}bg-white text-gray-600 border-gray-200 hover:border-gray-300{% endif %}">Todos</button>
+</div>
+
 {% if total_reviews == 0 %}
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-10 text-center">
-  <p class="text-gray-500">Nenhuma conversa avaliada no período.</p>
+  <p class="text-gray-500">Nenhuma conversa avaliada (<strong>{{ cohort_label|lower }}</strong>) no período.</p>
   <p class="text-xs text-gray-400 mt-1">A IA supervisora roda por amostragem; quando <code>QA_LLM_ENABLED</code> estiver ativo, as avaliações aparecem aqui.</p>
 </div>
 {% else %}
+
+{% if selected_cohort == 'bot' %}
+<p class="text-xs text-gray-400 mb-3">O bot é avaliado pela mesma rubrica por ora — priorize <strong>% resolvido</strong> (deflexão) sobre tom/empatia.</p>
+{% endif %}
 
 <!-- KPI Cards -->
 <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
@@ -181,6 +231,11 @@
     } else {
       url.searchParams.delete("departamento");
     }
+    window.location.href = url.toString();
+  }
+  function setCohort(value) {
+    var url = new URL(window.location.href);
+    url.searchParams.set("cohort", value);
     window.location.href = url.toString();
   }
 </script>

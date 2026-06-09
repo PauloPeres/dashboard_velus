@@ -54,6 +54,7 @@ def _atendimento(
     rating: int | None = None,
     opened_offset_days: int = 5,
     resolution_hours: float | None = None,
+    atendente_nome: str = "",
 ) -> Atendimento:
     set_current_organization(org)
     now = timezone.now()
@@ -74,6 +75,7 @@ def _atendimento(
         canal="whatsapp",
         protocol=f"OPA-{external_id}",
         rating=rating,
+        atendente_nome=atendente_nome,
         opened_at=opened_at,
         closed_at=closed_at,
     )
@@ -168,6 +170,90 @@ class TestConversasRuinsView:
         resp = client.get("/operations/conversas-ruins/")
         assert resp.status_code == 200
         assert b"Nenhuma conversa ruim no per" in resp.content
+
+
+@pytest.mark.django_db
+class TestQualificacaoConversaRuim:
+    """Requalificação CX (itens 1+2): desfecho > proxy; bot não é conversa ruim."""
+
+    def _codes(self, rows: list[dict[str, Any]], atendimento_id: int) -> set[str]:
+        for r in rows:
+            if r["atendimento_id"] == atendimento_id:
+                return {s["code"] for s in r["signals"]}
+        return set()
+
+    def test_bot_resolvido_nao_e_ruim(self, organization_a: Organization) -> None:
+        from apps.analytics.application.aggregations import compute_bad_conversations
+
+        tri = _departamento(organization_a, external_id="dep-tri", nome="Triagem")
+        cli = _customer(organization_a, document="44444444444", name="Cliente Bot")
+        # Conversa longa atendida pelo bot "Felipe" na Triagem: TMA alto não pune.
+        at = _atendimento(
+            organization_a, external_id="bot1", departamento=tri, customer=cli,
+            document="44444444444", atendente_nome="Felipe", resolution_hours=200,
+        )
+        data = compute_bad_conversations(organization_a)
+        # Sem nota baixa, sem QA, bot+Triagem → nenhum sinal → fora da lista.
+        assert self._codes(data["rows"], at.id) == set()
+
+    def test_reabertura_so_entre_humanos_mesmo_setor(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.analytics.application.aggregations import compute_bad_conversations
+
+        sup = _departamento(organization_a, external_id="dep-sup2", nome="Suporte")
+        cli = _customer(organization_a, document="55555555555", name="Cliente Volta")
+        _atendimento(
+            organization_a, external_id="r1", departamento=sup, customer=cli,
+            document="55555555555", atendente_nome="Alice", opened_offset_days=8,
+            resolution_hours=1,
+        )
+        segundo = _atendimento(
+            organization_a, external_id="r2", departamento=sup, customer=cli,
+            document="55555555555", atendente_nome="Alice", opened_offset_days=4,
+            resolution_hours=1,
+        )
+        data = compute_bad_conversations(organization_a)
+        # 2º contato humano no mesmo setor < 7d depois do 1º → reabertura.
+        assert "reabertura" in self._codes(data["rows"], segundo.id)
+
+    def test_reentrada_no_bot_nao_e_reabertura(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.analytics.application.aggregations import compute_bad_conversations
+
+        tri = _departamento(organization_a, external_id="dep-tri2", nome="Triagem")
+        cli = _customer(organization_a, document="66666666666", name="Cliente Menu")
+        _atendimento(
+            organization_a, external_id="m1", departamento=tri, customer=cli,
+            document="66666666666", atendente_nome="Gi", opened_offset_days=6,
+            resolution_hours=1,
+        )
+        segundo = _atendimento(
+            organization_a, external_id="m2", departamento=tri, customer=cli,
+            document="66666666666", atendente_nome="Gi", opened_offset_days=3,
+            resolution_hours=1,
+        )
+        data = compute_bad_conversations(organization_a)
+        # Reentrar no menu do bot 2x não é falha → não vira conversa ruim.
+        assert self._codes(data["rows"], segundo.id) == set()
+
+    def test_nao_resolveu_do_juiz_qa_pesa(self, organization_a: Organization) -> None:
+        from apps.analytics.application.aggregations import compute_bad_conversations
+        from apps.analytics.infrastructure.models import QAReview
+
+        sup = _departamento(organization_a, external_id="dep-sup3", nome="Suporte")
+        cli = _customer(organization_a, document="77777777777", name="Cliente NaoRes")
+        at = _atendimento(
+            organization_a, external_id="q1", departamento=sup, customer=cli,
+            document="77777777777", atendente_nome="Marco", resolution_hours=1,
+        )
+        QAReview.objects.create(
+            organization=organization_a, atendimento=at, resolveu=False,
+            sla_ok=True, overall_score=30, reviewed_at=timezone.now(),
+        )
+        data = compute_bad_conversations(organization_a)
+        assert "nao_resolveu" in self._codes(data["rows"], at.id)
 
 
 @pytest.mark.django_db
