@@ -33,6 +33,11 @@ from apps.analytics.application.churn_ml import (
     train_churn_model,
 )
 from apps.analytics.application.churn_risk import compute_churn_risk_scores
+from apps.analytics.application.dissatisfaction import (
+    compute_dissatisfaction,
+    compute_dissatisfaction_scores,
+    message_is_negative,
+)
 from apps.analytics.infrastructure.models import ChurnRiskScore
 from apps.customers.domain.dto import ContractDTO, CustomerDTO
 from apps.financial.domain.dto import InvoiceDTO
@@ -489,6 +494,114 @@ class TestOsSignals:
         tickets = [self._os(60, "10"), self._os(20, "10")]
         _recent, recurrence = _os_signals(tickets, self.R)
         assert recurrence == 0.0
+
+
+# =============================================================================
+# Insatisfação nas conversas (#50) — léxico × likert
+# =============================================================================
+class TestDissatisfactionScoring:
+    """Funções puras de pontuação de insatisfação (sem DB)."""
+
+    R = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+
+    def test_lexicon_flags_negative_message(self) -> None:
+        assert message_is_negative("minha internet CAIU de novo, péssimo")
+        assert message_is_negative("o serviço está horrível e lento")
+        # Acento-insensível: "péssimo" casa mesmo sem acento no léxico.
+        assert message_is_negative("que coisa pessima")
+
+    def test_lexicon_ignores_neutral_message(self) -> None:
+        assert not message_is_negative("obrigado, ficou tudo certo")
+        assert not message_is_negative("bom dia, gostaria de uma segunda via")
+        # "cancela" não dispara dentro de "cancelamento" só por substring? Aqui
+        # a frase é neutra e não tem termo do léxico.
+        assert not message_is_negative("")
+
+    def test_score_zero_without_data(self) -> None:
+        assert compute_dissatisfaction([], [], self.R) == 0.0
+
+    def test_score_rises_with_negative_messages(self) -> None:
+        msgs = [
+            (self.R - timedelta(days=2), "internet caiu de novo"),
+            (self.R - timedelta(days=1), "péssimo atendimento"),
+        ]
+        score = compute_dissatisfaction(msgs, [], self.R)
+        # 100% das mensagens negativas → 0.6 (peso da fração).
+        assert score == pytest.approx(0.6)
+
+    def test_low_rating_contributes(self) -> None:
+        # Sem mensagens, mas nota 1 → componente likert máximo (0.4).
+        score = compute_dissatisfaction([], [(self.R - timedelta(days=1), 1)], self.R)
+        assert score == pytest.approx(0.4)
+
+    def test_point_in_time_ignores_future(self) -> None:
+        # Mensagem negativa DEPOIS de `r` não conta (sem vazamento).
+        msgs = [(self.R + timedelta(days=5), "péssimo, caiu tudo")]
+        assert compute_dissatisfaction(msgs, [], self.R) == 0.0
+
+
+@pytest.mark.django_db
+@pytest.mark.e2e
+class TestDissatisfactionFeature:
+    """Integração: score por cliente, feature de churn e sinal de regra."""
+
+    def _seed_unhappy_conversation(self, org: Organization, customer_ext: str) -> None:
+        from apps.atendimento.infrastructure.models import (
+            Atendimento,
+            Mensagem,
+        )
+        from apps.customers.infrastructure.models import Customer
+
+        set_current_organization(org)
+        customer = Customer.objects.get(external_id=customer_ext)
+        now = timezone.now()
+        at = Atendimento.objects.create(
+            organization=org, source_type="OPA", external_id=f"at-{customer_ext}",
+            customer=customer, customer_document=customer.document,
+            customer_name=customer.name, status="CLOSED", canal="whatsapp",
+            protocol=f"OPA-{customer_ext}", rating=1,
+            opened_at=now - timedelta(days=3),
+            closed_at=now - timedelta(days=2),
+        )
+        for i, texto in enumerate(
+            ["minha internet caiu de novo", "isso é péssimo, quero cancelar"]
+        ):
+            Mensagem.objects.create(
+                organization=org, source_type="OPA",
+                external_id=f"m-{customer_ext}-{i}", atendimento=at,
+                atendimento_external_id=at.external_id, direction="CLIENT",
+                texto=texto, sent_at=now - timedelta(days=3, hours=i),
+            )
+
+    def test_score_exposed_per_customer(self, ml_population: Organization) -> None:
+        from apps.customers.infrastructure.models import Customer
+
+        self._seed_unhappy_conversation(ml_population, "ac-0")
+        scores = compute_dissatisfaction_scores(ml_population)
+        set_current_organization(ml_population)
+        cid = Customer.objects.get(external_id="ac-0").id
+        # 100% negativas (0.6) + nota 1 (0.4) → capado em 1.0.
+        assert scores[cid] == pytest.approx(1.0)
+
+    def test_feature_present_in_vectors(self, ml_population: Organization) -> None:
+        self._seed_unhappy_conversation(ml_population, "ac-0")
+        features, _churned, _active = compute_features(ml_population)
+        # Toda linha tem a feature; clientes sem conversa ficam em 0.
+        assert all("dissatisfaction_score" in vec for vec in features.values())
+        from apps.customers.infrastructure.models import Customer
+
+        set_current_organization(ml_population)
+        cid = Customer.objects.get(external_id="ac-0").id
+        assert features[cid]["dissatisfaction_score"] == pytest.approx(1.0)
+
+    def test_signal_fires_for_unhappy_customer(
+        self, ml_population: Organization
+    ) -> None:
+        self._seed_unhappy_conversation(ml_population, "ac-0")
+        compute_churn_risk_scores(ml_population)
+        score = _scores_by_ext(ml_population)["ac-0"]
+        codes = {s["code"] for s in score.signals}
+        assert "DISSATISFACTION" in codes
 
 
 # =============================================================================

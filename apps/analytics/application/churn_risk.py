@@ -10,6 +10,7 @@ sincronizados (sem ML, sem fontes novas) e persiste em `ChurnRiskScore`:
     4. Downgrade de plano (valor mensal caiu vs anterior)   peso 20
     5. Offline com contrato ativo                           peso 15
     6. Queda brusca de consumo de banda (≥ 70% em 30d)      peso 15
+    7. Insatisfação nas conversas (léxico PT-BR × likert)   peso 15
 
 Score = soma dos pesos disparados (capado em 100). Nível:
     HIGH ≥ 50 · MEDIUM ≥ 25 · LOW > 0
@@ -50,6 +51,7 @@ W_FREQUENT_TICKETS = 20
 W_DOWNGRADE = 20
 W_OFFLINE = 15
 W_BANDWIDTH_DROP = 15
+W_DISSATISFACTION = 15  # tom negativo nas conversas + nota likert baixa (#50)
 W_ML = 30  # sinal de alta probabilidade prevista pelo modelo ML
 
 # ── ML ──────────────────────────────────────────────────────────────────
@@ -72,6 +74,9 @@ TICKETS_MIN = 3
 BANDWIDTH_WINDOW_DAYS = 30
 BANDWIDTH_DROP_RATIO = Decimal("0.3")  # recente < 30% do anterior = queda ≥ 70%
 BANDWIDTH_MIN_PRIOR_BYTES = 1_000_000_000  # 1 GB — evita ruído de base ínfima
+# Insatisfação: dispara só acima de meio índice — fração relevante de mensagens
+# negativas e/ou nota likert baixa. Abaixo disso é ruído de conversa pontual.
+DISSATISFACTION_MIN = 0.5
 
 LEVEL_HIGH_MIN = 50
 LEVEL_MEDIUM_MIN = 25
@@ -205,7 +210,10 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
     # ── Sinal 6: queda brusca de consumo de banda ───────────────────────
     _apply_bandwidth_drop_signal(organization, today, active_customers, signals)
 
-    # ── Sinal 7: ML — alta probabilidade prevista de churn ──────────────
+    # ── Sinal 7: insatisfação nas conversas (léxico × likert) ───────────
+    _apply_dissatisfaction_signal(organization, set(mrr.keys()), signals)
+
+    # ── Sinal 8: ML — alta probabilidade prevista de churn ──────────────
     # Complementar às regras: pode flagar clientes ativos sem sinal de regra.
     ml_probs = _apply_ml_signal(organization, active_customers, signals)
 
@@ -407,6 +415,38 @@ def _apply_bandwidth_drop_signal(
             "label": "Queda de consumo",
             "detail": f"Consumo de banda caiu {drop_pct}% no último mês",
             "weight": W_BANDWIDTH_DROP,
+        })
+
+
+def _apply_dissatisfaction_signal(
+    organization: Organization,
+    eligible: set[int],
+    signals: dict[int, list[dict[str, Any]]],
+) -> None:
+    """Dispara o sinal de insatisfação a partir do score de conversas (#50).
+
+    Score = fração de mensagens do cliente com tom negativo (léxico PT-BR)
+    combinada com nota likert baixa. Só dispara para clientes com receita em
+    risco (ACTIVE/BLOCKED) acima do limiar — conversa pontual ruim não conta.
+    """
+    from apps.analytics.application.dissatisfaction import (
+        compute_dissatisfaction_scores,
+    )
+
+    if not eligible:
+        return
+    scores = compute_dissatisfaction_scores(organization)
+    for cid, score in scores.items():
+        if cid not in eligible or score < DISSATISFACTION_MIN:
+            continue
+        signals[cid].append({
+            "code": "DISSATISFACTION",
+            "label": "Insatisfação nas conversas",
+            "detail": (
+                f"Índice de insatisfação {int(score * 100)}/100 — tom negativo "
+                f"nas mensagens e/ou nota baixa de atendimento"
+            ),
+            "weight": W_DISSATISFACTION,
         })
 
 

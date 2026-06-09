@@ -19,7 +19,7 @@ Features point-in-time (v3 — corrige o vazamento temporal do #15):
     existiria depois do ponto de observação:
         tenure_days · mrr · n_contracts · late_payments · tickets_per_year ·
         pay_delay_baseline · pay_delay_recent_dev ·
-        os_recent_90d · os_recurrence
+        os_recent_90d · os_recurrence · dissatisfaction_score
     Contagens acumuladas viram TAXAS normalizadas por tenure (v6 — corrige o
     artefato temporal do #3): `tickets_per_year` substitui o `tickets_total`
     cru, que crescia com a janela de observação (ativos vistos até hoje somam
@@ -31,9 +31,12 @@ Features point-in-time (v3 — corrige o vazamento temporal do #15):
     segue igual" não é punido — só o desvio do próprio padrão sinaliza risco.
     As de OS (v5) medem atrito operacional: volume de OS nos últimos 90 dias e
     OS recorrentes (mesmo assunto reincidindo em janela curta = serviço não
-    resolvido). Conexões e uso de banda ficam de fora por ora — os dados ainda
-    não têm série temporal/vínculo de cliente suficientes pra features sem
-    vazamento (ver #20).
+    resolvido). A de insatisfação (v7 — #50) mede o tom das conversas: fração
+    de mensagens do cliente com termos negativos (léxico PT-BR) combinada com
+    nota likert baixa, tudo point-in-time até a data de referência. Resolve a
+    feature de conversa antes deferida por falta de vínculo de cliente (#20).
+    Conexões e uso de banda ainda ficam de fora — os dados não têm série
+    temporal/vínculo de cliente suficientes pra features sem vazamento (#20).
     Assim os churned não têm faturas/chamados posteriores ao cancelamento
     "vazando" pro vetor, e os ativos refletem o estado de hoje — exatamente o
     estado em que serão pontuados em produção. A assimetria de calendário que
@@ -80,6 +83,7 @@ FEATURES = (
     "pay_delay_recent_dev",
     "os_recent_90d",
     "os_recurrence",
+    "dissatisfaction_score",
 )
 
 # Piso de tenure (dias) ao normalizar contagens acumuladas em taxas — evita que
@@ -223,6 +227,11 @@ def compute_features(
         churned  — clientes com label positivo (cancelaram)
         active   — clientes com contrato ACTIVE/BLOCKED (alvos do score)
     """
+    from apps.analytics.application.dissatisfaction import (
+        compute_dissatisfaction,
+        load_client_messages,
+        load_ratings,
+    )
     from apps.customers.infrastructure.models import Contract
     from apps.financial.infrastructure.models import Invoice
     from apps.helpdesk.infrastructure.models import Ticket
@@ -279,6 +288,12 @@ def compute_features(
         if cid is None:
             continue
         tickets_by_cid[cid].append((row["opened_at"], row["subject_id"] or ""))
+
+    # Conversas por cliente: mensagens do cliente (tom) e notas likert, pro
+    # score de insatisfação point-in-time (#50). Esparso por ora — clientes sem
+    # conversa ficam com score 0 (default do compute_dissatisfaction).
+    messages_by_cid = load_client_messages(organization)
+    ratings_by_cid = load_ratings(organization)
 
     features: dict[int, dict[str, float]] = {}
     for cid, clist in contracts_by_cid.items():
@@ -339,6 +354,11 @@ def compute_features(
         # Sinais operacionais de OS (recência + recorrência), point-in-time.
         os_recent_90d, os_recurrence = _os_signals(list(cust_tickets), r)
 
+        # Insatisfação nas conversas (léxico × likert), point-in-time até `r`.
+        dissatisfaction = compute_dissatisfaction(
+            messages_by_cid.get(cid, ()), ratings_by_cid.get(cid, ()), r
+        )
+
         features[cid] = {
             "tenure_days": float(tenure_days),
             "mrr": float(mrr_val),
@@ -349,6 +369,7 @@ def compute_features(
             "pay_delay_recent_dev": pay_recent_dev,
             "os_recent_90d": os_recent_90d,
             "os_recurrence": os_recurrence,
+            "dissatisfaction_score": dissatisfaction,
         }
 
     return features, churned, active
