@@ -14,6 +14,7 @@ import pytest
 
 from apps.atendimento.application.sync import run_opa_sync
 from apps.atendimento.domain.dto import (
+    AtendenteRefDTO,
     AtendimentoDTO,
     ClienteRefDTO,
     DepartamentoDTO,
@@ -156,6 +157,9 @@ class TestOpaSyncE2E:
                     external_id="cli-opaco-1", document="12345678901", nome="Bruna"
                 ),
             ],
+            atendentes=[
+                AtendenteRefDTO(external_id="u9", nome="Felipe"),
+            ],
             atendimentos=[
                 _atendimento_dto(
                     external_id="a1",
@@ -199,6 +203,8 @@ class TestOpaSyncE2E:
         assert a1.customer is not None
         assert a1.customer.name == "Bruna Carvalho"
         assert a1.departamento is not None  # FK de departamento resolvida
+        # nome do atendente resolvido pelo mapa id_opaco -> nome (u9 -> Felipe)
+        assert a1.atendente_nome == "Felipe"
         a2 = Atendimento.objects.get(external_id="a2")
         assert a2.customer is None  # documento desconhecido
 

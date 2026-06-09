@@ -102,16 +102,19 @@ class TestOpaAtendimentoSchema:
 
 class TestOpaMensagemSchema:
     def test_direction_from_tipo_destinatario(self) -> None:
-        agent = OpaMensagemSchema.model_validate(
+        # tipoDestinatario e o DESTINATARIO (quem recebe): destinatario
+        # `usuarios` (atendente) => mensagem do cliente; `clientes_users`
+        # (cliente) => mensagem do atendente.
+        from_client = OpaMensagemSchema.model_validate(
             {"_id": "m1", "id_rota": "a1", "mensagem": "oi", "tipo": "texto",
              "tipoDestinatario": "usuarios", "data": "2023-01-10T12:01:00.000Z"}
         )
-        client = OpaMensagemSchema.model_validate(
+        from_agent = OpaMensagemSchema.model_validate(
             {"_id": "m2", "id_rota": "a1", "tipoDestinatario": "clientes_users"}
         )
         system = OpaMensagemSchema.model_validate({"_id": "m3", "id_rota": "a1"})
-        assert agent.direction == "AGENT"
-        assert client.direction == "CLIENT"
+        assert from_client.direction == "CLIENT"
+        assert from_agent.direction == "AGENT"
         assert system.direction == "SYSTEM"
 
 
@@ -246,6 +249,22 @@ class TestOpaListAtendimentos:
         assert clientes[0].document == "12345678901"  # normalizado
         assert clientes[1].document == ""
 
+    def test_list_atendentes(self, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get(f"{API_URL}/usuario/").mock(
+            return_value=Response(
+                200,
+                json={"data": [
+                    {"_id": "u9", "nome": "Felipe", "status": "A", "tipo": "atendente"},
+                ]},
+            )
+        )
+
+        source = OpaAtendimentoSource(base_url=BASE_URL, token=TOKEN)
+        atendentes = list(source.list_atendentes())
+
+        assert atendentes[0].external_id == "u9"
+        assert atendentes[0].nome == "Felipe"
+
     def test_list_mensagens_maps_direction(
         self, respx_mock: respx.MockRouter
     ) -> None:
@@ -267,5 +286,7 @@ class TestOpaListAtendimentos:
 
         assert len(msgs) == 2
         assert all(isinstance(m, MensagemDTO) for m in msgs)
-        assert msgs[0].direction == "CLIENT"
-        assert msgs[1].direction == "AGENT"
+        # m1 destinatario=clientes_users => enviada pelo atendente; m2
+        # destinatario=usuarios => enviada pelo cliente.
+        assert msgs[0].direction == "AGENT"
+        assert msgs[1].direction == "CLIENT"

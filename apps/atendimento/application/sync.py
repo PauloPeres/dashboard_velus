@@ -74,6 +74,14 @@ def run_opa_sync(
         if ref.document:
             cliente_map[ref.external_id] = ref.document
 
+    # --- 2b. Mapa id_atendente_opaco -> nome --------------------------------
+    # A listagem de atendimentos so traz o atendente como id opaco; o nome vem
+    # da lista de usuarios (barata), igual ao mapa de clientes.
+    atendente_map: dict[str, str] = {}
+    for ref in source.list_atendentes():
+        if ref.nome:
+            atendente_map[ref.external_id] = ref.nome
+
     # --- 3. Atendimentos ----------------------------------------------------
     at_repo = AtendimentoRepository(organization)
     msg_repo = MensagemRepository(organization)
@@ -86,6 +94,10 @@ def run_opa_sync(
         document = dto.customer_document or cliente_map.get(dto.customer_external_id, "")
         if document and document != dto.customer_document:
             dto = replace(dto, customer_document=document)
+
+        nome = dto.atendente_nome or atendente_map.get(dto.atendente_external_id, "")
+        if nome and nome != dto.atendente_nome:
+            dto = replace(dto, atendente_nome=nome)
 
         atendimento, _created = at_repo.upsert_from_dto(dto, source_type=source_type)
         at_count += 1

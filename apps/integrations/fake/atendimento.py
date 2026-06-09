@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from apps.atendimento.domain.dto import (
+    AtendenteRefDTO,
     AtendimentoDTO,
     ClienteRefDTO,
     DepartamentoDTO,
@@ -16,6 +17,7 @@ from apps.integrations.shared.enums import Capability, SourceType
 
 _seed_departamentos: list[DepartamentoDTO] = []
 _seed_clientes: list[ClienteRefDTO] = []
+_seed_atendentes: list[AtendenteRefDTO] = []
 _seed_atendimentos: list[AtendimentoDTO] = []
 _seed_mensagens: dict[str, list[MensagemDTO]] = {}
 
@@ -27,6 +29,7 @@ class FakeAtendimentoSource:
     def __init__(self, **_credentials: Any) -> None:
         self._departamentos = list(_seed_departamentos)
         self._clientes = list(_seed_clientes)
+        self._atendentes = list(_seed_atendentes)
         self._atendimentos = list(_seed_atendimentos)
         self._mensagens = {k: list(v) for k, v in _seed_mensagens.items()}
 
@@ -37,20 +40,25 @@ class FakeAtendimentoSource:
         *,
         departamentos: list[DepartamentoDTO] | None = None,
         clientes: list[ClienteRefDTO] | None = None,
+        atendentes: list[AtendenteRefDTO] | None = None,
         atendimentos: list[AtendimentoDTO] | None = None,
         mensagens: dict[str, list[MensagemDTO]] | None = None,
     ) -> None:
-        global _seed_departamentos, _seed_clientes, _seed_atendimentos, _seed_mensagens
+        global _seed_departamentos, _seed_clientes, _seed_atendentes
+        global _seed_atendimentos, _seed_mensagens
         _seed_departamentos = list(departamentos or [])
         _seed_clientes = list(clientes or [])
+        _seed_atendentes = list(atendentes or [])
         _seed_atendimentos = list(atendimentos or [])
         _seed_mensagens = {k: list(v) for k, v in (mensagens or {}).items()}
 
     @classmethod
     def reset_seed(cls) -> None:
-        global _seed_departamentos, _seed_clientes, _seed_atendimentos, _seed_mensagens
+        global _seed_departamentos, _seed_clientes, _seed_atendentes
+        global _seed_atendimentos, _seed_mensagens
         _seed_departamentos = []
         _seed_clientes = []
+        _seed_atendentes = []
         _seed_atendimentos = []
         _seed_mensagens = {}
 
@@ -60,6 +68,9 @@ class FakeAtendimentoSource:
 
     def list_clientes(self) -> Iterator[ClienteRefDTO]:
         yield from self._clientes
+
+    def list_atendentes(self) -> Iterator[AtendenteRefDTO]:
+        yield from self._atendentes
 
     def list_atendimentos(
         self,

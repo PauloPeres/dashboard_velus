@@ -82,6 +82,18 @@ class OpaClienteSchema(_OpaBase):
         return _to_str(v)
 
 
+class OpaUsuarioSchema(_OpaBase):
+    """Registro de `usuario` (atendente/operador) — mapa id opaco -> nome."""
+
+    id: str = Field(validation_alias=AliasChoices("_id", "id"))
+    nome: str = Field(default="")
+
+    @field_validator("id", "nome", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+
 class OpaAtendimentoSchema(_OpaBase):
     """Registro de `atendimento` (conversa/chamado omnichannel).
 
@@ -171,7 +183,10 @@ class OpaAtendimentoSchema(_OpaBase):
 class OpaMensagemSchema(_OpaBase):
     """Registro de `mensagem` de atendimento.
 
-    `tipoDestinatario`: `usuarios` (atendente), `clientes_users` (cliente/bot).
+    `tipoDestinatario` e o tipo de quem RECEBE a mensagem (o destinatario),
+    nao de quem envia: `usuarios` = entregue a um atendente (logo ENVIADA pelo
+    cliente), `clientes_users` = entregue ao cliente (logo ENVIADA pelo
+    atendente/bot). Ver `direction`.
     """
 
     id: str = Field(validation_alias=AliasChoices("_id", "id"))
@@ -193,11 +208,14 @@ class OpaMensagemSchema(_OpaBase):
 
     @property
     def direction(self) -> str:
+        # tipoDestinatario e o DESTINATARIO (quem recebe), entao o autor e o
+        # oposto: destinatario `usuarios` (atendente) => ENVIADA pelo cliente;
+        # destinatario `clientes_users` (cliente) => ENVIADA pelo atendente/bot.
         dest = (self.tipoDestinatario or "").lower()
         if dest == "usuarios":
-            return "AGENT"
-        if dest == "clientes_users":
             return "CLIENT"
+        if dest == "clientes_users":
+            return "AGENT"
         return "SYSTEM"
 
     def get_extras(self) -> dict[str, Any]:

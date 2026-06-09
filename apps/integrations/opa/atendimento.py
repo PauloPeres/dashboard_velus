@@ -17,6 +17,7 @@ import structlog
 from pydantic import ValidationError
 
 from apps.atendimento.domain.dto import (
+    AtendenteRefDTO,
     AtendimentoDTO,
     ClienteRefDTO,
     DepartamentoDTO,
@@ -31,6 +32,7 @@ from .schemas import (
     OpaClienteSchema,
     OpaDepartamentoSchema,
     OpaMensagemSchema,
+    OpaUsuarioSchema,
 )
 
 _logger = structlog.get_logger(__name__)
@@ -96,6 +98,23 @@ class OpaAtendimentoSource:
                     document=normalize_document(schema.cpf_cnpj),
                     nome=schema.nome,
                 )
+
+    # -------------------------------------------------------------------------
+    # Atendentes (mapa id_opaco -> nome)
+    # -------------------------------------------------------------------------
+    def list_atendentes(self) -> Iterator[AtendenteRefDTO]:
+        with self._client_factory() as client:
+            for raw in client.paginate_opa("usuario/"):
+                try:
+                    schema = OpaUsuarioSchema.model_validate(raw)
+                except ValidationError as exc:
+                    _logger.warning(
+                        "opa_usuario_schema_invalid_skipped",
+                        external_id=raw.get("_id"),
+                        errors=exc.errors()[:1],
+                    )
+                    continue
+                yield AtendenteRefDTO(external_id=schema.id, nome=schema.nome)
 
     # -------------------------------------------------------------------------
     # Atendimentos

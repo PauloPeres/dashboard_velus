@@ -50,6 +50,22 @@ class ClienteRefDTO:
 
 
 @dataclass(frozen=True)
+class AtendenteRefDTO:
+    """Referencia leve de atendente/usuario na fonte — mapeia id opaco -> nome.
+
+    Usado pra preencher `atendente_nome` no atendimento: a listagem de
+    atendimentos so traz o atendente como id opaco, sem o nome.
+    """
+
+    external_id: str
+    nome: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.external_id:
+            raise ValueError("AtendenteRefDTO.external_id nao pode ser vazio")
+
+
+@dataclass(frozen=True)
 class AtendimentoDTO:
     """Representacao neutra de um atendimento/conversa de qualquer fonte externa."""
 

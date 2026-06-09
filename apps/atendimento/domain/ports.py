@@ -8,7 +8,13 @@ from typing import Protocol, runtime_checkable
 
 from apps.integrations.shared.enums import Capability, SourceType
 
-from .dto import AtendimentoDTO, ClienteRefDTO, DepartamentoDTO, MensagemDTO
+from .dto import (
+    AtendenteRefDTO,
+    AtendimentoDTO,
+    ClienteRefDTO,
+    DepartamentoDTO,
+    MensagemDTO,
+)
 
 
 @runtime_checkable
@@ -27,6 +33,14 @@ class AtendimentoSourcePort(Protocol):
 
         Lista barata usada pra montar o mapa que liga atendimento -> Customer
         sem precisar popular cada atendimento individualmente.
+        """
+        ...
+
+    def list_atendentes(self) -> Iterator[AtendenteRefDTO]:
+        """Itera referencias de atendente (id opaco -> nome).
+
+        Lista barata usada pra preencher o nome do atendente no atendimento,
+        que a listagem so traz como id opaco.
         """
         ...
 
