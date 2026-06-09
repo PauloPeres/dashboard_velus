@@ -22,7 +22,9 @@ from apps.analytics.application.aggregations import (
     compute_aging_distribution,
     compute_arpu_by_plan,
     compute_at_risk_contracts,
+    compute_atendimento_detail,
     compute_atendimento_triagem,
+    compute_bad_conversations,
     compute_bandwidth_summary,
     compute_blocked_at_risk_summary,
     compute_blocked_duration_distribution,
@@ -1310,6 +1312,81 @@ def atendimento(request: HttpRequest) -> HttpResponse:
             "status_chart_json": charts.atendimento_status_pie(data["status_dist"]),
             "trend_chart_json": charts.atendimento_monthly_trend(data["trend"]),
             "motivos_chart_json": charts.atendimento_top_motivos(data["top_motivos"]),
+        },
+    )
+
+
+@login_required
+@never_cache
+def conversas_ruins(request: HttpRequest) -> HttpResponse:
+    """Conversas ruins priorizadas por receita em risco (MRR × score) — issue #49."""
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+    months = _get_months(request)
+
+    departamento_id: int | None = None
+    raw_dep = request.GET.get("departamento", "")
+    if raw_dep.isdigit():
+        departamento_id = int(raw_dep)
+
+    data = compute_bad_conversations(
+        org, months=months, departamento_id=departamento_id
+    )
+    for r in data["rows"]:
+        r["mrr_str"] = _fmt_brl(r["mrr"])
+        r["priority_str"] = _fmt_brl(r["priority"])
+
+    return render(
+        request,
+        "dashboards/conversas_ruins.html",
+        {
+            **data,
+            "total_mrr_at_stake_str": _fmt_brl(data["total_mrr_at_stake"]),
+        },
+    )
+
+
+@login_required
+@never_cache
+def atendimento_detail(request: HttpRequest, atendimento_id: int) -> HttpResponse:
+    """Drill-down de uma conversa: contexto de receita/risco + timeline de mensagens."""
+    from django.http import Http404
+
+    from apps.atendimento.application.messages import get_or_fetch_messages
+    from apps.atendimento.infrastructure.models import Atendimento
+
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    at = (
+        Atendimento.objects.filter(organization=org, pk=atendimento_id)
+        .select_related("departamento", "customer")
+        .first()
+    )
+    if at is None:
+        raise Http404("Atendimento não encontrado")
+
+    detail = compute_atendimento_detail(org, at)
+    messages = get_or_fetch_messages(org, at)
+
+    return render(
+        request,
+        "dashboards/atendimento_detail.html",
+        {
+            "at": at,
+            "status_label": at.get_status_display(),
+            "messages": messages,
+            "mrr_str": _fmt_brl(detail["mrr"]),
+            "expected_loss_str": _fmt_brl(detail["expected_loss"]),
+            "risk_label": detail["risk_label"],
+            "risk_level": detail["risk_level"],
+            "risk_fraction_pct": detail["risk_fraction_pct"],
+            "churn_signals": detail["churn_signals"],
+            "tma_str": detail["tma_str"],
         },
     )
 

@@ -1,0 +1,142 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Conversas Ruins · Velus{% endblock %}
+
+{% block content %}
+<!-- Cabeçalho -->
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Conversas ruins — priorizadas por receita em risco</h1>
+    <p class="text-xs text-gray-400 mt-0.5">Score heurístico (nota baixa · departamento sensível · resolução lenta · reincidência) × MRR do cliente</p>
+  </div>
+  <!-- Filtro de departamento -->
+  <div class="relative">
+    <select
+      onchange="setDepartamento(this.value)"
+      class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 pr-8
+             appearance-none cursor-pointer text-gray-700
+             focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400
+             hover:border-gray-300 transition-colors"
+    >
+      <option value="" {% if not selected_departamento_id %}selected{% endif %}>Todos os departamentos</option>
+      {% for d in departamentos %}
+      <option value="{{ d.id }}" {% if d.id == selected_departamento_id %}selected{% endif %}>{{ d.nome }}</option>
+      {% endfor %}
+    </select>
+    <span class="pointer-events-none absolute right-2.5 inset-y-0 flex items-center">
+      <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </span>
+  </div>
+</div>
+
+<!-- KPI Cards -->
+<div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1">Conversas ruins</p>
+    <p class="text-2xl font-bold text-gray-900">{{ total_bad|intcomma }}</p>
+    <p class="text-xs text-gray-500 mt-1">com ao menos 1 sinal no período</p>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm border border-orange-200 p-5">
+    <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
+      MRR em risco
+      <span class="relative inline-block group/tip shrink-0">
+        <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
+        <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
+          Soma de (MRR × score) de todas as conversas ruins — proxy do caixa exposto pela má experiência.
+          <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+        </span>
+      </span>
+    </p>
+    <p class="text-2xl font-bold text-orange-600">{{ total_mrr_at_stake_str }}</p>
+    <p class="text-xs text-gray-500 mt-1">MRR × score somado</p>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1">Exibindo</p>
+    <p class="text-2xl font-bold text-gray-900">{{ shown|intcomma }}</p>
+    <p class="text-xs text-gray-500 mt-1">piores por receita em risco</p>
+  </div>
+</div>
+
+<!-- Tabela: conversas ruins ranqueadas -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+  <div class="p-5 pb-0">
+    <h2 class="text-sm font-semibold text-gray-700">Ranking por receita em risco</h2>
+    <p class="text-xs text-gray-400 mt-0.5">Clique numa linha para abrir a conversa completa</p>
+  </div>
+  <div class="overflow-x-auto">
+  <table class="min-w-full text-sm mt-4">
+    <thead class="bg-gray-50 border-t border-gray-200">
+      <tr>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Departamento</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Sinais</th>
+        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Nota</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">TMA</th>
+        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Risco</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">MRR</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Em risco</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for r in rows %}
+      <tr class="hover:bg-blue-50 cursor-pointer"
+          onclick="window.location='{% url 'dashboards:atendimento_detail' r.atendimento_id %}'">
+        <td class="px-4 py-3 font-medium text-gray-900 truncate max-w-[200px]">
+          {{ r.customer_name }}
+          <span class="block text-xs text-gray-400">{{ r.protocol }}</span>
+        </td>
+        <td class="px-4 py-3 text-gray-700">{{ r.departamento }}</td>
+        <td class="px-4 py-3">
+          <div class="flex flex-wrap gap-1">
+            {% for s in r.signals %}
+            <span class="text-[10px] bg-red-50 text-red-700 px-1.5 py-0.5 rounded">{{ s.label }}</span>
+            {% endfor %}
+          </div>
+        </td>
+        <td class="px-4 py-3 text-center tabular-nums">
+          {% if r.rating %}
+          <span class="font-semibold {% if r.rating <= 2 %}text-red-600{% elif r.rating == 3 %}text-orange-500{% else %}text-emerald-600{% endif %}">{{ r.rating }}</span>
+          {% else %}<span class="text-gray-300">—</span>{% endif %}
+        </td>
+        <td class="px-4 py-3 text-right tabular-nums text-gray-700">{{ r.tma_str }}</td>
+        <td class="px-4 py-3 text-center">
+          {% if r.risk_level == 'HIGH' %}
+          <span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">{{ r.risk_label }}</span>
+          {% elif r.risk_level == 'MEDIUM' %}
+          <span class="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">{{ r.risk_label }}</span>
+          {% elif r.risk_level == 'LOW' %}
+          <span class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{{ r.risk_label }}</span>
+          {% else %}<span class="text-gray-300">—</span>{% endif %}
+        </td>
+        <td class="px-4 py-3 text-right tabular-nums text-gray-900">{{ r.mrr_str }}</td>
+        <td class="px-4 py-3 text-right tabular-nums font-semibold text-orange-600">{{ r.priority_str }}</td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="8" class="px-6 py-8 text-center text-gray-500">
+          Nenhuma conversa ruim no período
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function setDepartamento(value) {
+    var url = new URL(window.location.href);
+    if (value) {
+      url.searchParams.set("departamento", value);
+    } else {
+      url.searchParams.delete("departamento");
+    }
+    window.location.href = url.toString();
+  }
+</script>
+{% endblock %}

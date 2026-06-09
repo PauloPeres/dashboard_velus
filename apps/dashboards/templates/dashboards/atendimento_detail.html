@@ -1,0 +1,82 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Conversa {{ at.protocol }} · Velus{% endblock %}
+
+{% block content %}
+<!-- Cabeçalho -->
+<div class="mb-6">
+  <a href="{% url 'dashboards:conversas_ruins' %}" class="text-xs text-blue-600 hover:underline">&larr; Voltar para conversas ruins</a>
+  <h1 class="text-2xl font-bold text-gray-900 mt-1">Conversa {{ at.protocol }}</h1>
+  <p class="text-xs text-gray-400 mt-0.5">
+    {{ at.departamento.nome|default:"Sem departamento" }} · {{ at.canal|default:"—" }} ·
+    {% if at.opened_at %}aberta em {{ at.opened_at|date:"d/m/Y H:i" }}{% endif %}
+  </p>
+</div>
+
+<!-- KPI Cards: cliente, MRR, risco -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1">Cliente</p>
+    {% if at.customer_id %}
+    <a href="{% url 'dashboards:customer_detail' at.customer_id %}" class="text-lg font-bold text-blue-700 hover:underline truncate block">{{ at.customer_name|default:at.customer.name }}</a>
+    {% else %}
+    <p class="text-lg font-bold text-gray-400">{{ at.customer_name|default:"Não vinculado" }}</p>
+    {% endif %}
+    <p class="text-xs text-gray-500 mt-1">{{ at.customer_document|default:"sem documento" }}</p>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1">MRR do cliente</p>
+    <p class="text-2xl font-bold text-gray-900">{{ mrr_str }}</p>
+    <p class="text-xs text-gray-500 mt-1">contratos ativos</p>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm border {% if risk_level == 'HIGH' %}border-red-300{% else %}border-gray-200{% endif %} p-5">
+    <p class="text-sm text-gray-500 mb-1">Risco de churn</p>
+    <p class="text-2xl font-bold {% if risk_level == 'HIGH' %}text-red-600{% elif risk_level == 'MEDIUM' %}text-orange-600{% else %}text-gray-900{% endif %}">
+      {{ risk_label }}{% if risk_fraction_pct %}<span class="text-sm font-normal text-gray-400"> · {{ risk_fraction_pct }}%</span>{% endif %}
+    </p>
+    <p class="text-xs text-gray-500 mt-1">receita esperada em risco {{ expected_loss_str }}</p>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1">Status · TMA</p>
+    <p class="text-2xl font-bold text-gray-900">{{ status_label }}</p>
+    <p class="text-xs text-gray-500 mt-1">tempo de resolução {{ tma_str }}</p>
+  </div>
+</div>
+
+{% if churn_signals %}
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
+  <h2 class="text-sm font-semibold text-gray-700 mb-2">Sinais de risco do cliente</h2>
+  <div class="flex flex-wrap gap-2">
+    {% for s in churn_signals %}
+    <span class="text-xs bg-red-50 text-red-700 px-2.5 py-1 rounded-full">{{ s.label }}{% if s.detail %} · {{ s.detail }}{% endif %}</span>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Timeline de mensagens -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+  <h2 class="text-sm font-semibold text-gray-700 mb-4">Conversa completa</h2>
+  {% if messages %}
+  <div class="space-y-3 max-w-3xl">
+    {% for m in messages %}
+    <div class="flex {% if m.direction == 'CLIENT' %}justify-start{% else %}justify-end{% endif %}">
+      <div class="max-w-[75%] rounded-lg px-3 py-2
+                  {% if m.direction == 'CLIENT' %}bg-gray-100 text-gray-800{% elif m.direction == 'AGENT' %}bg-blue-600 text-white{% else %}bg-amber-50 text-amber-800 text-xs italic{% endif %}">
+        <p class="text-[10px] uppercase tracking-wide {% if m.direction == 'AGENT' %}text-blue-100{% else %}text-gray-400{% endif %} mb-0.5">
+          {{ m.get_direction_display }}{% if m.sent_at %} · {{ m.sent_at|date:"d/m H:i" }}{% endif %}
+        </p>
+        <p class="text-sm whitespace-pre-wrap break-words">{{ m.texto|default:"(sem texto)" }}</p>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="text-sm text-gray-500 py-6 text-center">
+    Sem mensagens disponíveis para esta conversa.
+    <span class="block text-xs text-gray-400 mt-1">A ingestão de mensagens é sob demanda — pode não haver dados na fonte ou a busca falhou.</span>
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -5018,3 +5018,280 @@ def compute_atendimento_triagem(
         "selected_departamento_id": departamento_id,
         "selected_departamento_nome": selected_nome,
     }
+
+
+# =============================================================================
+# Atendimento — "conversas ruins" priorizadas por MRR (issue #49)
+# =============================================================================
+_RISK_LEVEL_LABELS = {"HIGH": "Alto", "MEDIUM": "Médio", "LOW": "Baixo"}
+
+# Departamentos cuja simples presença já é sinal de fricção (sem acento/caixa).
+_SENSITIVE_DEPARTAMENTOS = {"ouvidoria", "renegociacoes", "renegociacao"}
+
+# Pesos dos sinais objetivos de "conversa ruim" (somados, cap 100).
+_BAD_SIGNAL_WEIGHTS = {
+    "low_rating": 40,  # nota likert 1-2
+    "mid_rating": 15,  # nota likert 3
+    "sensitive_dep": 25,  # Ouvidoria / Renegociações
+    "high_tma": 20,  # resolução acima de _BAD_TMA_THRESHOLD_H
+    "reincidencia": 25,  # cliente reincidente na janela
+}
+_BAD_SIGNAL_LABELS = {
+    "low_rating": "Nota baixa (1-2)",
+    "mid_rating": "Nota média (3)",
+    "sensitive_dep": "Departamento sensível",
+    "high_tma": "Tempo de resolução alto",
+    "reincidencia": "Cliente reincidente",
+}
+_BAD_TMA_THRESHOLD_H = 72.0  # 3 dias
+_BAD_REINCIDENCIA_MIN = 3
+
+
+def _strip_accents(text: str) -> str:
+    import unicodedata
+
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)
+    )
+
+
+@allow_cross_tenant(reason="aggregation read-only; org passada explicitamente")
+def compute_bad_conversations(
+    organization: Organization,
+    *,
+    months: int = 3,
+    departamento_id: int | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Ranqueia atendimentos "ruins" por receita em risco (MRR × score) — issue #49.
+
+    Score heurístico (sem ML) a partir de sinais objetivos: nota likert baixa,
+    departamento sensível (Ouvidoria/Renegociações), tempo de resolução alto e
+    reincidência do cliente na janela. Cruza com o MRR e o risco de churn do
+    cliente (via FK resolvida por documento) e prioriza por **MRR × score** —
+    quem dói mais perder sobe ao topo.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento, Departamento
+    from apps.customers.infrastructure.models import Contract
+
+    now = timezone.now()
+    window_start = (now - relativedelta(months=months)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    # Reincidência: nº de atendimentos por documento na janela (escopo da org
+    # inteira, mesmo com filtro de departamento — captura múltiplos contatos).
+    recont_map = {
+        r["customer_document"]: r["n"]
+        for r in (
+            Atendimento.objects.filter(
+                organization=organization, opened_at__gte=window_start
+            )
+            .exclude(customer_document="")
+            .values("customer_document")
+            .annotate(n=Count("id"))
+        )
+    }
+
+    base = Atendimento.objects.filter(
+        organization=organization, opened_at__gte=window_start
+    )
+    if departamento_id is not None:
+        base = base.filter(departamento_id=departamento_id)
+
+    rows = base.values(
+        "id", "protocol", "status", "canal", "rating", "opened_at", "closed_at",
+        "customer_id", "customer_name", "customer_document", "departamento__nome",
+    )
+
+    scored: list[dict[str, Any]] = []
+    customer_ids: set[int] = set()
+    for r in rows:
+        signals: list[str] = []
+        score = 0
+
+        rating = r["rating"]
+        if rating is not None:
+            if rating <= 2:
+                signals.append("low_rating")
+                score += _BAD_SIGNAL_WEIGHTS["low_rating"]
+            elif rating == 3:
+                signals.append("mid_rating")
+                score += _BAD_SIGNAL_WEIGHTS["mid_rating"]
+
+        dep_nome = r["departamento__nome"] or ""
+        if _strip_accents(dep_nome).strip().lower() in _SENSITIVE_DEPARTAMENTOS:
+            signals.append("sensitive_dep")
+            score += _BAD_SIGNAL_WEIGHTS["sensitive_dep"]
+
+        tma_h: float | None = None
+        if r["opened_at"] and r["closed_at"]:
+            tma_h = (r["closed_at"] - r["opened_at"]).total_seconds() / 3600
+            if tma_h >= _BAD_TMA_THRESHOLD_H:
+                signals.append("high_tma")
+                score += _BAD_SIGNAL_WEIGHTS["high_tma"]
+
+        doc = r["customer_document"]
+        reinc = recont_map.get(doc, 0) if doc else 0
+        if reinc >= _BAD_REINCIDENCIA_MIN:
+            signals.append("reincidencia")
+            score += _BAD_SIGNAL_WEIGHTS["reincidencia"]
+
+        if not signals:
+            continue
+        score = min(score, 100)
+        if r["customer_id"]:
+            customer_ids.add(r["customer_id"])
+        scored.append(
+            {
+                "atendimento_id": r["id"],
+                "protocol": r["protocol"] or f"#{r['id']}",
+                "status": r["status"],
+                "status_label": _ATENDIMENTO_STATUS_LABELS.get(
+                    r["status"], r["status"]
+                ),
+                "canal": r["canal"],
+                "rating": rating,
+                "departamento": dep_nome or "Sem departamento",
+                "customer_id": r["customer_id"],
+                "customer_name": r["customer_name"] or "—",
+                "customer_document": doc,
+                "tma_str": _fmt_duration(tma_h * 3600 if tma_h else None),
+                "reincidencia": reinc,
+                "bad_score": score,
+                "signals": [
+                    {"code": s, "label": _BAD_SIGNAL_LABELS[s]} for s in signals
+                ],
+            }
+        )
+
+    # --- MRR + risco de churn por cliente (ChurnRiskScore traz ambos) ---
+    risk_rows = {
+        s.customer_id: s
+        for s in ChurnRiskScore.objects.filter(
+            organization=organization, customer_id__in=customer_ids
+        )
+    }
+    missing = customer_ids - set(risk_rows.keys())
+    mrr_fallback: dict[int, float] = {}
+    if missing:
+        mrr_fallback = {
+            c["customer_id"]: float(c["total"] or 0)
+            for c in (
+                Contract.objects.filter(
+                    organization=organization,
+                    customer_id__in=missing,
+                    status="ACTIVE",
+                )
+                .values("customer_id")
+                .annotate(
+                    total=Sum(
+                        F("monthly_amount")
+                        + F("monthly_amount_addons")
+                        - F("monthly_amount_discounts")
+                    )
+                )
+            )
+        }
+
+    for row in scored:
+        cid = row["customer_id"]
+        mrr = 0.0
+        risk_level = None
+        if cid is not None:
+            score_row = risk_rows.get(cid)
+            if score_row is not None:
+                mrr = float(score_row.monthly_amount or 0)
+                risk_level = score_row.level
+            else:
+                mrr = mrr_fallback.get(cid, 0.0)
+        row["mrr"] = mrr
+        row["risk_level"] = risk_level
+        row["risk_label"] = _RISK_LEVEL_LABELS.get(risk_level, "—")
+        # Prioridade = MRR × score (score normalizado 0-1) — receita em risco.
+        row["priority"] = round(mrr * (row["bad_score"] / 100.0), 2)
+
+    scored.sort(key=lambda r: (r["priority"], r["bad_score"]), reverse=True)
+    top = scored[:limit]
+
+    return {
+        "rows": top,
+        "total_bad": len(scored),
+        "shown": len(top),
+        "total_mrr_at_stake": round(sum(r["priority"] for r in scored), 2),
+        "departamentos": list(
+            Departamento.objects.filter(organization=organization)
+            .order_by("nome")
+            .values("id", "nome")
+        ),
+        "selected_departamento_id": departamento_id,
+        "selected_departamento_nome": (
+            next(
+                (
+                    d.nome
+                    for d in Departamento.objects.filter(
+                        organization=organization, id=departamento_id
+                    )
+                ),
+                None,
+            )
+            if departamento_id is not None
+            else None
+        ),
+    }
+
+
+@allow_cross_tenant(reason="aggregation read-only; org passada explicitamente")
+def compute_atendimento_detail(
+    organization: Organization, atendimento: Any
+) -> dict[str, Any]:
+    """Contexto de receita/risco pro drill-down de um atendimento (issue #49).
+
+    Mensagens são buscadas à parte (lazy, com rede). Aqui só o que sai do banco:
+    MRR e risco de churn do cliente vinculado + TMA da conversa.
+    """
+    from apps.customers.infrastructure.models import Contract
+
+    cust = atendimento.customer
+    mrr = 0.0
+    risk_level = None
+    risk_fraction = 0.0
+    expected_loss = 0.0
+    churn_signals: list[dict[str, Any]] = []
+    if cust is not None:
+        score_row = ChurnRiskScore.objects.filter(
+            organization=organization, customer=cust
+        ).first()
+        if score_row is not None:
+            mrr = float(score_row.monthly_amount or 0)
+            risk_level = score_row.level
+            risk_fraction = _churn_risk_fraction(score_row)
+            expected_loss = round(_expected_loss(score_row), 2)
+            churn_signals = score_row.signals or []
+        else:
+            total = Contract.objects.filter(
+                organization=organization, customer=cust, status="ACTIVE"
+            ).aggregate(
+                total=Sum(
+                    F("monthly_amount")
+                    + F("monthly_amount_addons")
+                    - F("monthly_amount_discounts")
+                )
+            )["total"]
+            mrr = float(total or 0)
+
+    tma_h: float | None = None
+    if atendimento.opened_at and atendimento.closed_at:
+        tma_h = (
+            atendimento.closed_at - atendimento.opened_at
+        ).total_seconds() / 3600
+
+    return {
+        "mrr": mrr,
+        "risk_level": risk_level,
+        "risk_label": _RISK_LEVEL_LABELS.get(risk_level, "—"),
+        "risk_fraction_pct": round(risk_fraction * 100),
+        "expected_loss": expected_loss,
+        "churn_signals": churn_signals,
+        "tma_str": _fmt_duration(tma_h * 3600 if tma_h else None),
+    }
