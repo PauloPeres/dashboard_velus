@@ -96,6 +96,33 @@ class TestGeminiExtractText:
         assert GeminiClient._extract_text({"candidates": [{}]}) == ""
 
 
+class TestGeminiThinkingDisabled:
+    """Modelos 2.5 pensam por default e os thoughts comem o maxOutputTokens —
+    `judge` desliga o thinking pra resposta JSON não vir truncada."""
+
+    def _captured_payload(self, model: str) -> dict[str, Any]:
+        from apps.integrations.gemini.client import GeminiClient
+
+        client = GeminiClient(api_key="k")
+        captured: dict[str, Any] = {}
+
+        def _fake_post(path: str, *, json: dict[str, Any]) -> dict[str, Any]:
+            captured["payload"] = json
+            return {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}
+
+        client.post = _fake_post  # type: ignore[method-assign]
+        client.judge(system="s", user="u", model=model)
+        return captured["payload"]
+
+    def test_25_model_disables_thinking(self) -> None:
+        cfg = self._captured_payload("gemini-2.5-flash")["generationConfig"]
+        assert cfg["thinkingConfig"] == {"thinkingBudget": 0}
+
+    def test_20_model_omits_thinking_config(self) -> None:
+        cfg = self._captured_payload("gemini-2.0-flash")["generationConfig"]
+        assert "thinkingConfig" not in cfg
+
+
 # =============================================================================
 # Helpers de fixture
 # =============================================================================

@@ -68,13 +68,20 @@ class GeminiClient(BaseHttpAdapter):
         `temperature=0.0` por default — avaliação de QA quer consistência, não
         criatividade. Levanta `AdapterError`/`AdapterAuthError`/... em falha.
         """
+        generation_config: dict[str, Any] = {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens,
+        }
+        # Modelos 2.5 (flash/pro) "pensam" por default, e os thoughts consomem o
+        # maxOutputTokens — num juiz de QA o thinking estourava o budget e a
+        # resposta vinha truncada/vazia (finishReason=MAX_TOKENS). Avaliar contra
+        # rubrica em JSON não precisa de raciocínio estendido, então desligamos.
+        if "2.5" in model:
+            generation_config["thinkingConfig"] = {"thinkingBudget": 0}
         payload: dict[str, Any] = {
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": user}]}],
-            "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": max_tokens,
-            },
+            "generationConfig": generation_config,
         }
         response = self.post(f"/v1beta/models/{model}:generateContent", json=payload)
         return self._extract_text(response)
