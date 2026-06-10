@@ -28,6 +28,7 @@ from apps.analytics.application.aggregations import (
     compute_bandwidth_summary,
     compute_blocked_at_risk_summary,
     compute_blocked_duration_distribution,
+    compute_bot_deflection_trend,
     compute_burn_rate,
     compute_cash_calendar,
     compute_cash_received_series,
@@ -1301,18 +1302,23 @@ def atendimento(request: HttpRequest) -> HttpResponse:
     data = compute_atendimento_triagem(
         org, months=months, departamento_id=departamento_id
     )
+    deflection = compute_bot_deflection_trend(org, months=months)
 
     return render(
         request,
         "dashboards/atendimento.html",
         {
             **data,
+            **deflection,
             "volume_chart_json": charts.atendimento_volume_by_departamento(
                 data["by_departamento"]
             ),
             "status_chart_json": charts.atendimento_status_pie(data["status_dist"]),
             "trend_chart_json": charts.atendimento_monthly_trend(data["trend"]),
             "motivos_chart_json": charts.atendimento_top_motivos(data["top_motivos"]),
+            "deflection_chart_json": charts.bot_deflection_trend(
+                deflection["deflection_trend"]
+            ),
         },
     )
 

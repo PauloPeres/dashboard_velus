@@ -1756,6 +1756,42 @@ def atendimento_monthly_trend(series: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+def bot_deflection_trend(series: list[dict[str, Any]]) -> str:
+    """Barras empilhadas diárias — resolvidos pelo bot (deflexão) vs humano.
+
+    Verde = bot resolveu sozinho (sem precisar de humano); roxo = encaminhado ao
+    atendente humano. A altura total é o volume de atendimentos abertos no dia.
+    """
+    labels = [s["label"] for s in series]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                name="Resolvido pelo bot",
+                x=labels,
+                y=[s["bot"] for s in series],
+                marker_color="#10b981",
+                hovertemplate="<b>%{x}</b><br>Bot: %{y:,d}<extra></extra>",
+            ),
+            go.Bar(
+                name="Encaminhado ao humano",
+                x=labels,
+                y=[s["human"] for s in series],
+                marker_color="#6366f1",
+                hovertemplate="<b>%{x}</b><br>Humano: %{y:,d}<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "margin": {"l": 50, "r": 20, "t": 10, "b": 50},
+            "legend": {"orientation": "h", "y": -0.2},
+            "yaxis": {"title": "Atendimentos"},
+        },
+    )
+    return _to_json(fig)
+
+
 def atendimento_top_motivos(rows: list[dict[str, Any]]) -> str:
     """Barras horizontais — motivos mais frequentes de atendimento."""
     ordered = sorted(rows, key=lambda r: r["count"])

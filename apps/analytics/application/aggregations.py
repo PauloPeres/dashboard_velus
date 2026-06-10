@@ -12,7 +12,7 @@ from __future__ import annotations
 import calendar
 import math
 import statistics
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date as date_cls
 from datetime import datetime, time, timedelta
 from decimal import Decimal
@@ -33,7 +33,12 @@ from django.db.models import (
     Sum,
 )
 from django.db.models.fields.json import KeyTextTransform
-from django.db.models.functions import Coalesce, ExtractDay, TruncMonth
+from django.db.models.functions import (
+    Coalesce,
+    ExtractDay,
+    TruncDate,
+    TruncMonth,
+)
 from django.utils import timezone
 
 from apps.analytics.infrastructure.models import (
@@ -5020,6 +5025,85 @@ def compute_atendimento_triagem(
         "selected_departamento_id": departamento_id,
         "selected_departamento_nome": selected_nome,
     }
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_bot_deflection_trend(
+    organization: Organization, *, months: int = 3
+) -> dict[str, Any]:
+    """Série diária: atendimentos resolvidos pelo bot (deflexão) vs encaminhados
+    ao humano.
+
+    "Resolvido pelo bot" = atendimento cujo atendente é um bot de autoatendimento
+    (Gi/Felipe) — o bot conduziu a conversa até o fim sem um humano assumir.
+    "Encaminhado ao humano" = atendente humano (precisou de pessoa). A jornada
+    bot→humano NÃO é rastreável num único registro (cada sessão tem um único
+    atendente, sem histórico de transferência), então medimos por sessão.
+
+    Global de propósito (ignora filtro de departamento): os bots vivem na
+    Triagem, mas a deflexão é um indicador do funil inteiro. Granularidade
+    diária a partir do primeiro dia COM dado na janela — o nome do atendente só
+    passou a ser capturado recentemente, então não há histórico confiável antes
+    disso (por isso a série "começa de agora", sem backfill).
+    """
+    from apps.atendimento.infrastructure.models import Atendimento
+
+    now = timezone.now()
+    window_start = (now - relativedelta(months=months)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    rows = (
+        Atendimento.objects.filter(
+            organization=organization, opened_at__gte=window_start
+        )
+        .annotate(d=TruncDate("opened_at"))
+        .values("d", "atendente_nome")
+        .annotate(n=Count("id"))
+    )
+
+    by_day: dict[date_cls, list[int]] = defaultdict(lambda: [0, 0])  # [bot, humano]
+    bot_total = 0
+    human_total = 0
+    for r in rows:
+        d = r["d"]
+        if d is None:
+            continue
+        n = r["n"]
+        if is_bot_atendente(r["atendente_nome"]):
+            by_day[d][0] += n
+            bot_total += n
+        else:
+            by_day[d][1] += n
+            human_total += n
+
+    trend: list[dict[str, Any]] = []
+    if by_day:
+        cur = min(by_day)
+        end = now.date()
+        while cur <= end:
+            bot, human = by_day.get(cur, [0, 0])
+            day_total = bot + human
+            trend.append(
+                {
+                    "date": cur.isoformat(),
+                    "label": cur.strftime("%d/%m"),
+                    "bot": bot,
+                    "human": human,
+                    "total": day_total,
+                    "rate": round(bot / day_total * 100, 1) if day_total else 0.0,
+                }
+            )
+            cur += timedelta(days=1)
+
+    total = bot_total + human_total
+    summary = {
+        "bot": bot_total,
+        "human": human_total,
+        "total": total,
+        "rate": round(bot_total / total * 100, 1) if total else 0.0,
+        "first_label": trend[0]["label"] if trend else None,
+    }
+    return {"deflection_trend": trend, "deflection_summary": summary}
 
 
 # =============================================================================

@@ -147,6 +147,35 @@
   </div>
 </div>
 
+<!-- Deflexão do bot: resolvido pelo bot vs encaminhado ao humano -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Deflexão do bot ao longo do tempo</h2>
+    <span class="text-xs text-gray-400">indicador global · começa quando o nome do atendente passou a ser capturado</span>
+  </div>
+  <p class="text-xs text-gray-400 mb-4">Atendimentos resolvidos pelo bot (Gi/Felipe) sem precisar de humano vs encaminhados ao atendimento humano, por dia de abertura.</p>
+
+  <div class="grid grid-cols-3 gap-4 mb-4">
+    <div class="rounded-lg bg-emerald-50 border border-emerald-100 p-4">
+      <p class="text-xs text-emerald-700 mb-1">Resolvido pelo bot</p>
+      <p class="text-2xl font-bold text-emerald-700">{{ deflection_summary.bot|intcomma }}</p>
+      <p class="text-xs text-emerald-600/70 mt-0.5">{{ deflection_summary.rate }}% do total</p>
+    </div>
+    <div class="rounded-lg bg-indigo-50 border border-indigo-100 p-4">
+      <p class="text-xs text-indigo-700 mb-1">Encaminhado ao humano</p>
+      <p class="text-2xl font-bold text-indigo-700">{{ deflection_summary.human|intcomma }}</p>
+      <p class="text-xs text-indigo-600/70 mt-0.5">precisou de atendente</p>
+    </div>
+    <div class="rounded-lg bg-gray-50 border border-gray-200 p-4">
+      <p class="text-xs text-gray-500 mb-1">Total no período</p>
+      <p class="text-2xl font-bold text-gray-900">{{ deflection_summary.total|intcomma }}</p>
+      <p class="text-xs text-gray-400 mt-0.5">{% if deflection_summary.first_label %}desde {{ deflection_summary.first_label }}{% else %}sem dados{% endif %}</p>
+    </div>
+  </div>
+
+  <div id="at-deflection-chart" style="height:320px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+</div>
+
 <!-- Tabela: estudo por departamento -->
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
   <div class="p-5 pb-0 flex items-baseline justify-between">
@@ -196,6 +225,7 @@
 {{ status_chart_json|json_script:"at-status-data" }}
 {{ trend_chart_json|json_script:"at-trend-data" }}
 {{ motivos_chart_json|json_script:"at-motivos-data" }}
+{{ deflection_chart_json|json_script:"at-deflection-data" }}
 <script>
   function setDepartamento(value) {
     var url = new URL(window.location.href);
@@ -210,5 +240,6 @@
   renderChart("at-status-chart", "at-status-data");
   renderChart("at-trend-chart", "at-trend-data");
   renderChart("at-motivos-chart", "at-motivos-data");
+  renderChart("at-deflection-chart", "at-deflection-data");
 </script>
 {% endblock %}
