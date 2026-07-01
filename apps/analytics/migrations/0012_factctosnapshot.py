@@ -1,7 +1,8 @@
 """Snapshot periódico de CTOs FTTH — série temporal de ocupação."""
 
-from django.db import migrations, models
 import django.db.models.deletion
+import django.utils.timezone
+from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
@@ -16,6 +17,8 @@ class Migration(migrations.Migration):
             name="FactCtoSnapshot",
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True, default=django.utils.timezone.now)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
                 ("captured_at", models.DateTimeField(db_index=True)),
                 ("total_ctos", models.IntegerField(default=0)),
                 ("total_ports", models.IntegerField(default=0)),
