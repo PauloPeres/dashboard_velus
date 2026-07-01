@@ -26,6 +26,7 @@ from apps.analytics.application.aggregations import (
     compute_atendimento_triagem,
     compute_bad_conversations,
     compute_bandwidth_summary,
+    compute_cto_summary,
     compute_blocked_at_risk_summary,
     compute_blocked_duration_distribution,
     compute_bot_deflection_trend,
@@ -1649,6 +1650,9 @@ def network(request: HttpRequest) -> HttpResponse:
     # Clientes pagantes (contrato ativo) sem conexão online — receita em risco
     offline_active = compute_offline_active_customers(org)
 
+    # CTOs — Caixas de Distribuição FTTH (ocupação de portas por projeto)
+    cto = compute_cto_summary(org)
+
     return render(
         request,
         "dashboards/network.html",
@@ -1679,6 +1683,14 @@ def network(request: HttpRequest) -> HttpResponse:
             "bandwidth_chart_json": charts.bandwidth_top_consumers_bar(
                 bandwidth["top_consumers"]
             ),
+            # CTOs
+            "cto": cto,
+            "cto_has_data": cto["total_ctos"] > 0,
+            "cto_total_str": str(cto["total_ctos"]),
+            "cto_occupied_str": f"{cto['total_occupied']:,}".replace(",", "."),
+            "cto_free_str": f"{cto['total_free']:,}".replace(",", "."),
+            "cto_occupancy_str": f"{cto['occupancy_pct']:.1f}%",
+            "cto_chart_json": charts.cto_by_project_stacked_bar(cto["by_project"]),
         },
     )
 

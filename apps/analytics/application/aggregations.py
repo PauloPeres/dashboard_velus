@@ -5690,3 +5690,110 @@ def compute_qa_overview(
         ),
         "selected_departamento_id": departamento_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# CTOs — Caixas de Distribuição FTTH
+# ---------------------------------------------------------------------------
+
+_CTO_PROJECT_NAMES: dict[str, str] = {
+    "1": "Sorocaba Área A",
+    "3": "Expansão",
+    "5": "Sorocaba Área B",
+    "6": "Ceagesp",
+    "7": "Votorantim",
+    "8": "Links",
+    "9": "Sorocaba Ind.",
+}
+
+# CTOs com max_port acima desse limite são OLTs/splitters de agregação.
+_CTO_MAX_PORT_CUTOFF = 64
+
+
+@allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
+def compute_cto_summary(organization: Organization) -> dict[str, Any]:
+    """Ocupação de portas de CTOs FTTH, agregada por projeto.
+
+    Fonte: Connection.raw_extras contém id_caixa_ftth, ftth_porta e
+    id_df_projeto — populados pelo sync de radusuarios do IXC.
+    """
+    from django.db.models.functions import Cast
+    from django.db.models import IntegerField
+
+    from apps.network.infrastructure.models import Connection
+
+    qs = Connection.objects.filter(organization=organization).annotate(
+        cto_id=KeyTextTransform("id_caixa_ftth", "raw_extras"),
+        porta=Cast(KeyTextTransform("ftth_porta", "raw_extras"), IntegerField()),
+        projeto_id=KeyTextTransform("id_df_projeto", "raw_extras"),
+    ).exclude(cto_id__isnull=True).exclude(cto_id="").exclude(cto_id="0")
+
+    cto_groups = list(
+        qs.values("cto_id", "projeto_id")
+        .annotate(occupied=Count("id"), max_port=Max("porta"))
+        .order_by("cto_id")
+    )
+
+    # Filtrar OLTs (max_port muito alto)
+    cto_groups = [g for g in cto_groups if (g["max_port"] or 0) <= _CTO_MAX_PORT_CUTOFF]
+
+    # Agregar por projeto
+    proj_agg: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"cto_count": 0, "occupied": 0, "total_ports": 0}
+    )
+    all_ctos: list[dict[str, Any]] = []
+
+    for g in cto_groups:
+        pid = str(g["projeto_id"] or "0")
+        proj_name = _CTO_PROJECT_NAMES.get(pid, f"Projeto {pid}")
+        occ = g["occupied"]
+        total = g["max_port"] or occ
+
+        proj_agg[pid]["project"] = proj_name
+        proj_agg[pid]["project_id"] = pid
+        proj_agg[pid]["cto_count"] += 1
+        proj_agg[pid]["occupied"] += occ
+        proj_agg[pid]["total_ports"] += total
+
+        free = max(total - occ, 0)
+        occ_pct = round(occ / total * 100, 1) if total else 0.0
+        all_ctos.append({
+            "cto_id": g["cto_id"],
+            "project": proj_name,
+            "occupied": occ,
+            "total_ports": total,
+            "free": free,
+            "occupancy_pct": occ_pct,
+        })
+
+    by_project = []
+    for info in sorted(proj_agg.values(), key=lambda x: -x["occupied"]):
+        free = max(info["total_ports"] - info["occupied"], 0)
+        occ_pct = round(info["occupied"] / info["total_ports"] * 100, 1) if info["total_ports"] else 0.0
+        by_project.append({
+            "project": info["project"],
+            "project_id": info["project_id"],
+            "cto_count": info["cto_count"],
+            "occupied": info["occupied"],
+            "free": free,
+            "total_ports": info["total_ports"],
+            "occupancy_pct": occ_pct,
+        })
+
+    total_occupied = sum(p["occupied"] for p in by_project)
+    total_ports = sum(p["total_ports"] for p in by_project)
+    total_free = max(total_ports - total_occupied, 0)
+    occupancy_pct = round(total_occupied / total_ports * 100, 1) if total_ports else 0.0
+
+    # Top CTOs por ocupação (quase lotadas)
+    top_ctos = sorted(all_ctos, key=lambda x: -x["occupancy_pct"])[:20]
+
+    return {
+        "total_ctos": len(cto_groups),
+        "total_occupied": total_occupied,
+        "total_free": total_free,
+        "total_ports": total_ports,
+        "occupancy_pct": occupancy_pct,
+        "by_project": by_project,
+        "top_ctos": top_ctos,
+    }

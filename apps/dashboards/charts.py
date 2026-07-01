@@ -1808,3 +1808,41 @@ def atendimento_top_motivos(rows: list[dict[str, Any]]) -> str:
         layout={**_LAYOUT_BASE, "xaxis": {"title": "Atendimentos"}},
     )
     return _to_json(fig)
+
+
+def cto_by_project_stacked_bar(by_project: list[dict[str, Any]]) -> str:
+    """Barras empilhadas — portas ocupadas vs livres por projeto FTTH."""
+    labels = [p["project"] for p in by_project]
+    occupied = [p["occupied"] for p in by_project]
+    free = [p["free"] for p in by_project]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                name="Ocupadas",
+                x=labels,
+                y=occupied,
+                marker_color="#6366f1",
+                text=occupied,
+                textposition="inside",
+                hovertemplate="<b>%{x}</b><br>Ocupadas: %{y}<extra></extra>",
+            ),
+            go.Bar(
+                name="Livres",
+                x=labels,
+                y=free,
+                marker_color="#d1d5db",
+                text=free,
+                textposition="inside",
+                hovertemplate="<b>%{x}</b><br>Livres: %{y}<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "margin": {"l": 50, "r": 20, "t": 10, "b": 80},
+            "yaxis": {"title": "Portas"},
+            "legend": {"orientation": "h", "y": -0.25},
+        },
+    )
+    return _to_json(fig)

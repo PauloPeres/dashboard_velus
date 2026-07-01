@@ -115,6 +115,94 @@
   {% endif %}
 </div>
 
+<!-- CTOs — Caixas de Distribuição FTTH -->
+{% if cto_has_data %}
+<h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Caixas de Distribuicao (CTOs)</h2>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+  {% include "dashboards/_kpi_card.html" with label="Total CTOs" value=cto_total_str subtitle="caixas mapeadas" tooltip="Caixas FTTH com pelo menos uma conexao ativa. Exclui OLTs e equipamentos de agregacao." variant="border-indigo-200" value_color="text-indigo-700" %}
+  {% include "dashboards/_kpi_card.html" with label="Portas ocupadas" value=cto_occupied_str subtitle="conexoes ativas em CTOs" tooltip="Portas com cliente conectado." variant="border-indigo-200" value_color="text-indigo-700" %}
+  {% include "dashboards/_kpi_card.html" with label="Portas livres" value=cto_free_str subtitle="capacidade disponivel" tooltip="Portas sem cliente — capacidade de crescimento sem nova infra." variant="border-emerald-200" value_color="text-emerald-700" %}
+  {% include "dashboards/_kpi_card.html" with label="Taxa de ocupacao" value=cto_occupancy_str subtitle="ocupadas / total de portas" tooltip="Portas ocupadas dividido pelo total de portas." variant="border-gray-200" %}
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <!-- Gráfico de barras empilhadas por projeto -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="flex items-baseline justify-between mb-1">
+      <h2 class="text-sm font-semibold text-gray-700">Ocupacao por projeto</h2>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Portas ocupadas vs livres — identifica areas com capacidade esgotada</p>
+    <div id="cto-chart" style="height:340px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+
+  <!-- Resumo por projeto -->
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+    <div class="p-5 pb-0">
+      <h2 class="text-sm font-semibold text-gray-700">Resumo por projeto</h2>
+      <p class="text-xs text-gray-400 mt-0.5">CTOs, portas e taxa de ocupacao por area</p>
+    </div>
+    <div class="overflow-x-auto">
+    <table class="min-w-full text-sm mt-4">
+      <thead class="bg-gray-50 border-t border-gray-200">
+        <tr>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Projeto</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">CTOs</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ocupadas</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Livres</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ocupacao</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for p in cto.by_project %}
+        <tr class="hover:bg-gray-50">
+          <td class="px-4 py-3 font-medium text-gray-900">{{ p.project }}</td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-700">{{ p.cto_count }}</td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-700">{{ p.occupied }}</td>
+          <td class="px-4 py-3 text-right tabular-nums {% if p.free == 0 %}text-red-700 font-semibold{% else %}text-gray-700{% endif %}">{{ p.free }}</td>
+          <td class="px-4 py-3 text-right tabular-nums {% if p.occupancy_pct >= 90 %}text-red-700 font-semibold{% elif p.occupancy_pct >= 75 %}text-orange-600{% else %}text-gray-700{% endif %}">{{ p.occupancy_pct|floatformat:1 }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+<!-- Top CTOs por ocupação -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden mb-6">
+  <div class="p-5 pb-0">
+    <h2 class="text-sm font-semibold text-gray-700">CTOs com maior ocupacao</h2>
+    <p class="text-xs text-gray-400 mt-0.5">Caixas quase lotadas — candidatas a expansao ou splitter adicional</p>
+  </div>
+  <div class="overflow-x-auto">
+  <table class="min-w-full text-sm mt-4">
+    <thead class="bg-gray-50 border-t border-gray-200">
+      <tr>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CTO</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Projeto</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ocupadas</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Livres</th>
+        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ocupacao</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for c in cto.top_ctos %}
+      <tr class="hover:bg-gray-50">
+        <td class="px-4 py-3 font-medium text-gray-900">#{{ c.cto_id }}</td>
+        <td class="px-4 py-3 text-gray-700">{{ c.project }}</td>
+        <td class="px-4 py-3 text-right tabular-nums text-gray-700">{{ c.occupied }}</td>
+        <td class="px-4 py-3 text-right tabular-nums text-gray-500">{{ c.total_ports }}</td>
+        <td class="px-4 py-3 text-right tabular-nums {% if c.free == 0 %}text-red-700 font-semibold{% elif c.free <= 2 %}text-orange-600{% else %}text-gray-700{% endif %}">{{ c.free }}</td>
+        <td class="px-4 py-3 text-right tabular-nums {% if c.occupancy_pct >= 90 %}text-red-700 font-semibold{% elif c.occupancy_pct >= 75 %}text-orange-600{% else %}text-gray-700{% endif %}">{{ c.occupancy_pct|floatformat:1 }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
 <!-- Clientes com contrato ativo sem conexão online — receita em risco (#74) -->
 <div class="bg-white rounded-lg shadow-sm border {% if offline_active.count > 0 %}border-orange-300{% else %}border-gray-200{% endif %} overflow-hidden mb-6">
   <div class="p-5 pb-0 flex items-baseline justify-between gap-2">
@@ -242,10 +330,12 @@
 {{ nas_chart_json|json_script:"nas-data" }}
 {% if history_has_data %}{{ history_chart_json|json_script:"history-data" }}{% endif %}
 {% if bandwidth_has_data %}{{ bandwidth_chart_json|json_script:"bandwidth-data" }}{% endif %}
+{% if cto_has_data %}{{ cto_chart_json|json_script:"cto-data" }}{% endif %}
 <script>
   renderChart("status-chart", "status-data");
   renderChart("nas-chart", "nas-data");
   {% if history_has_data %}renderChart("history-chart", "history-data");{% endif %}
   {% if bandwidth_has_data %}renderChart("bandwidth-chart", "bandwidth-data");{% endif %}
+  {% if cto_has_data %}renderChart("cto-chart", "cto-data");{% endif %}
 </script>
 {% endblock %}
