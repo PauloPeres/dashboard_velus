@@ -289,37 +289,36 @@ def compute_kpis(organization: Organization) -> dict[str, Any]:
     breakdown = {row["status"]: row["n"] for row in status_breakdown}
     active_count = sum(breakdown.values())
 
-    # Novos/cancelados — usa o mês do ref_date para consistência com o MRR
+    # Novos/cancelados no mês corrente (MTD) — baseado em today, não ref_date,
+    # porque são contadores operacionais do mês em andamento.
+    month_first = today.replace(day=1)
+    last_month_first = (month_first - timedelta(days=1)).replace(day=1)
+
     from apps.customers.infrastructure.models import Contract
     new_count = Contract.objects.filter(
         organization=organization,
-        activated_at__date__gte=ref_month_first,
-        activated_at__date__lte=ref_date,
+        activated_at__date__gte=month_first,
     ).count()
 
     canceled_count = Contract.objects.filter(
         organization=organization,
-        canceled_at__date__gte=ref_month_first,
-        canceled_at__date__lte=ref_date,
+        canceled_at__date__gte=month_first,
     ).count()
 
-    # Churn do último mês FECHADO relativo ao ref_date.
-    # Se ref_date está no meio do mês, o mês fechado é o anterior.
-    # Se ref_date é o último dia do mês (virada), o mês fechado é o próprio.
-    churn_window_end = ref_month_first  # exclusive upper bound
-    churn_window_start = prev_month_first
+    # Churn do último mês FECHADO (baseado em today). O mês corrente é parcial
+    # e subestimava o churn — usamos o mês anterior completo.
     churn_canceled = Contract.objects.filter(
         organization=organization,
-        canceled_at__date__gte=churn_window_start,
-        canceled_at__date__lt=churn_window_end,
+        canceled_at__date__gte=last_month_first,
+        canceled_at__date__lt=month_first,
     ).count()
     base_closed = FactContractStatusDaily.objects.filter(
-        organization=organization, date=churn_window_start, is_active=True
+        organization=organization, date=last_month_first, is_active=True
     ).count()
     churn_pct = (
         float(churn_canceled / base_closed * 100) if base_closed > 0 else 0.0
     )
-    churn_month_label = churn_window_start.strftime("%b/%y")
+    churn_month_label = last_month_first.strftime("%b/%y")
 
     # Inadimplência — só faturas recuperáveis (contrato ACTIVE/BLOCKED na base).
     delinquency = FactInvoice.objects.filter(
