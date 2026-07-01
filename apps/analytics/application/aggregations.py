@@ -233,8 +233,6 @@ def compute_mrr_series(
 def compute_kpis(organization: Organization) -> dict[str, Any]:
     """KPIs principais pra cards no topo do dashboard."""
     today = timezone.now().date()
-    month_first = today.replace(day=1)
-    last_month_first = (month_first - timedelta(days=1)).replace(day=1)
 
     # Último snapshot disponível <= hoje: o job diário de fact pode ainda não ter
     # rodado para hoje (rollover de data), então não confiamos em date=today.
@@ -244,19 +242,37 @@ def compute_kpis(organization: Organization) -> dict[str, Any]:
         ).aggregate(m=Max("date"))["m"]
     ) or today
 
-    # MRR atual e mês anterior
+    # Ancoramos no mês do ref_date, não no mês de today.
+    # Na virada (ex: 1/jul com último snapshot em 30/jun), month_first seria
+    # jul mas ref_date é jun — e mrr_prev caía no mesmo mês, zerando o delta.
+    ref_month_first = ref_date.replace(day=1)
+    prev_month_last = ref_month_first - timedelta(days=1)
+    prev_month_first = prev_month_last.replace(day=1)
+
+    # MRR atual
     mrr_now = (
         FactContractStatusDaily.objects.filter(
             organization=organization, date=ref_date, is_active=True
         ).aggregate(s=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()))
     )["s"] or _ZERO
 
-    last_day_prev = month_first - timedelta(days=1)
-    mrr_prev = (
+    # MRR mês anterior — último snapshot disponível no mês anterior ao ref_date
+    prev_ref_date = (
         FactContractStatusDaily.objects.filter(
-            organization=organization, date=last_day_prev, is_active=True
-        ).aggregate(s=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()))
-    )["s"] or _ZERO
+            organization=organization,
+            date__gte=prev_month_first,
+            date__lte=prev_month_last,
+            is_active=True,
+        ).aggregate(m=Max("date"))["m"]
+    )
+    if prev_ref_date:
+        mrr_prev = (
+            FactContractStatusDaily.objects.filter(
+                organization=organization, date=prev_ref_date, is_active=True
+            ).aggregate(s=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()))
+        )["s"] or _ZERO
+    else:
+        mrr_prev = _ZERO
 
     mrr_delta_pct = (
         float((mrr_now - mrr_prev) / mrr_prev * 100) if mrr_prev > 0 else 0.0
@@ -273,35 +289,37 @@ def compute_kpis(organization: Organization) -> dict[str, Any]:
     breakdown = {row["status"]: row["n"] for row in status_breakdown}
     active_count = sum(breakdown.values())
 
-    # Novos no mês (ativos hoje mas não tinham status no início do mês anterior)
-    # Aproximação: contratos com activated_at no mês corrente
+    # Novos/cancelados — usa o mês do ref_date para consistência com o MRR
     from apps.customers.infrastructure.models import Contract
     new_count = Contract.objects.filter(
         organization=organization,
-        activated_at__date__gte=month_first,
+        activated_at__date__gte=ref_month_first,
+        activated_at__date__lte=ref_date,
     ).count()
 
     canceled_count = Contract.objects.filter(
         organization=organization,
-        canceled_at__date__gte=month_first,
+        canceled_at__date__gte=ref_month_first,
+        canceled_at__date__lte=ref_date,
     ).count()
 
-    # Churn do último mês FECHADO. O mês corrente é parcial (poucos dias de
-    # cancelamentos sobre a base cheia) e subestimava o churn ~15-30x. Usamos o
-    # mês anterior completo: cancelados em [last_month_first, month_first) ÷ base
-    # ativa no início desse mês (snapshot em last_month_first).
+    # Churn do último mês FECHADO relativo ao ref_date.
+    # Se ref_date está no meio do mês, o mês fechado é o anterior.
+    # Se ref_date é o último dia do mês (virada), o mês fechado é o próprio.
+    churn_window_end = ref_month_first  # exclusive upper bound
+    churn_window_start = prev_month_first
     churn_canceled = Contract.objects.filter(
         organization=organization,
-        canceled_at__date__gte=last_month_first,
-        canceled_at__date__lt=month_first,
+        canceled_at__date__gte=churn_window_start,
+        canceled_at__date__lt=churn_window_end,
     ).count()
     base_closed = FactContractStatusDaily.objects.filter(
-        organization=organization, date=last_month_first, is_active=True
+        organization=organization, date=churn_window_start, is_active=True
     ).count()
     churn_pct = (
         float(churn_canceled / base_closed * 100) if base_closed > 0 else 0.0
     )
-    churn_month_label = last_month_first.strftime("%b/%y")
+    churn_month_label = churn_window_start.strftime("%b/%y")
 
     # Inadimplência — só faturas recuperáveis (contrato ACTIVE/BLOCKED na base).
     delinquency = FactInvoice.objects.filter(
@@ -428,13 +446,29 @@ def compute_revenue_comparison(organization: Organization) -> list[dict[str, Any
     from apps.customers.infrastructure.models import Contract
 
     today = timezone.now().date()
-    month_first = today.replace(day=1)
-    prev_month_last = month_first - timedelta(days=1)
+
+    # Último snapshot disponível (job diário pode não ter rodado ainda hoje)
+    ref_date = (
+        FactContractStatusDaily.objects.filter(
+            organization=organization, date__lte=today, is_active=True
+        ).aggregate(m=Max("date"))["m"]
+    ) or today
+    ref_month_first = ref_date.replace(day=1)
+    prev_month_last = ref_month_first - timedelta(days=1)
     prev_month_first = prev_month_last.replace(day=1)
 
-    # MRR / ARPU: snapshot de hoje vs último dia do mês anterior.
-    mrr_now, active_now = _mrr_active_at(organization, today)
-    mrr_prev, active_prev = _mrr_active_at(organization, prev_month_last)
+    # MRR / ARPU: snapshot mais recente vs último disponível no mês anterior.
+    mrr_now, active_now = _mrr_active_at(organization, ref_date)
+    # Buscar último snapshot disponível no mês anterior
+    prev_ref = (
+        FactContractStatusDaily.objects.filter(
+            organization=organization,
+            date__gte=prev_month_first,
+            date__lte=prev_month_last,
+            is_active=True,
+        ).aggregate(m=Max("date"))["m"]
+    ) or prev_month_last
+    mrr_prev, active_prev = _mrr_active_at(organization, prev_ref)
     arpu_now = mrr_now / active_now if active_now else 0.0
     arpu_prev = mrr_prev / active_prev if active_prev else 0.0
 
@@ -453,12 +487,12 @@ def compute_revenue_comparison(organization: Organization) -> list[dict[str, Any
             can_q = can_q.filter(canceled_at__lt=end_dt)
         return new_q.count() - can_q.count()
 
-    net_now = _net_adds(month_first, None)
-    net_prev = _net_adds(prev_month_first, month_first)
+    net_now = _net_adds(ref_month_first, None)
+    net_prev = _net_adds(prev_month_first, ref_month_first)
 
     # Receita recebida (caixa) por mês de pagamento.
     received = {r["month"]: r["amount"] for r in compute_cash_received_series(organization, months=3)}
-    recv_now = float(received.get(month_first.strftime("%Y-%m"), 0.0))
+    recv_now = float(received.get(ref_month_first.strftime("%Y-%m"), 0.0))
     recv_prev = float(received.get(prev_month_first.strftime("%Y-%m"), 0.0))
 
     return [
