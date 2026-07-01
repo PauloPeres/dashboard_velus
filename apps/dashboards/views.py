@@ -129,8 +129,12 @@ def executive(request: HttpRequest) -> HttpResponse:
     # filtramos por mês corrente real em vez de confiar no último item da série.
     cash_series = compute_cash_received_series(org, months=months)
     forecast_data = compute_revenue_forecast(org, months_ahead=3)
-    current_month_key = timezone.now().strftime("%Y-%m")
-    cash_realized_recent = [c for c in cash_series if c["month"] <= current_month_key][-6:]
+    # Ancorar no último mês com dados reais de caixa, não em today.
+    # Na virada de mês (ex: 1/jul sem pagamentos de jul) evita mostrar R$0.
+    today_month_key = timezone.now().strftime("%Y-%m")
+    valid_cash = [c for c in cash_series if c["month"] <= today_month_key]
+    current_month_key = valid_cash[-1]["month"] if valid_cash else today_month_key
+    cash_realized_recent = valid_cash[-6:]
     cash_this_month = next(
         (c["amount"] for c in cash_series if c["month"] == current_month_key), 0.0
     )

@@ -1259,11 +1259,21 @@ def compute_revenue_forecast(
     mrr_points = [(m["month"], m["mrr"]) for m in hist_mrr]
     mrr_values = [v for _, v in mrr_points]
 
-    today = timezone.now().date()
-    nm, ny = today.month + 1, today.year
-    if nm > 12:
-        nm, ny = 1, ny + 1
-    forecast_start = date_cls(ny, nm, 1)  # próximo mês
+    # Início do forecast = mês seguinte ao último com dados de MRR.
+    # Evita pular meses na virada (ex: 1/jul sem dados de jul → forecast
+    # começava em ago, deveria começar em jul).
+    if mrr_points:
+        last_data_key = mrr_points[-1][0]  # "YYYY-MM"
+        ly, lm = int(last_data_key[:4]), int(last_data_key[5:7])
+        nm, ny = lm + 1, ly
+        if nm > 12:
+            nm, ny = 1, ny + 1
+    else:
+        today = timezone.now().date()
+        nm, ny = today.month + 1, today.year
+        if nm > 12:
+            nm, ny = 1, ny + 1
+    forecast_start = date_cls(ny, nm, 1)
 
     def _month_at(i: int) -> date_cls:
         m = forecast_start.month + i
