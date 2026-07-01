@@ -35,7 +35,7 @@ class Migration(migrations.Migration):
                 "verbose_name": "Fato: snapshot de CTO",
                 "verbose_name_plural": "Fatos: snapshots de CTO",
                 "indexes": [
-                    models.Index(fields=["organization", "captured_at"]),
+                    models.Index(fields=["organization", "captured_at"], name="factcto_org_captured_idx"),
                 ],
             },
         ),
