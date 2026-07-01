@@ -5709,6 +5709,18 @@ _CTO_PROJECT_NAMES: dict[str, str] = {
 # CTOs com max_port acima desse limite são OLTs/splitters de agregação.
 _CTO_MAX_PORT_CUTOFF = 64
 
+# Tamanhos padronizados de CTOs FTTH. Arredondamos o max_port observado
+# para o próximo tamanho padrão para estimar a capacidade real.
+_CTO_STANDARD_SIZES = (4, 8, 12, 16, 24, 32, 48, 64)
+
+
+def _cto_capacity(max_port: int) -> int:
+    """Estima a capacidade total da CTO pelo tamanho padrão mais próximo."""
+    for size in _CTO_STANDARD_SIZES:
+        if max_port <= size:
+            return size
+    return max_port  # acima de 64 (não deveria chegar aqui com o cutoff)
+
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_cto_summary(organization: Organization) -> dict[str, Any]:
@@ -5747,7 +5759,7 @@ def compute_cto_summary(organization: Organization) -> dict[str, Any]:
         pid = str(g["projeto_id"] or "0")
         proj_name = _CTO_PROJECT_NAMES.get(pid, f"Projeto {pid}")
         occ = g["occupied"]
-        total = g["max_port"] or occ
+        total = _cto_capacity(g["max_port"]) if g["max_port"] else occ
 
         proj_agg[pid]["project"] = proj_name
         proj_agg[pid]["project_id"] = pid
