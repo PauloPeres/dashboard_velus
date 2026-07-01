@@ -166,4 +166,12 @@ TOOL_SPECS: list[ToolSpec] = [
         _wrap_limit(agg.compute_priority_customers),
         limit_param=True,
     ),
+    # ── Rede / infraestrutura ─────────────────────────────────────────
+    ToolSpec(
+        "rede_cto_summary",
+        "Ocupação de CTOs (caixas de distribuição FTTH): total de caixas, "
+        "portas ocupadas/livres, taxa de ocupação, detalhamento por projeto "
+        "e top CTOs quase lotadas. Capacidade real via IXC.",
+        _wrap_org_only(agg.compute_cto_summary),
+    ),
 ]
