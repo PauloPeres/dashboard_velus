@@ -5706,74 +5706,105 @@ _CTO_PROJECT_NAMES: dict[str, str] = {
     "9": "Sorocaba Ind.",
 }
 
-# CTOs com max_port acima desse limite são OLTs/splitters de agregação.
-_CTO_MAX_PORT_CUTOFF = 64
-
-# Tamanhos padronizados de CTOs FTTH. Arredondamos o max_port observado
-# para o próximo tamanho padrão para estimar a capacidade real.
-_CTO_STANDARD_SIZES = (4, 8, 12, 16, 24, 32, 48, 64)
+# Capacidade máxima de porta para considerar CTO (acima = OLT/agregação).
+_CTO_CAPACITY_CUTOFF = 64
 
 
-def _cto_capacity(max_port: int) -> int:
-    """Estima a capacidade total da CTO pelo tamanho padrão mais próximo."""
-    for size in _CTO_STANDARD_SIZES:
-        if max_port <= size:
-            return size
-    return max_port  # acima de 64 (não deveria chegar aqui com o cutoff)
+def _fetch_cto_catalog(organization: Organization) -> dict[str, dict[str, Any]]:
+    """Busca catálogo de CTOs do IXC via rad_caixa_ftth.
+
+    Retorna {cto_id: {capacidade, id_projeto, descricao, id_cidade, bairro, status}}
+    para todas as caixas ativas com capacidade real (campo 'capacidade').
+    """
+    import structlog
+    _log = structlog.get_logger(__name__)
+
+    from apps.tenancy.models import OrganizationDataSource
+    from apps.integrations.ixc.client import IxcHttpClient
+
+    ds = (
+        OrganizationDataSource.objects
+        .filter(organization=organization, source_type="IXC", is_active=True)
+        .first()
+    )
+    if not ds:
+        return {}
+
+    creds = ds.get_credentials()
+    catalog: dict[str, dict[str, Any]] = {}
+    try:
+        with IxcHttpClient(
+            base_url=creds["base_url"],
+            user_id=creds["user_id"],
+            api_token=creds["api_token"],
+        ) as client:
+            for raw in client.paginate_ixc("rad_caixa_ftth"):
+                cto_id = str(raw.get("id", ""))
+                cap = int(raw.get("capacidade", 0) or 0)
+                if cap <= 0 or cap > _CTO_CAPACITY_CUTOFF:
+                    continue
+                catalog[cto_id] = {
+                    "capacidade": cap,
+                    "id_projeto": str(raw.get("id_projeto", "0")),
+                    "descricao": raw.get("descricao", ""),
+                    "id_cidade": str(raw.get("id_cidade", "")),
+                    "bairro": raw.get("bairro", ""),
+                    "status": raw.get("status", ""),
+                }
+    except Exception:
+        _log.warning("cto_catalog_fetch_failed", exc_info=True)
+
+    return catalog
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_cto_summary(organization: Organization) -> dict[str, Any]:
     """Ocupação de portas de CTOs FTTH, agregada por projeto.
 
-    Fonte: Connection.raw_extras contém id_caixa_ftth, ftth_porta e
-    id_df_projeto — populados pelo sync de radusuarios do IXC.
+    Capacidade real vem do endpoint rad_caixa_ftth do IXC (campo 'capacidade').
+    Ocupação vem de Connection.raw_extras.id_caixa_ftth (radusuarios).
     """
-    from django.db.models.functions import Cast
-    from django.db.models import IntegerField
-
     from apps.network.infrastructure.models import Connection
 
+    # 1) Catálogo do IXC com capacidade real
+    catalog = _fetch_cto_catalog(organization)
+
+    # 2) Ocupação por CTO a partir das conexões
     qs = Connection.objects.filter(organization=organization).annotate(
         cto_id=KeyTextTransform("id_caixa_ftth", "raw_extras"),
-        porta=Cast(KeyTextTransform("ftth_porta", "raw_extras"), IntegerField()),
-        projeto_id=KeyTextTransform("id_df_projeto", "raw_extras"),
     ).exclude(cto_id__isnull=True).exclude(cto_id="").exclude(cto_id="0")
 
-    cto_groups = list(
-        qs.values("cto_id", "projeto_id")
-        .annotate(occupied=Count("id"), max_port=Max("porta"))
-        .order_by("cto_id")
-    )
+    cto_occupied: dict[str, int] = {}
+    for row in qs.values("cto_id").annotate(occupied=Count("id")):
+        cto_occupied[row["cto_id"]] = row["occupied"]
 
-    # Filtrar OLTs (max_port muito alto)
-    cto_groups = [g for g in cto_groups if (g["max_port"] or 0) <= _CTO_MAX_PORT_CUTOFF]
-
-    # Agregar por projeto
+    # 3) Montar dados — CTOs do catálogo (inclui as sem conexão = 100% livres)
     proj_agg: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"cto_count": 0, "occupied": 0, "total_ports": 0}
     )
     all_ctos: list[dict[str, Any]] = []
 
-    for g in cto_groups:
-        pid = str(g["projeto_id"] or "0")
+    for cto_id, info in catalog.items():
+        cap = info["capacidade"]
+        occ = cto_occupied.get(cto_id, 0)
+        pid = info["id_projeto"]
         proj_name = _CTO_PROJECT_NAMES.get(pid, f"Projeto {pid}")
-        occ = g["occupied"]
-        total = _cto_capacity(g["max_port"]) if g["max_port"] else occ
+        free = max(cap - occ, 0)
+        occ_pct = round(occ / cap * 100, 1) if cap else 0.0
 
         proj_agg[pid]["project"] = proj_name
         proj_agg[pid]["project_id"] = pid
         proj_agg[pid]["cto_count"] += 1
         proj_agg[pid]["occupied"] += occ
-        proj_agg[pid]["total_ports"] += total
+        proj_agg[pid]["total_ports"] += cap
 
-        free = max(total - occ, 0)
-        occ_pct = round(occ / total * 100, 1) if total else 0.0
         all_ctos.append({
-            "cto_id": g["cto_id"],
+            "cto_id": cto_id,
+            "descricao": info["descricao"],
             "project": proj_name,
+            "bairro": info["bairro"],
             "occupied": occ,
-            "total_ports": total,
+            "total_ports": cap,
             "free": free,
             "occupancy_pct": occ_pct,
         })
@@ -5797,11 +5828,11 @@ def compute_cto_summary(organization: Organization) -> dict[str, Any]:
     total_free = max(total_ports - total_occupied, 0)
     occupancy_pct = round(total_occupied / total_ports * 100, 1) if total_ports else 0.0
 
-    # Top CTOs por ocupação (quase lotadas)
+    # Top CTOs por ocupação (quase lotadas primeiro)
     top_ctos = sorted(all_ctos, key=lambda x: -x["occupancy_pct"])[:20]
 
     return {
-        "total_ctos": len(cto_groups),
+        "total_ctos": len(catalog),
         "total_occupied": total_occupied,
         "total_free": total_free,
         "total_ports": total_ports,

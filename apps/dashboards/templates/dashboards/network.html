@@ -180,6 +180,7 @@
       <tr>
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CTO</th>
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Projeto</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Bairro</th>
         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ocupadas</th>
         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Livres</th>
@@ -189,8 +190,9 @@
     <tbody class="divide-y divide-gray-100">
       {% for c in cto.top_ctos %}
       <tr class="hover:bg-gray-50">
-        <td class="px-4 py-3 font-medium text-gray-900">#{{ c.cto_id }}</td>
+        <td class="px-4 py-3 font-medium text-gray-900" title="{{ c.descricao }}">#{{ c.cto_id }}{% if c.descricao %} <span class="text-xs text-gray-400">{{ c.descricao }}</span>{% endif %}</td>
         <td class="px-4 py-3 text-gray-700">{{ c.project }}</td>
+        <td class="px-4 py-3 text-gray-500 text-xs truncate max-w-[150px]">{{ c.bairro|default:"—" }}</td>
         <td class="px-4 py-3 text-right tabular-nums text-gray-700">{{ c.occupied }}</td>
         <td class="px-4 py-3 text-right tabular-nums text-gray-500">{{ c.total_ports }}</td>
         <td class="px-4 py-3 text-right tabular-nums {% if c.free == 0 %}text-red-700 font-semibold{% elif c.free <= 2 %}text-orange-600{% else %}text-gray-700{% endif %}">{{ c.free }}</td>
