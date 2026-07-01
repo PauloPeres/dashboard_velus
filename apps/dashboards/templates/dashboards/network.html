@@ -168,6 +168,21 @@
   </div>
 </div>
 
+<!-- Evolução temporal de CTOs -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Evolucao de CTOs (mensal)</h2>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">Portas ocupadas vs livres e total de caixas ao longo do tempo — captura semanal</p>
+  {% if cto_history_has_data %}
+  <div id="cto-history-chart" style="height:340px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  {% else %}
+  <div class="py-12 text-center text-gray-400 text-sm">
+    Ainda sem historico — o primeiro snapshot sera capturado na proxima segunda-feira e a serie aparece aqui em seguida.
+  </div>
+  {% endif %}
+</div>
+
 <!-- Top CTOs por ocupação -->
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden mb-6">
   <div class="p-5 pb-0">
@@ -333,11 +348,13 @@
 {% if history_has_data %}{{ history_chart_json|json_script:"history-data" }}{% endif %}
 {% if bandwidth_has_data %}{{ bandwidth_chart_json|json_script:"bandwidth-data" }}{% endif %}
 {% if cto_has_data %}{{ cto_chart_json|json_script:"cto-data" }}{% endif %}
+{% if cto_history_has_data %}{{ cto_history_chart_json|json_script:"cto-history-data" }}{% endif %}
 <script>
   renderChart("status-chart", "status-data");
   renderChart("nas-chart", "nas-data");
   {% if history_has_data %}renderChart("history-chart", "history-data");{% endif %}
   {% if bandwidth_has_data %}renderChart("bandwidth-chart", "bandwidth-data");{% endif %}
   {% if cto_has_data %}renderChart("cto-chart", "cto-data");{% endif %}
+  {% if cto_history_has_data %}renderChart("cto-history-chart", "cto-history-data");{% endif %}
 </script>
 {% endblock %}

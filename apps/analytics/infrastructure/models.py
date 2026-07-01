@@ -273,6 +273,30 @@ class FactNetworkSnapshot(TenantModel):
         ]
 
 
+class FactCtoSnapshot(TenantModel):
+    """Snapshot periódico de CTOs FTTH — série temporal de ocupação.
+
+    Append-only: o Beat grava 1 linha por captura com o estado agregado das
+    caixas de distribuição (total, portas ocupadas/livres, % ocupação).
+    O campo `by_project` guarda o detalhamento por projeto em JSON.
+    """
+
+    captured_at = models.DateTimeField(db_index=True)
+    total_ctos = models.IntegerField(default=0)
+    total_ports = models.IntegerField(default=0)
+    occupied_ports = models.IntegerField(default=0)
+    free_ports = models.IntegerField(default=0)
+    occupancy_pct = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+    by_project = models.JSONField(default=list)
+
+    class Meta:
+        verbose_name = _("Fato: snapshot de CTO")
+        verbose_name_plural = _("Fatos: snapshots de CTO")
+        indexes = [
+            models.Index(fields=["organization", "captured_at"]),
+        ]
+
+
 # =============================================================================
 # Churn risk — score de risco de cancelamento por cliente
 # =============================================================================

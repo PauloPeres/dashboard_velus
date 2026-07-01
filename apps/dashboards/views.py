@@ -74,6 +74,7 @@ from apps.analytics.application.aggregations import (
     compute_top_risk_customers,
     search_customers,
 )
+from apps.analytics.application.cto_snapshots import compute_cto_history
 from apps.analytics.application.network_snapshots import compute_network_history
 from apps.shared.context import get_current_organization
 
@@ -1652,6 +1653,7 @@ def network(request: HttpRequest) -> HttpResponse:
 
     # CTOs — Caixas de Distribuição FTTH (ocupação de portas por projeto)
     cto = compute_cto_summary(org)
+    cto_history = compute_cto_history(org, months=12)
 
     return render(
         request,
@@ -1691,6 +1693,9 @@ def network(request: HttpRequest) -> HttpResponse:
             "cto_free_str": f"{cto['total_free']:,}".replace(",", "."),
             "cto_occupancy_str": f"{cto['occupancy_pct']:.1f}%",
             "cto_chart_json": charts.cto_by_project_stacked_bar(cto["by_project"]),
+            "cto_history": cto_history,
+            "cto_history_has_data": cto_history["count"] > 0,
+            "cto_history_chart_json": charts.cto_history_chart(cto_history) if cto_history["count"] > 0 else "",
         },
     )
 

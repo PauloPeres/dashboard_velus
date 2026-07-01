@@ -270,6 +270,61 @@ def _run_network_snapshot(*, organization_id: int) -> dict[str, Any]:
 
 
 # =============================================================================
+# Snapshot de CTOs — captura ocupação de caixas FTTH pra série temporal (Beat)
+# =============================================================================
+@shared_task(name="apps.analytics.tasks.dispatch_cto_snapshot_for_all_orgs")
+def dispatch_cto_snapshot_for_all_orgs() -> dict[str, int]:
+    """Enfileira a captura do snapshot de CTOs para cada org ativa."""
+    return _dispatch_cto_snapshot()
+
+
+@allow_cross_tenant(reason="dispatch_cto_snapshot itera Organization (não-TenantModel)")
+def _dispatch_cto_snapshot() -> dict[str, int]:
+    from apps.tenancy.models import Organization
+
+    n = 0
+    for org in Organization.objects.filter(is_active=True):
+        capture_cto_snapshot_for_org.apply_async(
+            kwargs={"organization_id": org.pk},
+            queue=org.celery_queue_name,
+        )
+        n += 1
+        _logger.info("cto_snapshot_dispatched", org=org.slug)
+
+    return {"dispatched": n}
+
+
+@shared_task(
+    name="apps.analytics.tasks.capture_cto_snapshot_for_org",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    max_retries=2,
+    acks_late=True,
+)
+def capture_cto_snapshot_for_org(*, organization_id: int) -> dict[str, Any]:
+    """Captura e persiste 1 snapshot de ocupação de CTOs de uma org."""
+    return _run_cto_snapshot(organization_id=organization_id)
+
+
+@allow_cross_tenant(reason="snapshot de CTO opera fora de request HTTP")
+def _run_cto_snapshot(*, organization_id: int) -> dict[str, Any]:
+    from apps.analytics.application.cto_snapshots import capture_cto_snapshot
+    from apps.tenancy.models import Organization
+
+    org = Organization.objects.get(pk=organization_id)
+    set_current_organization(org)
+    snap = capture_cto_snapshot(org)
+    summary = {
+        "total_ctos": snap.total_ctos,
+        "occupied": snap.occupied_ports,
+        "free": snap.free_ports,
+    }
+    _logger.info("cto_snapshot_done", org=org.slug, **summary)
+    return summary
+
+
+# =============================================================================
 # Churn risk — recomputa scores de risco de cancelamento (Beat diário)
 # =============================================================================
 @shared_task(name="apps.analytics.tasks.dispatch_churn_risk_for_all_orgs")

@@ -18,6 +18,7 @@ from decimal import Decimal
 from typing import Any
 
 from apps.analytics.application import aggregations as agg
+from apps.analytics.application.cto_snapshots import compute_cto_history
 from apps.shared.context import get_current_organization
 from apps.shared.exceptions import NoOrganizationInContextError
 
@@ -167,6 +168,13 @@ TOOL_SPECS: list[ToolSpec] = [
         limit_param=True,
     ),
     # ── Rede / infraestrutura ─────────────────────────────────────────
+    ToolSpec(
+        "rede_cto_historico",
+        "Evolução mensal de CTOs FTTH: total caixas, portas ocupadas/livres "
+        "ao longo dos últimos N meses. Série temporal para análise de crescimento.",
+        _wrap_months(compute_cto_history),
+        months_param=True,
+    ),
     ToolSpec(
         "rede_cto_summary",
         "Ocupação de CTOs (caixas de distribuição FTTH): total de caixas, "

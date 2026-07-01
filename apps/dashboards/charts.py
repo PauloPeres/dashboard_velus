@@ -1810,6 +1810,54 @@ def atendimento_top_motivos(rows: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+def cto_history_chart(history: dict[str, Any]) -> str:
+    """Linha temporal — evolução de portas ocupadas/livres e CTOs ao longo do tempo."""
+    labels = history["labels"]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                name="Ocupadas",
+                x=labels,
+                y=history["occupied"],
+                marker_color="#6366f1",
+                hovertemplate="<b>%{x}</b><br>Ocupadas: %{y}<extra></extra>",
+            ),
+            go.Bar(
+                name="Livres",
+                x=labels,
+                y=history["free"],
+                marker_color="#d1d5db",
+                hovertemplate="<b>%{x}</b><br>Livres: %{y}<extra></extra>",
+            ),
+            go.Scatter(
+                name="CTOs",
+                x=labels,
+                y=history["total_ctos"],
+                mode="lines+markers",
+                yaxis="y2",
+                line={"color": "#f59e0b", "width": 2},
+                marker={"size": 6},
+                hovertemplate="<b>%{x}</b><br>CTOs: %{y}<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "margin": {"l": 50, "r": 50, "t": 10, "b": 50},
+            "yaxis": {"title": "Portas"},
+            "yaxis2": {
+                "title": "CTOs",
+                "overlaying": "y",
+                "side": "right",
+                "showgrid": False,
+            },
+            "legend": {"orientation": "h", "y": -0.2},
+        },
+    )
+    return _to_json(fig)
+
+
 def cto_by_project_stacked_bar(by_project: list[dict[str, Any]]) -> str:
     """Barras empilhadas — portas ocupadas vs livres por projeto FTTH."""
     labels = [p["project"] for p in by_project]
