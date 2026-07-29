@@ -1810,6 +1810,59 @@ def atendimento_top_motivos(rows: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+_TREND_PALETTE = [
+    "#6366f1", "#06b6d4", "#10b981", "#f59e0b", "#ef4444",
+    "#8b5cf6", "#ec4899", "#0ea5e9", "#f97316", "#84cc16",
+]
+
+
+def atendimento_categoria_trend(
+    buckets: list[str],
+    series: list[dict[str, Any]],
+    *,
+    unidade: str = "atendimentos",
+) -> str:
+    """Área empilhada — evolução de categorias (motivos/tags) ao longo do tempo.
+
+    Cada série vira uma faixa empilhada; "Outros" (fora do top-N) sai em cinza.
+    `hovermode` unificado deixa comparar a composição em cada ponto do tempo.
+    """
+    traces = []
+    color_i = 0
+    for s in series:
+        is_outros = s.get("is_outros")
+        if is_outros:
+            color = "#9ca3af"
+        else:
+            color = _TREND_PALETTE[color_i % len(_TREND_PALETTE)]
+            color_i += 1
+        traces.append(
+            go.Scatter(
+                name=s["name"],
+                x=buckets,
+                y=s["values"],
+                mode="lines",
+                stackgroup="one",
+                line={"width": 0.5, "color": color},
+                fillcolor=color,
+                hovertemplate="<b>%{fullData.name}</b><br>%{x}: %{y} " + unidade
+                + "<extra></extra>",
+            )
+        )
+    fig = go.Figure(
+        data=traces,
+        layout={
+            **_LAYOUT_BASE,
+            "showlegend": True,
+            "hovermode": "x unified",
+            "margin": {"l": 50, "r": 20, "t": 10, "b": 40},
+            "legend": {"orientation": "h", "y": -0.18, "font": {"size": 11}},
+            "yaxis": {"title": unidade.capitalize(), "rangemode": "tozero"},
+        },
+    )
+    return _to_json(fig)
+
+
 def cto_history_chart(history: dict[str, Any]) -> str:
     """Linha temporal — evolução de portas ocupadas/livres e CTOs ao longo do tempo."""
     labels = history["labels"]

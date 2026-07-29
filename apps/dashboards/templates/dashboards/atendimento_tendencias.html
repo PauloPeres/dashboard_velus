@@ -1,0 +1,98 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Tendências de Atendimento · Velus{% endblock %}
+
+{% block content %}
+<!-- Cabeçalho -->
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Tendências de Atendimento</h1>
+    <p class="text-xs text-gray-400 mt-0.5">Evolução dos motivos e das tags dos atendimentos ao longo do tempo — pra comparar mix e detectar mudanças</p>
+  </div>
+  <!-- Filtro de departamento -->
+  <div class="relative">
+    <select
+      onchange="setParam('departamento', this.value)"
+      class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 pr-8
+             appearance-none cursor-pointer text-gray-700
+             focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400
+             hover:border-gray-300 transition-colors"
+    >
+      <option value="" {% if not selected_departamento_id %}selected{% endif %}>Todos os departamentos</option>
+      {% for d in departamentos %}
+      <option value="{{ d.id }}" {% if d.id == selected_departamento_id %}selected{% endif %}>{{ d.nome }}</option>
+      {% endfor %}
+    </select>
+    <span class="pointer-events-none absolute right-2.5 inset-y-0 flex items-center">
+      <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </span>
+  </div>
+</div>
+
+<!-- Barra de contexto: granularidade + filtro ativo + resumo -->
+<div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+  <!-- Toggle semana / mês -->
+  <div class="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
+    <button onclick="setParam('g', 'week')"
+      class="px-3 py-1.5 text-sm rounded-md transition-colors
+             {% if granularity == 'week' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">
+      Semanal
+    </button>
+    <button onclick="setParam('g', 'month')"
+      class="px-3 py-1.5 text-sm rounded-md transition-colors
+             {% if granularity == 'month' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">
+      Mensal
+    </button>
+  </div>
+
+  <div class="flex flex-wrap items-center gap-2 text-xs">
+    {% if selected_departamento_nome %}
+    <span class="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
+      Departamento: <strong>{{ selected_departamento_nome }}</strong>
+    </span>
+    {% endif %}
+    <span class="text-gray-400">{{ total|intcomma }} atendimentos no período · {{ n_motivos_distintos }} motivos · {{ n_tags_distintas }} tags distintas</span>
+  </div>
+</div>
+
+<!-- Gráfico 1: Motivos ao longo do tempo -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Motivos de atendimento ao longo do tempo</h2>
+    <span class="text-xs text-gray-400">top {{ top_n }} motivos · demais em “Outros” · por {% if granularity == 'month' %}mês{% else %}semana{% endif %}</span>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">Motivos configurados na Opa!, contados por {% if granularity == 'month' %}mês{% else %}semana{% endif %} de abertura. Um atendimento pode ter mais de um motivo.</p>
+  <div id="motivos-trend-chart" style="height:380px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+</div>
+
+<!-- Gráfico 2: Tags ao longo do tempo -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Tags de atendimento ao longo do tempo</h2>
+    <span class="text-xs text-gray-400">top {{ top_n }} tags · demais em “Outros” · por {% if granularity == 'month' %}mês{% else %}semana{% endif %}</span>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">Tags configuradas na Opa!, contadas por {% if granularity == 'month' %}mês{% else %}semana{% endif %} de abertura. Um atendimento pode ter várias tags — cada uma é contada. {{ atendimentos_com_tag|intcomma }} atendimentos com ao menos uma tag.</p>
+  <div id="tags-trend-chart" style="height:380px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ motivos_trend_json|json_script:"motivos-trend-data" }}
+{{ tags_trend_json|json_script:"tags-trend-data" }}
+<script>
+  function setParam(key, value) {
+    var url = new URL(window.location.href);
+    if (value) {
+      url.searchParams.set(key, value);
+    } else {
+      url.searchParams.delete(key);
+    }
+    window.location.href = url.toString();
+  }
+  renderChart("motivos-trend-chart", "motivos-trend-data");
+  renderChart("tags-trend-chart", "tags-trend-data");
+</script>
+{% endblock %}
