@@ -23,6 +23,7 @@ from apps.analytics.application.aggregations import (
     compute_arpu_by_plan,
     compute_at_risk_contracts,
     compute_atendimento_detail,
+    compute_atendimento_horario,
     compute_atendimento_tendencias,
     compute_atendimento_triagem,
     compute_bad_conversations,
@@ -1352,6 +1353,17 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
     focus_motivo = request.GET.get("motivo", "").strip() or None
     focus_tag = request.GET.get("tag", "").strip() or None
 
+    # Gráfico horário sazonal (F3) — janela própria em dias (?hd=7|14|30).
+    try:
+        horario_dias = int(request.GET.get("hd", 14))
+    except (ValueError, TypeError):
+        horario_dias = 14
+    if horario_dias not in (7, 14, 30):
+        horario_dias = 14
+    horario = compute_atendimento_horario(
+        org, days=horario_dias, departamento_id=departamento_id
+    )
+
     data = compute_atendimento_tendencias(
         org,
         months=months,
@@ -1383,6 +1395,9 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
         "dashboards/atendimento_tendencias.html",
         {
             **data,
+            "horario": horario,
+            "horario_dias": horario_dias,
+            "horario_json": charts.atendimento_horario_sazonal(horario),
             "motivos_trend_json": charts.atendimento_categoria_trend(
                 data["buckets"],
                 data["motivos_series"],

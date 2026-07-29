@@ -1875,6 +1875,81 @@ def atendimento_categoria_trend(
     return _to_json(fig)
 
 
+def atendimento_horario_sazonal(d: dict[str, Any]) -> str:
+    """Linha horária — atendimentos abertos vs banda esperada (baseline sazonal).
+
+    Banda cinza = esperado (média ± k·desvio do slot dia-da-semana×hora);
+    linha azul = real; pontos vermelhos = anomalias (pico acima da banda);
+    linhas verticais tracejadas = dias com vencimento de fatura.
+    """
+    labels = d["labels"]
+    fig = go.Figure()
+    # Banda esperada (lower invisível + upper com fill até o lower).
+    fig.add_trace(
+        go.Scatter(
+            x=labels, y=d["lower"], mode="lines", line={"width": 0},
+            hoverinfo="skip", showlegend=False, name="min esperado",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=labels, y=d["upper"], mode="lines", line={"width": 0},
+            fill="tonexty", fillcolor="rgba(148,163,184,0.25)",
+            hoverinfo="skip", showlegend=True, name="Faixa esperada",
+        )
+    )
+    # Esperado (média do slot).
+    fig.add_trace(
+        go.Scatter(
+            x=labels, y=d["expected"], mode="lines", name="Esperado",
+            line={"color": "#94a3b8", "width": 1.5, "dash": "dot"},
+            hovertemplate="Esperado: %{y:.1f}<extra></extra>",
+        )
+    )
+    # Real.
+    fig.add_trace(
+        go.Scatter(
+            x=labels, y=d["actual"], mode="lines", name="Real",
+            line={"color": "#2563eb", "width": 2},
+            hovertemplate="<b>%{x}</b><br>Real: %{y}<extra></extra>",
+        )
+    )
+    # Anomalias (picos acima da banda).
+    if d["anomaly_x"]:
+        fig.add_trace(
+            go.Scatter(
+                x=d["anomaly_x"], y=d["anomaly_y"], mode="markers", name="Anomalia",
+                marker={"color": "#ef4444", "size": 9, "symbol": "circle"},
+                hovertemplate="<b>%{x}</b><br>Anomalia: %{y}<extra></extra>",
+            )
+        )
+    # Marcadores de dias de vencimento (linha vertical na 1ª hora do dia).
+    shapes = []
+    for v in d.get("vencimentos", []):
+        prefix = v["date"] + " "
+        x_at = next((lb for lb in labels if lb.startswith(prefix)), None)
+        if x_at is not None:
+            shapes.append(
+                {
+                    "type": "line", "x0": x_at, "x1": x_at, "yref": "paper",
+                    "y0": 0, "y1": 1,
+                    "line": {"color": "rgba(245,158,11,0.5)", "width": 1, "dash": "dash"},
+                }
+            )
+    fig.update_layout(
+        **{
+            **_LAYOUT_BASE,
+            "shapes": shapes,
+            "hovermode": "x unified",
+            "margin": {"l": 50, "r": 20, "t": 10, "b": 60},
+            "legend": {"orientation": "h", "y": -0.25, "font": {"size": 11}},
+            "xaxis": {"tickangle": -45, "nticks": 24},
+            "yaxis": {"title": "Atendimentos/hora", "rangemode": "tozero"},
+        }
+    )
+    return _to_json(fig)
+
+
 def cto_history_chart(history: dict[str, Any]) -> str:
     """Linha temporal — evolução de portas ocupadas/livres e CTOs ao longo do tempo."""
     labels = history["labels"]
