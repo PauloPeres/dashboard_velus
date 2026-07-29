@@ -66,6 +66,25 @@ class AtendenteRefDTO:
 
 
 @dataclass(frozen=True)
+class EtiquetaDTO:
+    """Etiqueta/tag configurada na fonte — catalogo id opaco -> nome.
+
+    A listagem de atendimentos so traz as tags como ids opacos (`id_tag`); o
+    nome vem deste catalogo (barato, ~dezenas de registros), igual ao mapa de
+    departamentos/atendentes. Usado pra resolver `Atendimento.tags`.
+    """
+
+    external_id: str
+    nome: str = ""
+    cor: str = ""
+    raw_extras: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.external_id:
+            raise ValueError("EtiquetaDTO.external_id nao pode ser vazio")
+
+
+@dataclass(frozen=True)
 class AtendimentoDTO:
     """Representacao neutra de um atendimento/conversa de qualquer fonte externa."""
 
@@ -82,6 +101,11 @@ class AtendimentoDTO:
     opened_at: datetime | None
 
     motivos: list[str] = field(default_factory=list)
+    # `tag_ids` = ids opacos das etiquetas (id_tag) como vem na fonte; `tags` =
+    # nomes resolvidos via o catalogo de etiquetas (preenchido no run_opa_sync,
+    # igual atendente_nome/customer_document). Um atendimento pode ter N tags.
+    tag_ids: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
     rating: int | None = None  # nota humana likert 1-5 (so vem em GET populado)
     closed_at: datetime | None = None
 

@@ -22,6 +22,7 @@ from apps.integrations.opa.atendimento import OpaAtendimentoSource
 from apps.integrations.opa.client import OpaHttpClient
 from apps.integrations.opa.schemas import (
     OpaAtendimentoSchema,
+    OpaEtiquetaSchema,
     OpaMensagemSchema,
 )
 from apps.integrations.shared.enums import Capability, SourceType
@@ -98,6 +99,35 @@ class TestOpaAtendimentoSchema:
     def test_extras_captured(self) -> None:
         schema = OpaAtendimentoSchema.model_validate(_sample_atendimento())
         assert schema.get_extras().get("origem") == "bot"
+
+    def test_tag_ids_extracted_from_tags_dedup_ordered(self) -> None:
+        # tags vem como aplicacoes {_id, data, id_tag, ...}; a identidade e o
+        # id_tag. Dedup preservando ordem; ainda fica cru em raw_extras.
+        schema = OpaAtendimentoSchema.model_validate(
+            _sample_atendimento(
+                tags=[
+                    {"_id": "app1", "id_tag": "t-suporte", "data": "2026-01-01"},
+                    {"_id": "app2", "id_tag": "t-comercial"},
+                    {"_id": "app3", "id_tag": "t-suporte"},  # duplicada
+                ]
+            )
+        )
+        assert schema.tag_ids == ["t-suporte", "t-comercial"]
+        assert schema.get_extras().get("tags")  # preservado no raw
+
+    def test_tag_ids_empty_when_no_tags(self) -> None:
+        schema = OpaAtendimentoSchema.model_validate(_sample_atendimento())
+        assert schema.tag_ids == []
+
+
+class TestOpaEtiquetaSchema:
+    def test_parses_catalog_record(self) -> None:
+        schema = OpaEtiquetaSchema.model_validate(
+            {"_id": "t-suporte", "nome": "Suporte", "cor": "blue"}
+        )
+        assert schema.id == "t-suporte"
+        assert schema.nome == "Suporte"
+        assert schema.cor == "blue"
 
 
 class TestOpaMensagemSchema:
@@ -248,6 +278,47 @@ class TestOpaListAtendimentos:
         assert deps[0].nome == "Suporte"
         assert clientes[0].document == "12345678901"  # normalizado
         assert clientes[1].document == ""
+
+    def test_list_etiquetas(self, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get(f"{API_URL}/etiqueta/").mock(
+            return_value=Response(
+                200,
+                json={"data": [
+                    {"_id": "t-suporte", "nome": "Suporte", "cor": "blue"},
+                    {"_id": "t-comercial", "nome": "Comercial", "cor": "green"},
+                ]},
+            )
+        )
+
+        source = OpaAtendimentoSource(base_url=BASE_URL, token=TOKEN)
+        etiquetas = list(source.list_etiquetas())
+
+        assert [e.external_id for e in etiquetas] == ["t-suporte", "t-comercial"]
+        assert etiquetas[0].nome == "Suporte"
+        assert etiquetas[0].cor == "blue"
+
+    def test_list_atendimentos_carries_tag_ids(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        respx_mock.get(f"{API_URL}/atendimento").mock(
+            return_value=Response(
+                200,
+                json={"data": [
+                    _sample_atendimento(
+                        _id="a1",
+                        tags=[
+                            {"_id": "app1", "id_tag": "t-suporte"},
+                            {"_id": "app2", "id_tag": "t-comercial"},
+                        ],
+                    ),
+                ]},
+            )
+        )
+        source = OpaAtendimentoSource(base_url=BASE_URL, token=TOKEN)
+        dtos = list(source.list_atendimentos())
+        assert dtos[0].tag_ids == ["t-suporte", "t-comercial"]
+        # nomes so sao resolvidos no run_opa_sync (via catalogo), aqui ainda vazio
+        assert dtos[0].tags == []
 
     def test_list_atendentes(self, respx_mock: respx.MockRouter) -> None:
         respx_mock.get(f"{API_URL}/usuario/").mock(

@@ -94,6 +94,19 @@ class OpaUsuarioSchema(_OpaBase):
         return _to_str(v)
 
 
+class OpaEtiquetaSchema(_OpaBase):
+    """Registro de `etiqueta` (tag configurada de atendimento) — mapa id opaco -> nome."""
+
+    id: str = Field(validation_alias=AliasChoices("_id", "id"))
+    nome: str = Field(default="")
+    cor: str = Field(default="")
+
+    @field_validator("id", "nome", "cor", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+
 class OpaAtendimentoSchema(_OpaBase):
     """Registro de `atendimento` (conversa/chamado omnichannel).
 
@@ -161,6 +174,29 @@ class OpaAtendimentoSchema(_OpaBase):
             else:
                 out.append(_to_str(m))
         return [x for x in out if x]
+
+    @property
+    def tag_ids(self) -> list[str]:
+        """Ids opacos (id_tag) das etiquetas aplicadas no atendimento.
+
+        `tags` vem como lista de dicts `{_id, data, id_tag, id_atendente}` — o
+        `_id` identifica a APLICACAO da tag (unico por evento); a identidade da
+        etiqueta em si e o `id_tag` (aponta pro catalogo de etiquetas). Fica em
+        `model_extra` (nao e campo declarado). Dedup preservando ordem.
+        """
+        raw = (self.model_extra or {}).get("tags")
+        if not isinstance(raw, list):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for t in raw:
+            if not isinstance(t, dict):
+                continue
+            tid = _to_str(t.get("id_tag"))
+            if tid and tid not in seen:
+                seen.add(tid)
+                out.append(tid)
+        return out
 
     @property
     def rating(self) -> int | None:

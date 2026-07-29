@@ -53,6 +53,44 @@ class Departamento(TenantModel):
         return f"{self.nome} ({self.source_type}:{self.external_id})"
 
 
+class Etiqueta(TenantModel):
+    """Etiqueta/tag configurada de atendimento (catalogo id_tag -> nome).
+
+    Espelha `Departamento`: catalogo barato sincronizado da fonte (Opa! Suite,
+    ~dezenas de registros) usado pra resolver o nome das tags que a listagem de
+    atendimentos so traz como id opaco (`id_tag`)."""
+
+    source_type = models.CharField(
+        max_length=32,
+        choices=SourceType.choices,
+        help_text=_("Sistema externo que originou este registro."),
+    )
+    external_id = models.CharField(
+        max_length=128,
+        help_text=_("ID da etiqueta no sistema externo (id_tag opaco — string)."),
+    )
+    nome = models.CharField(max_length=255, blank=True, default="")
+    cor = models.CharField(max_length=32, blank=True, default="")
+
+    raw_extras = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        verbose_name = _("Etiqueta de atendimento")
+        verbose_name_plural = _("Etiquetas de atendimento")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "source_type", "external_id"],
+                name="unique_atendimento_etiqueta_per_source",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "source_type"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.nome} ({self.source_type}:{self.external_id})"
+
+
 class Atendimento(TenantModel):
     """Atendimento/conversa omnichannel vindo de uma fonte externa (Opa! Suite, ...).
 
@@ -116,6 +154,9 @@ class Atendimento(TenantModel):
     protocol = models.CharField(max_length=128, blank=True, default="")
 
     motivos = models.JSONField(default=list, blank=True)
+    # Nomes das etiquetas resolvidos via catalogo Etiqueta no sync (desnormalizado,
+    # igual motivos). Um atendimento pode ter N tags. Fonte crua fica em raw_extras.
+    tags = models.JSONField(default=list, blank=True)
     rating = models.PositiveSmallIntegerField(
         null=True, blank=True,
         help_text=_("Nota humana likert 1-5 (so vem em GET populado)."),
