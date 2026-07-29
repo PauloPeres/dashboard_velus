@@ -107,6 +107,21 @@ class OpaEtiquetaSchema(_OpaBase):
         return _to_str(v)
 
 
+class OpaMotivoSchema(_OpaBase):
+    """Registro do catalogo `atendimento/motivo` — mapa id opaco -> nome.
+
+    O nome vem no campo `motivo` (nao `nome`). Ex.: `{_id, motivo, departamentos}`.
+    """
+
+    id: str = Field(validation_alias=AliasChoices("_id", "id"))
+    nome: str = Field(default="", validation_alias=AliasChoices("motivo", "nome", "descricao"))
+
+    @field_validator("id", "nome", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+
 class OpaAtendimentoSchema(_OpaBase):
     """Registro de `atendimento` (conversa/chamado omnichannel).
 
@@ -166,14 +181,25 @@ class OpaAtendimentoSchema(_OpaBase):
         return _id_of(self.setor)
 
     @property
-    def motivos_names(self) -> list[str]:
+    def motivo_ids(self) -> list[str]:
+        """Ids opacos (idMotivo) dos motivos aplicados no atendimento.
+
+        `motivos` vem como lista de dicts `{idMotivo, idAtendente, idDepartamento,
+        data}` — a identidade do motivo e o `idMotivo` (aponta pro catalogo
+        `atendimento/motivo`), NAO um nome inline. Dedup preservando ordem.
+        Aceita tambem string crua (id) por robustez.
+        """
         out: list[str] = []
+        seen: set[str] = set()
         for m in self.motivos:
             if isinstance(m, dict):
-                out.append(_to_str(m.get("nome") or m.get("descricao") or m.get("_id")))
+                mid = _to_str(m.get("idMotivo") or m.get("id_motivo"))
             else:
-                out.append(_to_str(m))
-        return [x for x in out if x]
+                mid = _to_str(m)
+            if mid and mid not in seen:
+                seen.add(mid)
+                out.append(mid)
+        return out
 
     @property
     def tag_ids(self) -> list[str]:

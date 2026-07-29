@@ -23,6 +23,7 @@ from apps.atendimento.domain.dto import (
     DepartamentoDTO,
     EtiquetaDTO,
     MensagemDTO,
+    MotivoDTO,
 )
 from apps.customers.domain.services import normalize_document
 from apps.integrations.shared.enums import Capability, SourceType
@@ -34,6 +35,7 @@ from .schemas import (
     OpaDepartamentoSchema,
     OpaEtiquetaSchema,
     OpaMensagemSchema,
+    OpaMotivoSchema,
     OpaUsuarioSchema,
 )
 
@@ -141,6 +143,27 @@ class OpaAtendimentoSource:
                 )
 
     # -------------------------------------------------------------------------
+    # Motivos (catalogo idMotivo -> nome)
+    # -------------------------------------------------------------------------
+    def list_motivos(self) -> Iterator[MotivoDTO]:
+        with self._client_factory() as client:
+            for raw in client.paginate_opa("atendimento/motivo"):
+                try:
+                    schema = OpaMotivoSchema.model_validate(raw)
+                except ValidationError as exc:
+                    _logger.warning(
+                        "opa_motivo_schema_invalid_skipped",
+                        external_id=raw.get("_id"),
+                        errors=exc.errors()[:1],
+                    )
+                    continue
+                yield MotivoDTO(
+                    external_id=schema.id,
+                    nome=schema.nome,
+                    raw_extras=dict(schema.model_extra or {}),
+                )
+
+    # -------------------------------------------------------------------------
     # Atendimentos
     # -------------------------------------------------------------------------
     def list_atendimentos(
@@ -226,7 +249,7 @@ class OpaAtendimentoSource:
             canal=schema.canal,
             protocol=schema.protocolo,
             opened_at=schema.date,
-            motivos=schema.motivos_names,
+            motivo_ids=schema.motivo_ids,
             tag_ids=schema.tag_ids,
             rating=schema.rating,
             closed_at=schema.fim,
