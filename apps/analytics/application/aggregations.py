@@ -17,6 +17,7 @@ from datetime import date as date_cls
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
 
@@ -37,6 +38,7 @@ from django.db.models.functions import (
     Coalesce,
     ExtractDay,
     TruncDate,
+    TruncHour,
     TruncMonth,
 )
 from django.utils import timezone
@@ -5277,6 +5279,154 @@ def compute_atendimento_tendencias(
         "atendimentos_com_tag": atendimentos_com_tag,
         "total": total,
         "top_n": top_n,
+        "departamentos": departamentos,
+        "selected_departamento_id": departamento_id,
+        "selected_departamento_nome": selected_nome,
+    }
+
+
+_ATENDIMENTO_TZ = ZoneInfo("America/Sao_Paulo")
+_HORARIO_DIAS_VALIDOS = (7, 14, 30)
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_horario(
+    organization: Organization,
+    *,
+    days: int = 14,
+    baseline_weeks: int = 8,
+    k: float = 2.0,
+    departamento_id: int | None = None,
+) -> dict[str, Any]:
+    """Série horária de atendimentos abertos vs baseline sazonal (F3, gráfico 1).
+
+    Pra cada hora da janela de `days` dias, compara o volume real com o
+    esperado pra aquele *slot sazonal* (dia-da-semana × hora), estimado pela
+    média das últimas `baseline_weeks` semanas ANTERIORES à janela. Marca como
+    anomalia (pico) as horas acima de `média + k·desvio` do slot — pra flagar
+    volume anormal de atendimento (ex.: incidente de rede). Também devolve os
+    dias com vencimento de fatura na janela (picos esperados de cobrança).
+
+    Baseline por (dia-da-semana, hora) captura a sazonalidade real (madrugada
+    vazia, pico comercial, diferença fim de semana). v1: marcador de vencimento;
+    o ajuste fino do baseline por proximidade de vencimento fica pra v2.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento, Departamento
+    from apps.financial.infrastructure.models import Invoice
+
+    if days not in _HORARIO_DIAS_VALIDOS:
+        days = 14
+
+    now = timezone.now()
+    now_local = timezone.localtime(now, _ATENDIMENTO_TZ)
+    display_start = now_local.replace(minute=0, second=0, microsecond=0) - timedelta(
+        days=days
+    )
+    baseline_start = display_start - timedelta(weeks=baseline_weeks)
+
+    qs = Atendimento.objects.filter(
+        organization=organization,
+        opened_at__gte=baseline_start,
+        opened_at__isnull=False,
+    )
+    if departamento_id is not None:
+        qs = qs.filter(departamento_id=departamento_id)
+
+    # Contagem por hora (no fuso local) — chave = datetime truncado na hora.
+    hourly_rows = (
+        qs.annotate(h=TruncHour("opened_at", tzinfo=_ATENDIMENTO_TZ))
+        .values("h")
+        .annotate(c=Count("id"))
+    )
+    counts: dict[datetime, int] = {}
+    for row in hourly_rows:
+        h = row["h"]
+        if h is not None:
+            counts[timezone.localtime(h, _ATENDIMENTO_TZ)] = row["c"]
+
+    # Baseline: distribui as contagens por slot (dia-da-semana, hora) nas semanas
+    # ANTERIORES à janela de exibição. Percorre hora a hora pra incluir zeros.
+    slot_samples: dict[tuple[int, int], list[int]] = defaultdict(list)
+    cursor = baseline_start
+    while cursor < display_start:
+        slot_samples[(cursor.weekday(), cursor.hour)].append(counts.get(cursor, 0))
+        cursor += timedelta(hours=1)
+
+    slot_stats: dict[tuple[int, int], tuple[float, float]] = {}
+    for slot, samples in slot_samples.items():
+        mean = statistics.fmean(samples) if samples else 0.0
+        std = statistics.pstdev(samples) if len(samples) > 1 else 0.0
+        slot_stats[slot] = (mean, std)
+
+    # Série da janela de exibição, hora a hora.
+    labels: list[str] = []
+    actual: list[int] = []
+    expected: list[float] = []
+    upper: list[float] = []
+    lower: list[float] = []
+    anomaly_x: list[str] = []
+    anomaly_y: list[int] = []
+
+    cursor = display_start + timedelta(hours=1)
+    while cursor <= now_local:
+        slot = (cursor.weekday(), cursor.hour)
+        mean, std = slot_stats.get(slot, (0.0, 0.0))
+        up = mean + k * std
+        lo = max(0.0, mean - k * std)
+        val = counts.get(cursor, 0)
+        label = cursor.strftime("%d/%m %Hh")
+        labels.append(label)
+        actual.append(val)
+        expected.append(round(mean, 2))
+        upper.append(round(up, 2))
+        lower.append(round(lo, 2))
+        # Anomalia = pico acima da banda (com uma folga mínima pra não flagar
+        # ruído quando o baseline é ~0).
+        if val > up and val >= mean + 1 and val >= 2:
+            anomaly_x.append(label)
+            anomaly_y.append(val)
+        cursor += timedelta(hours=1)
+
+    # Dias com vencimento de fatura na janela (picos de cobrança esperados).
+    due_rows = (
+        Invoice.objects.filter(
+            organization=organization,
+            due_date__gte=display_start.date(),
+            due_date__lte=now_local.date(),
+        )
+        .values("due_date")
+        .annotate(c=Count("id"))
+        .order_by("due_date")
+    )
+    vencimentos = [
+        {"date": r["due_date"].strftime("%d/%m"), "count": r["c"]} for r in due_rows
+    ]
+
+    departamentos = list(
+        Departamento.objects.filter(organization=organization)
+        .order_by("nome")
+        .values("id", "nome")
+    )
+    selected_nome = None
+    if departamento_id is not None:
+        selected_nome = next(
+            (d["nome"] for d in departamentos if d["id"] == departamento_id), None
+        )
+
+    return {
+        "days": days,
+        "labels": labels,
+        "actual": actual,
+        "expected": expected,
+        "upper": upper,
+        "lower": lower,
+        "anomaly_x": anomaly_x,
+        "anomaly_y": anomaly_y,
+        "n_anomalias": len(anomaly_x),
+        "total_janela": sum(actual),
+        "vencimentos": vencimentos,
+        "baseline_weeks": baseline_weeks,
+        "k": k,
         "departamentos": departamentos,
         "selected_departamento_id": departamento_id,
         "selected_departamento_nome": selected_nome,
