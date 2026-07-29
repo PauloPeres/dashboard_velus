@@ -95,6 +95,28 @@ class TestAtendimentoTendencias:
         assert sum(outros) == 1  # só o C
         assert data["n_tags_distintas"] == 3
 
+    def test_bucket_totals_match_stack_height(
+        self, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        now = timezone.now()
+        # a1 tem 2 tags no mesmo bucket -> total do bucket conta as 2 ocorrências.
+        _at(organization_a, external_id="a1", opened_at=now - timedelta(days=2),
+            tags=["A", "B"])
+        _at(organization_a, external_id="a2", opened_at=now - timedelta(days=2),
+            tags=["A"])
+
+        data = compute_atendimento_tendencias(
+            organization_a, months=6, granularity="week"
+        )
+        totals = data["tags_bucket_totals"]
+        assert len(totals) == len(data["buckets"])
+        # total geral = soma das ocorrências (A=2, B=1) = 3
+        assert sum(totals) == 3
+        # bate com a soma das séries no último bucket (altura da pilha)
+        stack_last = sum(s["values"][-1] for s in data["tags_series"])
+        assert totals[-1] == stack_last
+
     def test_top_n_none_shows_all_without_outros(
         self, organization_a: Organization
     ) -> None:

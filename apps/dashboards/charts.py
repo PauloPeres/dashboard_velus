@@ -1825,12 +1825,13 @@ def atendimento_categoria_trend(
     series: list[dict[str, Any]],
     *,
     unidade: str = "atendimentos",
+    bucket_totals: list[int] | None = None,
 ) -> str:
     """Barras empilhadas — evolução de categorias (motivos/tags) ao longo do tempo.
 
     Cada categoria é uma série empilhada por bucket (semana/mês); "Outros" (fora
-    do top-N) sai em cinza. `hovermode` unificado deixa comparar a composição em
-    cada ponto do tempo.
+    do top-N) sai em cinza. Hover por segmento mostra só a categoria sob o mouse
+    + o Total do bucket (quando `bucket_totals` é passado, via customdata).
     """
     traces = []
     color_i = 0
@@ -1841,16 +1842,23 @@ def atendimento_categoria_trend(
         else:
             color = _TREND_PALETTE[color_i % len(_TREND_PALETTE)]
             color_i += 1
-        traces.append(
-            go.Bar(
-                name=s["name"],
-                x=buckets,
-                y=s["values"],
-                marker_color=color,
-                hovertemplate="<b>%{fullData.name}</b><br>%{x}: %{y} " + unidade
-                + "<extra></extra>",
+        trace_kwargs: dict[str, Any] = {
+            "name": s["name"],
+            "x": buckets,
+            "y": s["values"],
+            "marker_color": color,
+        }
+        if bucket_totals is not None:
+            trace_kwargs["customdata"] = bucket_totals
+            trace_kwargs["hovertemplate"] = (
+                "<b>%{fullData.name}</b>: %{y:,}<br>Total: %{customdata:,}"
+                "<extra></extra>"
             )
-        )
+        else:
+            trace_kwargs["hovertemplate"] = (
+                "<b>%{fullData.name}</b><br>%{x}: %{y:,} " + unidade + "<extra></extra>"
+            )
+        traces.append(go.Bar(**trace_kwargs))
     fig = go.Figure(
         data=traces,
         layout={
@@ -1858,7 +1866,7 @@ def atendimento_categoria_trend(
             "barmode": "stack",
             "bargap": 0.15,
             "showlegend": True,
-            "hovermode": "x unified",
+            "hovermode": "closest",
             "margin": {"l": 50, "r": 20, "t": 10, "b": 40},
             "legend": {"orientation": "h", "y": -0.18, "font": {"size": 11}},
             "yaxis": {"title": unidade.capitalize(), "rangemode": "tozero"},

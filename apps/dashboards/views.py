@@ -1362,15 +1362,20 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
         focus_tag=focus_tag,
     )
 
+    # Na visão focada, o "Total" do bucket é o próprio valor da categoria.
     motivo_focus_json = None
     if data["motivo_focus"]:
         motivo_focus_json = charts.atendimento_categoria_trend(
-            data["buckets"], [data["motivo_focus"]]
+            data["buckets"],
+            [data["motivo_focus"]],
+            bucket_totals=data["motivo_focus"]["values"],
         )
     tag_focus_json = None
     if data["tag_focus"]:
         tag_focus_json = charts.atendimento_categoria_trend(
-            data["buckets"], [data["tag_focus"]]
+            data["buckets"],
+            [data["tag_focus"]],
+            bucket_totals=data["tag_focus"]["values"],
         )
 
     return render(
@@ -1379,10 +1384,14 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
         {
             **data,
             "motivos_trend_json": charts.atendimento_categoria_trend(
-                data["buckets"], data["motivos_series"]
+                data["buckets"],
+                data["motivos_series"],
+                bucket_totals=data["motivos_bucket_totals"],
             ),
             "tags_trend_json": charts.atendimento_categoria_trend(
-                data["buckets"], data["tags_series"]
+                data["buckets"],
+                data["tags_series"],
+                bucket_totals=data["tags_bucket_totals"],
             ),
             "motivo_focus_json": motivo_focus_json,
             "tag_focus_json": tag_focus_json,

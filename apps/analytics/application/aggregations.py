@@ -5229,6 +5229,15 @@ def compute_atendimento_tendencias(
         tag_total, tag_by_bucket, buckets, top_n=top_n
     )
 
+    # Total por bucket (altura da barra empilhada = soma de todas as categorias,
+    # inclui a cauda) — usado no hover pra mostrar "categoria + Total".
+    motivos_bucket_totals = [
+        sum(motivo_by_bucket.get(b, Counter()).values()) for b in buckets
+    ]
+    tags_bucket_totals = [
+        sum(tag_by_bucket.get(b, Counter()).values()) for b in buckets
+    ]
+
     # Listas completas (ordenadas por frequência) p/ os seletores de "destacar".
     motivos_all = [name for name, _ in motivo_total.most_common()]
     tags_all = [name for name, _ in tag_total.most_common()]
@@ -5255,6 +5264,8 @@ def compute_atendimento_tendencias(
         "buckets": labels,
         "motivos_series": motivos_series,
         "tags_series": tags_series,
+        "motivos_bucket_totals": motivos_bucket_totals,
+        "tags_bucket_totals": tags_bucket_totals,
         "motivos_all": motivos_all,
         "tags_all": tags_all,
         "motivo_focus": motivo_focus,
