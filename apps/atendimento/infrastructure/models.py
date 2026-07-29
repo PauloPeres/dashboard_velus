@@ -53,6 +53,43 @@ class Departamento(TenantModel):
         return f"{self.nome} ({self.source_type}:{self.external_id})"
 
 
+class Motivo(TenantModel):
+    """Motivo configurado de atendimento (catalogo idMotivo -> nome).
+
+    Espelha `Etiqueta`: catalogo barato sincronizado da fonte (`atendimento/motivo`)
+    usado pra resolver o nome dos motivos que a listagem de atendimentos so traz
+    como id opaco (`idMotivo`)."""
+
+    source_type = models.CharField(
+        max_length=32,
+        choices=SourceType.choices,
+        help_text=_("Sistema externo que originou este registro."),
+    )
+    external_id = models.CharField(
+        max_length=128,
+        help_text=_("ID do motivo no sistema externo (idMotivo opaco — string)."),
+    )
+    nome = models.CharField(max_length=255, blank=True, default="")
+
+    raw_extras = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        verbose_name = _("Motivo de atendimento")
+        verbose_name_plural = _("Motivos de atendimento")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "source_type", "external_id"],
+                name="unique_atendimento_motivo_per_source",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "source_type"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.nome} ({self.source_type}:{self.external_id})"
+
+
 class Etiqueta(TenantModel):
     """Etiqueta/tag configurada de atendimento (catalogo id_tag -> nome).
 

@@ -15,13 +15,14 @@ from apps.atendimento.domain.dto import (
     DepartamentoDTO,
     EtiquetaDTO,
     MensagemDTO,
+    MotivoDTO,
 )
 from apps.customers.domain.services import normalize_document
 from apps.customers.infrastructure.models import Customer
 from apps.integrations.shared.enums import SourceType
 from apps.tenancy.models import Organization
 
-from .models import Atendimento, Departamento, Etiqueta, Mensagem
+from .models import Atendimento, Departamento, Etiqueta, Mensagem, Motivo
 
 
 class DepartamentoRepository:
@@ -69,6 +70,31 @@ class EtiquetaRepository:
             "raw_extras": dto.raw_extras,
         }
         return Etiqueta.objects.update_or_create(
+            organization=self.organization,
+            source_type=source_type.value,
+            external_id=dto.external_id,
+            defaults=defaults,
+        )
+
+
+class MotivoRepository:
+    """Persistencia idempotente de Motivo (catalogo de motivos) a partir de DTOs."""
+
+    def __init__(self, organization: Organization) -> None:
+        self.organization = organization
+
+    @transaction.atomic
+    def upsert_from_dto(
+        self,
+        dto: MotivoDTO,
+        *,
+        source_type: SourceType,
+    ) -> tuple[Motivo, bool]:
+        defaults: dict[str, Any] = {
+            "nome": dto.nome or "",
+            "raw_extras": dto.raw_extras,
+        }
+        return Motivo.objects.update_or_create(
             organization=self.organization,
             source_type=source_type.value,
             external_id=dto.external_id,

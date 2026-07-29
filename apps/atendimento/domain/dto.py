@@ -66,6 +66,23 @@ class AtendenteRefDTO:
 
 
 @dataclass(frozen=True)
+class MotivoDTO:
+    """Motivo configurado na fonte — catalogo id opaco -> nome.
+
+    A listagem de atendimentos so traz os motivos como ids opacos (`idMotivo`);
+    o nome vem deste catalogo (barato). Usado pra resolver `Atendimento.motivos`.
+    """
+
+    external_id: str
+    nome: str = ""
+    raw_extras: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.external_id:
+            raise ValueError("MotivoDTO.external_id nao pode ser vazio")
+
+
+@dataclass(frozen=True)
 class EtiquetaDTO:
     """Etiqueta/tag configurada na fonte — catalogo id opaco -> nome.
 
@@ -100,6 +117,9 @@ class AtendimentoDTO:
     protocol: str
     opened_at: datetime | None
 
+    # `motivo_ids` = ids opacos (idMotivo) como vem na fonte; `motivos` = nomes
+    # resolvidos via o catalogo de motivos no run_opa_sync.
+    motivo_ids: list[str] = field(default_factory=list)
     motivos: list[str] = field(default_factory=list)
     # `tag_ids` = ids opacos das etiquetas (id_tag) como vem na fonte; `tags` =
     # nomes resolvidos via o catalogo de etiquetas (preenchido no run_opa_sync,

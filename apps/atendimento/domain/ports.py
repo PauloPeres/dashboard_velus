@@ -15,6 +15,7 @@ from .dto import (
     DepartamentoDTO,
     EtiquetaDTO,
     MensagemDTO,
+    MotivoDTO,
 )
 
 
@@ -50,6 +51,14 @@ class AtendimentoSourcePort(Protocol):
 
         Lista barata usada pra resolver `Atendimento.tags`: a listagem de
         atendimentos so traz as tags como ids opacos (id_tag), sem o nome.
+        """
+        ...
+
+    def list_motivos(self) -> Iterator[MotivoDTO]:
+        """Itera o catalogo de motivos configurados (id opaco -> nome).
+
+        Lista barata usada pra resolver `Atendimento.motivos`: a listagem de
+        atendimentos so traz os motivos como ids opacos (idMotivo), sem o nome.
         """
         ...
 

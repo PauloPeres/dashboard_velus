@@ -20,12 +20,14 @@ from apps.atendimento.domain.dto import (
     DepartamentoDTO,
     EtiquetaDTO,
     MensagemDTO,
+    MotivoDTO,
 )
 from apps.atendimento.infrastructure.models import (
     Atendimento,
     Departamento,
     Etiqueta,
     Mensagem,
+    Motivo,
 )
 from apps.atendimento.infrastructure.repositories import (
     AtendimentoRepository,
@@ -282,6 +284,36 @@ class TestOpaSyncE2E:
         assert Atendimento.objects.get(external_id="a2").tags == [
             "Suporte",
             "t-removida",
+        ]
+
+    def test_sync_resolves_motivo_names_from_catalog(
+        self, organization_a: Organization
+    ) -> None:
+        # Catalogo de motivos + atendimento com motivo_ids (idMotivo) opacos; o
+        # sync deve persistir o catalogo e resolver os nomes em Atendimento.motivos.
+        FakeAtendimentoSource.set_seed(
+            motivos=[
+                MotivoDTO(external_id="m-sup", nome="Suporte"),
+                MotivoDTO(external_id="m-com", nome="comercial"),
+            ],
+            atendimentos=[
+                _atendimento_dto(external_id="a1", motivo_ids=["m-sup", "m-com"]),
+                # id sem catalogo -> mantido como fallback rastreavel
+                _atendimento_dto(external_id="a2", motivo_ids=["m-sup", "m-removido"]),
+            ],
+        )
+        result = run_opa_sync(organization_a, FakeAtendimentoSource())
+        assert result.motivos == 2
+
+        set_current_organization(organization_a)
+        assert Motivo.objects.count() == 2
+        assert Atendimento.objects.get(external_id="a1").motivos == [
+            "Suporte",
+            "comercial",
+        ]
+        assert Atendimento.objects.get(external_id="a2").motivos == [
+            "Suporte",
+            "m-removido",
         ]
 
 
