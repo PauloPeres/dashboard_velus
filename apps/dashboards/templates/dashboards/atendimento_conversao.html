@@ -1,0 +1,125 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Conversão & Churn · Velus{% endblock %}
+
+{% block content %}
+<!-- Cabeçalho -->
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-4">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Conversão &amp; Churn por atendimento</h1>
+    <p class="text-xs text-gray-400 mt-0.5">Desfecho dos clientes por tag e motivo — cancelou ou ativou contrato depois da conversa</p>
+  </div>
+  <div class="relative">
+    <select onchange="setParam('departamento', this.value)"
+      class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 pr-8 appearance-none cursor-pointer text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+      <option value="" {% if not selected_departamento_id %}selected{% endif %}>Todos os departamentos</option>
+      {% for d in departamentos %}
+      <option value="{{ d.id }}" {% if d.id == selected_departamento_id %}selected{% endif %}>{{ d.nome }}</option>
+      {% endfor %}
+    </select>
+    <span class="pointer-events-none absolute right-2.5 inset-y-0 flex items-center">
+      <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+    </span>
+  </div>
+</div>
+
+<!-- Horizonte -->
+<div class="flex flex-wrap items-center gap-3 mb-5">
+  <span class="text-xs text-gray-500">Janela de desfecho após a conversa:</span>
+  <div class="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
+    <button onclick="setParam('h','30')" class="px-2.5 py-1 text-xs rounded-md {% if horizon_days == 30 %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">30 dias</button>
+    <button onclick="setParam('h','90')" class="px-2.5 py-1 text-xs rounded-md {% if horizon_days == 90 %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">90 dias</button>
+    <button onclick="setParam('h','180')" class="px-2.5 py-1 text-xs rounded-md {% if horizon_days == 180 %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">180 dias</button>
+  </div>
+  {% if selected_departamento_nome %}<span class="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">Departamento: <strong>{{ selected_departamento_nome }}</strong></span>{% endif %}
+</div>
+
+<!-- KPIs -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1">Atendimentos vinculados</p>
+    <p class="text-2xl font-bold text-gray-900">{{ total_linked|intcomma }}</p>
+    <p class="text-xs text-gray-500 mt-1">casados a um cliente, no período</p>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1">Churn após a conversa</p>
+    <p class="text-2xl font-bold text-red-600">{{ overall_churn_pct }}%</p>
+    <p class="text-xs text-gray-500 mt-1">{{ churn_total|intcomma }} com cancelamento em até {{ horizon_days }}d</p>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1">Conversão após a conversa</p>
+    <p class="text-2xl font-bold text-emerald-600">{{ overall_conv_pct }}%</p>
+    <p class="text-xs text-gray-500 mt-1">{{ conv_total|intcomma }} com contrato ativado em até {{ horizon_days }}d</p>
+  </div>
+</div>
+
+<!-- Como ler -->
+<div class="bg-amber-50 border border-amber-100 rounded-lg p-4 mb-6 text-xs text-amber-800 leading-relaxed">
+  <strong>Como ler:</strong> taxas sobre atendimentos <em>vinculados a um cliente</em> (ponte por CPF/CNPJ). <strong>Churn</strong> = o cliente teve contrato cancelado depois da conversa, dentro da janela. <strong>Conversão</strong> = contrato ativado depois da conversa (novo/reativação). É correlação, não causa: uma tag com churn alto sinaliza atrito, não que a conversa causou o cancelamento. Prospect que ainda não é cliente não vincula (conversão dele fica invisível). Rankings de % só mostram tags/motivos com ≥ {{ min_vol }} atendimentos.
+</div>
+
+<!-- Gráficos: top tags por churn / conversão -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <h2 class="text-sm font-semibold text-gray-700 mb-1">Tags com maior churn depois</h2>
+    <p class="text-xs text-gray-400 mb-3">% de atendimentos da tag cujo cliente cancelou em até {{ horizon_days }} dias</p>
+    <div id="churn-tags-chart" style="height:360px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <h2 class="text-sm font-semibold text-gray-700 mb-1">Tags com maior conversão depois</h2>
+    <p class="text-xs text-gray-400 mb-3">% de atendimentos da tag cujo cliente ativou contrato em até {{ horizon_days }} dias</p>
+    <div id="conv-tags-chart" style="height:360px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+</div>
+
+<!-- Tabelas por tag e por motivo -->
+{% for tabela in tabelas %}
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden mb-6">
+  <div class="p-5 pb-0">
+    <h2 class="text-sm font-semibold text-gray-700">Desfecho por {{ tabela.titulo }}</h2>
+    <p class="text-xs text-gray-400 mt-0.5">Ordenado por volume · churn/conversão em até {{ horizon_days }} dias após a conversa</p>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm mt-4">
+      <thead class="bg-gray-50 border-t border-gray-200">
+        <tr>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{{ tabela.titulo }}</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Atend.</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Churn</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Conversão</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">MRR perdido</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for r in tabela.rows %}
+        <tr class="hover:bg-gray-50">
+          <td class="px-4 py-2.5 font-medium text-gray-900 truncate max-w-[260px]">{{ r.name }}</td>
+          <td class="px-4 py-2.5 text-right tabular-nums text-gray-700">{{ r.n|intcomma }}</td>
+          <td class="px-4 py-2.5 text-right tabular-nums {% if r.churn_pct >= 15 %}text-red-600 font-medium{% else %}text-gray-600{% endif %}">{{ r.churn_pct }}%</td>
+          <td class="px-4 py-2.5 text-right tabular-nums {% if r.conv_pct >= 10 %}text-emerald-700 font-medium{% else %}text-gray-600{% endif %}">{{ r.conv_pct }}%</td>
+          <td class="px-4 py-2.5 text-right tabular-nums text-gray-500">R$ {{ r.mrr_churn|floatformat:0|intcomma }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="px-6 py-8 text-center text-gray-500">Sem atendimentos vinculados no período</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}
+
+{% block scripts %}
+{{ churn_tags_json|json_script:"churn-tags-data" }}
+{{ conv_tags_json|json_script:"conv-tags-data" }}
+<script>
+  function setParam(key, value) {
+    var url = new URL(window.location.href);
+    if (value) { url.searchParams.set(key, value); } else { url.searchParams.delete(key); }
+    window.location.href = url.toString();
+  }
+  renderChart("churn-tags-chart", "churn-tags-data");
+  renderChart("conv-tags-chart", "conv-tags-data");
+</script>
+{% endblock %}

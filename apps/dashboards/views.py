@@ -22,6 +22,7 @@ from apps.analytics.application.aggregations import (
     compute_aging_distribution,
     compute_arpu_by_plan,
     compute_at_risk_contracts,
+    compute_atendimento_conversao,
     compute_atendimento_detail,
     compute_atendimento_horario,
     compute_atendimento_tendencias,
@@ -1410,6 +1411,53 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
             ),
             "motivo_focus_json": motivo_focus_json,
             "tag_focus_json": tag_focus_json,
+        },
+    )
+
+
+@login_required
+@never_cache
+def atendimento_conversao(request: HttpRequest) -> HttpResponse:
+    """Desfecho por tag/motivo: churn e conversão após o atendimento (F4)."""
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+    months = _get_months(request)
+
+    try:
+        horizon_days = int(request.GET.get("h", 90))
+    except (ValueError, TypeError):
+        horizon_days = 90
+    if horizon_days not in (30, 90, 180):
+        horizon_days = 90
+
+    departamento_id: int | None = None
+    raw_dep = request.GET.get("departamento", "")
+    if raw_dep.isdigit():
+        departamento_id = int(raw_dep)
+
+    data = compute_atendimento_conversao(
+        org, months=months, horizon_days=horizon_days, departamento_id=departamento_id
+    )
+
+    tabelas = [
+        {"titulo": "tag", "rows": data["by_tag"][:30]},
+        {"titulo": "motivo", "rows": data["by_motivo"][:30]},
+    ]
+
+    return render(
+        request,
+        "dashboards/atendimento_conversao.html",
+        {
+            **data,
+            "tabelas": tabelas,
+            "churn_tags_json": charts.atendimento_conversao_bars(
+                data["top_churn_tags"], field="churn_pct", color="#ef4444"
+            ),
+            "conv_tags_json": charts.atendimento_conversao_bars(
+                data["top_conv_tags"], field="conv_pct", color="#10b981"
+            ),
         },
     )
 

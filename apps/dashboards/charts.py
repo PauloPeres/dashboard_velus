@@ -1875,6 +1875,33 @@ def atendimento_categoria_trend(
     return _to_json(fig)
 
 
+def atendimento_conversao_bars(
+    rows: list[dict[str, Any]], *, field: str, color: str
+) -> str:
+    """Barras horizontais — taxa (%) de um desfecho por tag (churn/conversão)."""
+    ordered = sorted(rows, key=lambda r: r[field])
+    labels = [r["name"] for r in ordered]
+    values = [r[field] for r in ordered]
+    vols = [r["n"] for r in ordered]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=values, y=labels, orientation="h",
+                marker_color=color,
+                customdata=vols,
+                hovertemplate="<b>%{y}</b><br>%{x}% · %{customdata} atend.<extra></extra>",
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "margin": {"l": 10, "r": 20, "t": 10, "b": 40},
+            "xaxis": {"title": "%", "ticksuffix": "%"},
+            "yaxis": {"automargin": True},
+        },
+    )
+    return _to_json(fig)
+
+
 def atendimento_horario_sazonal(d: dict[str, Any]) -> str:
     """Linha horária — atendimentos abertos vs banda esperada (baseline sazonal).
 
