@@ -111,6 +111,39 @@ class TestAtendimentoTendencias:
         assert "Outros" not in names
         assert set(names) == {"A", "B", "C", "D"}  # todas as categorias
 
+    def test_focus_tag_returns_single_series_and_full_list(
+        self, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        now = timezone.now()
+        _at(organization_a, external_id="a1", opened_at=now - timedelta(days=2),
+            tags=["Bloqueio", "Suporte"])
+        _at(organization_a, external_id="a2", opened_at=now - timedelta(days=2),
+            tags=["Bloqueio"])
+
+        data = compute_atendimento_tendencias(
+            organization_a, months=6, granularity="week", focus_tag="Bloqueio"
+        )
+        assert "Bloqueio" in data["tags_all"]
+        assert "Suporte" in data["tags_all"]
+        assert data["focus_tag"] == "Bloqueio"
+        assert data["tag_focus"]["name"] == "Bloqueio"
+        assert data["tag_focus"]["total"] == 2
+        assert sum(data["tag_focus"]["values"]) == 2
+
+    def test_focus_absent_category_returns_none(
+        self, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        now = timezone.now()
+        _at(organization_a, external_id="a1", opened_at=now - timedelta(days=2),
+            tags=["X"])
+        data = compute_atendimento_tendencias(
+            organization_a, months=6, granularity="week", focus_tag="Inexistente"
+        )
+        assert data["tag_focus"] is None
+        assert data["focus_tag"] is None
+
     def test_weekly_vs_monthly_bucket_count(
         self, organization_a: Organization
     ) -> None:
@@ -212,6 +245,22 @@ class TestAtendimentoTendenciasView:
         client.force_login(user_a)
         resp = client.get(f"{self.URL}?g=month")
         assert resp.status_code == 200
+
+    def test_focus_tag_renders_focus_chart(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        _at(
+            organization_a,
+            external_id="a1",
+            opened_at=timezone.now() - timedelta(days=2),
+            tags=["Bloqueio"],
+        )
+        client.force_login(user_a)
+        resp = client.get(f"{self.URL}?tag=Bloqueio")
+        assert resp.status_code == 200
+        assert b"tag-focus-chart" in resp.content
+        assert b"Bloqueio" in resp.content
 
     def test_empty_org_renders(
         self, client: Any, user_a: User, organization_a: Organization
