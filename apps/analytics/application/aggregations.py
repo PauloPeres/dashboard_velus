@@ -5099,23 +5099,24 @@ def _build_categoria_series(
     by_bucket: dict[date_cls, Counter[str]],
     buckets: list[date_cls],
     *,
-    top_n: int,
+    top_n: int | None,
 ) -> list[dict[str, Any]]:
-    """Séries por categoria (motivo/tag) prontas p/ área empilhada.
+    """Séries por categoria (motivo/tag) prontas p/ barras empilhadas.
 
-    Pega as `top_n` categorias mais frequentes na janela; o restante vira uma
-    série agregada "Outros". Cada série tem um valor por bucket (0 quando
-    ausente), na ordem de `buckets`.
+    `top_n=None` inclui TODAS as categorias, cada uma como sua própria série (sem
+    "Outros"). Com `top_n` inteiro, pega as N mais frequentes e agrega o restante
+    numa série "Outros" (só aparece se houver mais que N categorias). Cada série
+    tem um valor por bucket (0 quando ausente), ordenadas por frequência total.
     """
-    top = [name for name, _ in total_counter.most_common(top_n)]
-    top_set = set(top)
+    ordered = [name for name, _ in total_counter.most_common(top_n)]
+    top_set = set(ordered)
     series: list[dict[str, Any]] = []
-    for name in top:
+    for name in ordered:
         series.append(
             {"name": name, "values": [by_bucket.get(b, Counter()).get(name, 0) for b in buckets]}
         )
-    # "Outros" = soma das categorias fora do top_n, por bucket.
-    if len(total_counter) > len(top):
+    # "Outros" = soma das categorias fora do top_n, por bucket (só quando há corte).
+    if top_n is not None and len(total_counter) > len(ordered):
         outros = []
         for b in buckets:
             c = by_bucket.get(b, Counter())

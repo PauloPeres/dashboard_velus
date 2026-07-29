@@ -1350,7 +1350,11 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
         departamento_id = int(raw_dep)
 
     data = compute_atendimento_tendencias(
-        org, months=months, granularity=granularity, departamento_id=departamento_id
+        org,
+        months=months,
+        granularity=granularity,
+        departamento_id=departamento_id,
+        top_n=30,
     )
 
     return render(

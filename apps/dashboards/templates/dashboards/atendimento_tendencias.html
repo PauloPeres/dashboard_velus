@@ -62,7 +62,7 @@
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
   <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 mb-1">
     <h2 class="text-sm font-semibold text-gray-700">Motivos de atendimento ao longo do tempo</h2>
-    <span class="text-xs text-gray-400">top {{ top_n }} motivos · demais em “Outros” · por {% if granularity == 'month' %}mês{% else %}semana{% endif %}</span>
+    <span class="text-xs text-gray-400">{{ n_motivos_distintos }} motivos{% if n_motivos_distintos > top_n %} · top {{ top_n }} + “Outros”{% endif %} · por {% if granularity == 'month' %}mês{% else %}semana{% endif %}</span>
   </div>
   <p class="text-xs text-gray-400 mb-3">Motivos configurados na Opa!, contados por {% if granularity == 'month' %}mês{% else %}semana{% endif %} de abertura. Um atendimento pode ter mais de um motivo.</p>
   <div id="motivos-trend-chart" style="height:380px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
@@ -72,7 +72,7 @@
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
   <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 mb-1">
     <h2 class="text-sm font-semibold text-gray-700">Tags de atendimento ao longo do tempo</h2>
-    <span class="text-xs text-gray-400">top {{ top_n }} tags · demais em “Outros” · por {% if granularity == 'month' %}mês{% else %}semana{% endif %}</span>
+    <span class="text-xs text-gray-400">{{ n_tags_distintas }} tags{% if n_tags_distintas > top_n %} · top {{ top_n }} + “Outros”{% endif %} · por {% if granularity == 'month' %}mês{% else %}semana{% endif %}</span>
   </div>
   <p class="text-xs text-gray-400 mb-3">Tags configuradas na Opa!, contadas por {% if granularity == 'month' %}mês{% else %}semana{% endif %} de abertura. Um atendimento pode ter várias tags — cada uma é contada. {{ atendimentos_com_tag|intcomma }} atendimentos com ao menos uma tag.</p>
   <div id="tags-trend-chart" style="height:380px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
