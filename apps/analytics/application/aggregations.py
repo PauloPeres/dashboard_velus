@@ -5297,19 +5297,23 @@ def compute_atendimento_horario(
     baseline_weeks: int = 8,
     k: float = 2.0,
     departamento_id: int | None = None,
+    billing_min_invoices: int = 30,
+    billing_window_days: int = 1,
 ) -> dict[str, Any]:
     """Série horária de atendimentos abertos vs baseline sazonal (F3, gráfico 1).
 
     Pra cada hora da janela de `days` dias, compara o volume real com o
-    esperado pra aquele *slot sazonal* (dia-da-semana × hora), estimado pela
-    média das últimas `baseline_weeks` semanas ANTERIORES à janela. Marca como
-    anomalia (pico) as horas acima de `média + k·desvio` do slot — pra flagar
-    volume anormal de atendimento (ex.: incidente de rede). Também devolve os
-    dias com vencimento de fatura na janela (picos esperados de cobrança).
+    esperado pra aquele *slot sazonal*, estimado pelas últimas `baseline_weeks`
+    semanas ANTERIORES à janela. Marca como anomalia (pico) as horas acima de
+    `média + k·desvio` do slot — pra flagar volume anormal (ex.: incidente de
+    rede).
 
-    Baseline por (dia-da-semana, hora) captura a sazonalidade real (madrugada
-    vazia, pico comercial, diferença fim de semana). v1: marcador de vencimento;
-    o ajuste fino do baseline por proximidade de vencimento fica pra v2.
+    v2 — baseline por proximidade de vencimento: dias com >= `billing_min_invoices`
+    faturas vencendo (± `billing_window_days` dias) geram pico LEGÍTIMO de
+    cobrança. Esses dias usam um baseline PRÓPRIO (por hora, agregando dias de
+    cobrança), separado do baseline normal (dia-da-semana × hora). Assim um pico
+    de cobrança não vira falsa anomalia, e uma anomalia de rede num dia de
+    vencimento ainda aparece (é comparada contra o baseline de cobrança).
     """
     from apps.atendimento.infrastructure.models import Atendimento, Departamento
     from apps.financial.infrastructure.models import Invoice
@@ -5344,19 +5348,51 @@ def compute_atendimento_horario(
         if h is not None:
             counts[timezone.localtime(h, _ATENDIMENTO_TZ)] = row["c"]
 
-    # Baseline: distribui as contagens por slot (dia-da-semana, hora) nas semanas
-    # ANTERIORES à janela de exibição. Percorre hora a hora pra incluir zeros.
-    slot_samples: dict[tuple[int, int], list[int]] = defaultdict(list)
+    # --- Classificação de dias de cobrança (v2) -----------------------------
+    # Faturas vencendo por dia em toda a janela (baseline + exibição). Um dia é
+    # "de cobrança" se tem >= billing_min_invoices vencimentos; a folga
+    # billing_window_days marca também os vizinhos (spillover de cobrança).
+    due_by_date: dict[date_cls, int] = {}
+    due_rows_all = (
+        Invoice.objects.filter(
+            organization=organization,
+            due_date__gte=baseline_start.date(),
+            due_date__lte=now_local.date(),
+        )
+        .values("due_date")
+        .annotate(c=Count("id"))
+    )
+    for r in due_rows_all:
+        due_by_date[r["due_date"]] = r["c"]
+
+    billing_days = {d for d, c in due_by_date.items() if c >= billing_min_invoices}
+    billing_proximal: set[date_cls] = set()
+    for bd in billing_days:
+        for off in range(-billing_window_days, billing_window_days + 1):
+            billing_proximal.add(bd + timedelta(days=off))
+
+    # --- Dois baselines -----------------------------------------------------
+    # normal: por (dia-da-semana, hora), só de dias NÃO-cobrança.
+    # billing: por hora, agregando os dias de cobrança (poucos p/ separar por
+    # dia-da-semana). Percorre hora a hora incluindo zeros.
+    normal_samples: dict[tuple[int, int], list[int]] = defaultdict(list)
+    billing_samples: dict[int, list[int]] = defaultdict(list)
     cursor = baseline_start
     while cursor < display_start:
-        slot_samples[(cursor.weekday(), cursor.hour)].append(counts.get(cursor, 0))
+        c = counts.get(cursor, 0)
+        if cursor.date() in billing_proximal:
+            billing_samples[cursor.hour].append(c)
+        else:
+            normal_samples[(cursor.weekday(), cursor.hour)].append(c)
         cursor += timedelta(hours=1)
 
-    slot_stats: dict[tuple[int, int], tuple[float, float]] = {}
-    for slot, samples in slot_samples.items():
+    def _stats(samples: list[int]) -> tuple[float, float]:
         mean = statistics.fmean(samples) if samples else 0.0
         std = statistics.pstdev(samples) if len(samples) > 1 else 0.0
-        slot_stats[slot] = (mean, std)
+        return mean, std
+
+    normal_stats = {slot: _stats(s) for slot, s in normal_samples.items()}
+    billing_stats = {hour: _stats(s) for hour, s in billing_samples.items()}
 
     # Série da janela de exibição, hora a hora.
     labels: list[str] = []
@@ -5364,13 +5400,19 @@ def compute_atendimento_horario(
     expected: list[float] = []
     upper: list[float] = []
     lower: list[float] = []
+    is_billing: list[bool] = []
     anomaly_x: list[str] = []
     anomaly_y: list[int] = []
 
     cursor = display_start + timedelta(hours=1)
     while cursor <= now_local:
-        slot = (cursor.weekday(), cursor.hour)
-        mean, std = slot_stats.get(slot, (0.0, 0.0))
+        billing = cursor.date() in billing_proximal
+        # Usa o baseline de cobrança quando o dia é de cobrança e há amostra
+        # daquela hora; senão cai no baseline sazonal normal.
+        if billing and cursor.hour in billing_stats:
+            mean, std = billing_stats[cursor.hour]
+        else:
+            mean, std = normal_stats.get((cursor.weekday(), cursor.hour), (0.0, 0.0))
         up = mean + k * std
         lo = max(0.0, mean - k * std)
         val = counts.get(cursor, 0)
@@ -5380,27 +5422,33 @@ def compute_atendimento_horario(
         expected.append(round(mean, 2))
         upper.append(round(up, 2))
         lower.append(round(lo, 2))
-        # Anomalia = pico acima da banda (com uma folga mínima pra não flagar
-        # ruído quando o baseline é ~0).
+        is_billing.append(billing)
+        # Anomalia = pico acima da banda (com folga mínima pra não flagar ruído
+        # quando o baseline é ~0).
         if val > up and val >= mean + 1 and val >= 2:
             anomaly_x.append(label)
             anomaly_y.append(val)
         cursor += timedelta(hours=1)
 
-    # Dias com vencimento de fatura na janela (picos de cobrança esperados).
-    due_rows = (
-        Invoice.objects.filter(
-            organization=organization,
-            due_date__gte=display_start.date(),
-            due_date__lte=now_local.date(),
-        )
-        .values("due_date")
-        .annotate(c=Count("id"))
-        .order_by("due_date")
-    )
+    # Vencimentos na janela de exibição (p/ marcadores). billing=dia de cobrança
+    # (baseline próprio); os demais são vencimentos menores (só marcador).
     vencimentos = [
-        {"date": r["due_date"].strftime("%d/%m"), "count": r["c"]} for r in due_rows
+        {
+            "date": d.strftime("%d/%m"),
+            "count": due_by_date[d],
+            "billing": d in billing_days,
+        }
+        for d in sorted(due_by_date)
+        if display_start.date() <= d <= now_local.date()
     ]
+    # Rótulos "%d/%m" dos dias de cobrança visíveis na janela (p/ sombrear).
+    billing_day_labels = sorted(
+        {
+            d.strftime("%d/%m")
+            for d in billing_proximal
+            if display_start.date() <= d <= now_local.date()
+        }
+    )
 
     departamentos = list(
         Departamento.objects.filter(organization=organization)
@@ -5420,11 +5468,14 @@ def compute_atendimento_horario(
         "expected": expected,
         "upper": upper,
         "lower": lower,
+        "is_billing": is_billing,
         "anomaly_x": anomaly_x,
         "anomaly_y": anomaly_y,
         "n_anomalias": len(anomaly_x),
         "total_janela": sum(actual),
         "vencimentos": vencimentos,
+        "billing_day_labels": billing_day_labels,
+        "n_billing_days": len(billing_day_labels),
         "baseline_weeks": baseline_weeks,
         "k": k,
         "departamentos": departamentos,

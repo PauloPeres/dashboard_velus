@@ -1923,9 +1923,31 @@ def atendimento_horario_sazonal(d: dict[str, Any]) -> str:
                 hovertemplate="<b>%{x}</b><br>Anomalia: %{y}<extra></extra>",
             )
         )
-    # Marcadores de dias de vencimento (linha vertical na 1ª hora do dia).
+    # Span (1ª..última hora) de cada dia, a partir dos rótulos "%d/%m %Hh".
+    day_span: dict[str, tuple[str, str]] = {}
+    for lb in labels:
+        day = lb.split(" ", 1)[0]
+        first, _ = day_span.get(day, (lb, lb))
+        day_span[day] = (first, lb)
+
     shapes = []
+    # Dias de cobrança: retângulo âmbar claro (baseline próprio ali).
+    billing_labels = set(d.get("billing_day_labels", []))
+    for day in billing_labels:
+        if day in day_span:
+            x0, x1 = day_span[day]
+            shapes.append(
+                {
+                    "type": "rect", "xref": "x", "yref": "paper",
+                    "x0": x0, "x1": x1, "y0": 0, "y1": 1,
+                    "fillcolor": "rgba(245,158,11,0.10)", "line": {"width": 0},
+                    "layer": "below",
+                }
+            )
+    # Vencimentos menores (não-cobrança): linha vertical fina só como marcador.
     for v in d.get("vencimentos", []):
+        if v.get("billing") or v["date"] in billing_labels:
+            continue
         prefix = v["date"] + " "
         x_at = next((lb for lb in labels if lb.startswith(prefix)), None)
         if x_at is not None:
@@ -1933,7 +1955,7 @@ def atendimento_horario_sazonal(d: dict[str, Any]) -> str:
                 {
                     "type": "line", "x0": x_at, "x1": x_at, "yref": "paper",
                     "y0": 0, "y1": 1,
-                    "line": {"color": "rgba(245,158,11,0.5)", "width": 1, "dash": "dash"},
+                    "line": {"color": "rgba(245,158,11,0.4)", "width": 1, "dash": "dash"},
                 }
             )
     fig.update_layout(
