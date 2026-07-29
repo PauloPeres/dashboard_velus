@@ -5484,6 +5484,179 @@ def compute_atendimento_horario(
     }
 
 
+_CONVERSAO_HORIZONTES = (30, 90, 180)
+_CONVERSAO_MIN_VOL = 30  # volume mínimo pra uma tag/motivo entrar no ranking de %
+
+
+def _conversao_acc() -> dict[str, Any]:
+    return {"n": 0, "churn": 0, "conv": 0, "churn_custs": set(), "conv_custs": set()}
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_conversao(
+    organization: Organization,
+    *,
+    months: int = 6,
+    horizon_days: int = 90,
+    departamento_id: int | None = None,
+) -> dict[str, Any]:
+    """Desfecho por tag/motivo: churn e conversão após o atendimento (F4).
+
+    Entre atendimentos VINCULADOS a um cliente (ponte por documento), mede:
+    - churn: o cliente teve um contrato CANCELADO (`canceled_at`) DEPOIS da
+      conversa, dentro de `horizon_days` dias.
+    - conversão: o cliente teve um contrato ATIVADO (`activated_at`) depois da
+      conversa, dentro da janela (novo contrato/reativação — sinal comercial).
+
+    Agrega por tag e por motivo (um atendimento conta em cada tag/motivo seu) e
+    devolve rankings prontos. Taxas em cima do volume VINCULADO (só quem casou
+    com um cliente do IXC). Limitações: prospect novo que ainda não é cliente
+    não vincula (conversão dele fica invisível); canal é sempre whatsapp aqui,
+    então o recorte "de canal" vem das tags/motivos.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento, Departamento
+    from apps.customers.infrastructure.models import Contract
+
+    if horizon_days not in _CONVERSAO_HORIZONTES:
+        horizon_days = 90
+    horizon = timedelta(days=horizon_days)
+
+    now = timezone.now()
+    window_start = (now - relativedelta(months=months)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    qs = Atendimento.objects.filter(
+        organization=organization,
+        opened_at__gte=window_start,
+        opened_at__isnull=False,
+        customer__isnull=False,
+    )
+    if departamento_id is not None:
+        qs = qs.filter(departamento_id=departamento_id)
+
+    cust_ids = set(qs.values_list("customer_id", flat=True))
+
+    # Datas de cancelamento/ativação por cliente (contratos dos clientes envolvidos).
+    cust_cancels: dict[int, list[datetime]] = defaultdict(list)
+    cust_activations: dict[int, list[datetime]] = defaultdict(list)
+    cust_cancel_mrr: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
+    if cust_ids:
+        for c in Contract.objects.filter(
+            organization=organization, customer_id__in=cust_ids
+        ).values("customer_id", "canceled_at", "activated_at", "monthly_amount", "status"):
+            cid = c["customer_id"]
+            if c["canceled_at"] is not None:
+                cust_cancels[cid].append(c["canceled_at"])
+                if c["status"] == "CANCELED":
+                    cust_cancel_mrr[cid] += c["monthly_amount"] or Decimal("0")
+            if c["activated_at"] is not None:
+                cust_activations[cid].append(c["activated_at"])
+
+    by_tag: dict[str, dict[str, Any]] = defaultdict(_conversao_acc)
+    by_motivo: dict[str, dict[str, Any]] = defaultdict(_conversao_acc)
+    total_linked = 0
+    churn_total = 0
+    conv_total = 0
+
+    for at in qs.values("customer_id", "opened_at", "tags", "motivos").iterator(
+        chunk_size=2000
+    ):
+        cid = at["customer_id"]
+        opened = at["opened_at"]
+        end = opened + horizon
+        churned = any(opened < dt <= end for dt in cust_cancels.get(cid, ()))
+        converted = any(opened < dt <= end for dt in cust_activations.get(cid, ()))
+        total_linked += 1
+        churn_total += 1 if churned else 0
+        conv_total += 1 if converted else 0
+        for name in set(at["tags"] or []):
+            acc = by_tag[name]
+            acc["n"] += 1
+            if churned:
+                acc["churn"] += 1
+                acc["churn_custs"].add(cid)
+            if converted:
+                acc["conv"] += 1
+                acc["conv_custs"].add(cid)
+        for name in set(at["motivos"] or []):
+            acc = by_motivo[name]
+            acc["n"] += 1
+            if churned:
+                acc["churn"] += 1
+                acc["churn_custs"].add(cid)
+            if converted:
+                acc["conv"] += 1
+                acc["conv_custs"].add(cid)
+
+    def _rows(acc_map: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        rows = []
+        for name, a in acc_map.items():
+            n = a["n"]
+            mrr = sum((cust_cancel_mrr.get(c, Decimal("0")) for c in a["churn_custs"]), Decimal("0"))
+            rows.append(
+                {
+                    "name": name,
+                    "n": n,
+                    "churn": a["churn"],
+                    "churn_pct": round(a["churn"] / n * 100, 1) if n else 0.0,
+                    "conv": a["conv"],
+                    "conv_pct": round(a["conv"] / n * 100, 1) if n else 0.0,
+                    "mrr_churn": float(mrr),
+                }
+            )
+        return sorted(rows, key=lambda r: r["n"], reverse=True)
+
+    tag_rows = _rows(by_tag)
+    motivo_rows = _rows(by_motivo)
+
+    # Ranking por taxa de churn (só categorias com volume mínimo, pra evitar %
+    # instável de amostra pequena).
+    top_churn_tags = sorted(
+        (r for r in tag_rows if r["n"] >= _CONVERSAO_MIN_VOL),
+        key=lambda r: r["churn_pct"],
+        reverse=True,
+    )[:12]
+    top_conv_tags = sorted(
+        (r for r in tag_rows if r["n"] >= _CONVERSAO_MIN_VOL),
+        key=lambda r: r["conv_pct"],
+        reverse=True,
+    )[:12]
+
+    departamentos = list(
+        Departamento.objects.filter(organization=organization)
+        .order_by("nome")
+        .values("id", "nome")
+    )
+    selected_nome = None
+    if departamento_id is not None:
+        selected_nome = next(
+            (d["nome"] for d in departamentos if d["id"] == departamento_id), None
+        )
+
+    return {
+        "months": months,
+        "horizon_days": horizon_days,
+        "total_linked": total_linked,
+        "churn_total": churn_total,
+        "conv_total": conv_total,
+        "overall_churn_pct": round(churn_total / total_linked * 100, 1)
+        if total_linked
+        else 0.0,
+        "overall_conv_pct": round(conv_total / total_linked * 100, 1)
+        if total_linked
+        else 0.0,
+        "by_tag": tag_rows,
+        "by_motivo": motivo_rows,
+        "top_churn_tags": top_churn_tags,
+        "top_conv_tags": top_conv_tags,
+        "min_vol": _CONVERSAO_MIN_VOL,
+        "departamentos": departamentos,
+        "selected_departamento_id": departamento_id,
+        "selected_departamento_nome": selected_nome,
+    }
+
+
 @allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
 def compute_bot_deflection_trend(
     organization: Organization, *, months: int = 3

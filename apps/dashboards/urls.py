@@ -33,6 +33,11 @@ urlpatterns = [
         views.atendimento_tendencias,
         name="atendimento_tendencias",
     ),
+    path(
+        "operations/atendimento-conversao/",
+        views.atendimento_conversao,
+        name="atendimento_conversao",
+    ),
     path("operations/conversas-ruins/", views.conversas_ruins, name="conversas_ruins"),
     path("operations/qa/", views.qa_supervisor, name="qa_supervisor"),
     path(
