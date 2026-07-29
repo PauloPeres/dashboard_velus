@@ -70,10 +70,11 @@
     </div>
   </div>
   <p class="text-xs text-gray-400 mb-3">
-    Linha azul = atendimentos abertos por hora. Faixa cinza = esperado pra aquele dia-da-semana × hora (média das últimas {{ horario.baseline_weeks }} semanas ± {{ horario.k }}σ). Pontos vermelhos = picos acima do normal (possível anomalia). Linhas tracejadas laranja = dias de vencimento de fatura.
+    Linha azul = atendimentos abertos por hora. Faixa cinza = esperado pra aquele dia-da-semana × hora (média das últimas {{ horario.baseline_weeks }} semanas ± {{ horario.k }}σ). Pontos vermelhos = picos acima do normal (possível anomalia). <span class="text-amber-600">Faixa âmbar</span> = dias de vencimento pesado (baseline próprio de cobrança, pra pico de fatura não virar falsa anomalia); linhas tracejadas = vencimentos menores.
   </p>
   <div class="flex flex-wrap gap-4 mb-3 text-xs">
     <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>{{ horario.n_anomalias }} hora{{ horario.n_anomalias|pluralize }} com pico anômalo</span>
+    <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm bg-amber-200"></span>{{ horario.n_billing_days }} dia{{ horario.n_billing_days|pluralize }} de cobrança</span>
     <span class="text-gray-400">{{ horario.total_janela|intcomma }} atendimentos na janela de {{ horario_dias }} dias</span>
   </div>
   <div id="horario-chart" style="height:360px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
