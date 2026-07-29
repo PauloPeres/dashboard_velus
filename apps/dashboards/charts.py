@@ -1822,10 +1822,11 @@ def atendimento_categoria_trend(
     *,
     unidade: str = "atendimentos",
 ) -> str:
-    """Área empilhada — evolução de categorias (motivos/tags) ao longo do tempo.
+    """Barras empilhadas — evolução de categorias (motivos/tags) ao longo do tempo.
 
-    Cada série vira uma faixa empilhada; "Outros" (fora do top-N) sai em cinza.
-    `hovermode` unificado deixa comparar a composição em cada ponto do tempo.
+    Cada categoria é uma série empilhada por bucket (semana/mês); "Outros" (fora
+    do top-N) sai em cinza. `hovermode` unificado deixa comparar a composição em
+    cada ponto do tempo.
     """
     traces = []
     color_i = 0
@@ -1837,14 +1838,11 @@ def atendimento_categoria_trend(
             color = _TREND_PALETTE[color_i % len(_TREND_PALETTE)]
             color_i += 1
         traces.append(
-            go.Scatter(
+            go.Bar(
                 name=s["name"],
                 x=buckets,
                 y=s["values"],
-                mode="lines",
-                stackgroup="one",
-                line={"width": 0.5, "color": color},
-                fillcolor=color,
+                marker_color=color,
                 hovertemplate="<b>%{fullData.name}</b><br>%{x}: %{y} " + unidade
                 + "<extra></extra>",
             )
@@ -1853,6 +1851,8 @@ def atendimento_categoria_trend(
         data=traces,
         layout={
             **_LAYOUT_BASE,
+            "barmode": "stack",
+            "bargap": 0.15,
             "showlegend": True,
             "hovermode": "x unified",
             "margin": {"l": 50, "r": 20, "t": 10, "b": 40},
