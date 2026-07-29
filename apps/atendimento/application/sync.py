@@ -25,6 +25,7 @@ from apps.atendimento.domain.ports import AtendimentoSourcePort
 from apps.atendimento.infrastructure.repositories import (
     AtendimentoRepository,
     DepartamentoRepository,
+    EtiquetaRepository,
     MensagemRepository,
 )
 from apps.integrations.shared.enums import SourceType
@@ -37,6 +38,7 @@ _logger = structlog.get_logger(__name__)
 @dataclass(frozen=True)
 class OpaSyncResult:
     departamentos: int = 0
+    etiquetas: int = 0
     atendimentos: int = 0
     mensagens: int = 0
     customers_linked: int = 0
@@ -67,6 +69,18 @@ def run_opa_sync(
     for dep in source.list_departamentos():
         dep_repo.upsert_from_dto(dep, source_type=source_type)
         dep_count += 1
+
+    # --- 1b. Etiquetas (catalogo id_tag -> nome) ----------------------------
+    # Catalogo barato; alem de persistir, monta o mapa que resolve os nomes das
+    # tags no atendimento (a listagem so traz id_tag opaco), igual atendente_map.
+    et_repo = EtiquetaRepository(organization)
+    etiqueta_map: dict[str, str] = {}
+    et_count = 0
+    for et in source.list_etiquetas():
+        et_repo.upsert_from_dto(et, source_type=source_type)
+        et_count += 1
+        if et.nome:
+            etiqueta_map[et.external_id] = et.nome
 
     # --- 2. Mapa id_cliente_opaco -> documento ------------------------------
     cliente_map: dict[str, str] = {}
@@ -99,6 +113,12 @@ def run_opa_sync(
         if nome and nome != dto.atendente_nome:
             dto = replace(dto, atendente_nome=nome)
 
+        # Resolve os nomes das tags via catalogo; id nao encontrado (etiqueta
+        # removida) cai no proprio id como fallback rastreavel. Preserva ordem.
+        if dto.tag_ids:
+            tags = [etiqueta_map.get(tid, tid) for tid in dto.tag_ids]
+            dto = replace(dto, tags=tags)
+
         atendimento, _created = at_repo.upsert_from_dto(dto, source_type=source_type)
         at_count += 1
         if atendimento.customer_id is not None:
@@ -113,6 +133,7 @@ def run_opa_sync(
 
     result = OpaSyncResult(
         departamentos=dep_count,
+        etiquetas=et_count,
         atendimentos=at_count,
         mensagens=msg_count,
         customers_linked=linked,
@@ -121,6 +142,7 @@ def run_opa_sync(
         "opa_sync_done",
         org=organization.slug,
         departamentos=result.departamentos,
+        etiquetas=result.etiquetas,
         atendimentos=result.atendimentos,
         mensagens=result.mensagens,
         customers_linked=result.customers_linked,

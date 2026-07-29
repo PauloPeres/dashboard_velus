@@ -13,6 +13,7 @@ from .dto import (
     AtendimentoDTO,
     ClienteRefDTO,
     DepartamentoDTO,
+    EtiquetaDTO,
     MensagemDTO,
 )
 
@@ -41,6 +42,14 @@ class AtendimentoSourcePort(Protocol):
 
         Lista barata usada pra preencher o nome do atendente no atendimento,
         que a listagem so traz como id opaco.
+        """
+        ...
+
+    def list_etiquetas(self) -> Iterator[EtiquetaDTO]:
+        """Itera o catalogo de etiquetas/tags configuradas (id opaco -> nome).
+
+        Lista barata usada pra resolver `Atendimento.tags`: a listagem de
+        atendimentos so traz as tags como ids opacos (id_tag), sem o nome.
         """
         ...
 
