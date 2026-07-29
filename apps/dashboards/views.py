@@ -1349,13 +1349,29 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
     if raw_dep.isdigit():
         departamento_id = int(raw_dep)
 
+    focus_motivo = request.GET.get("motivo", "").strip() or None
+    focus_tag = request.GET.get("tag", "").strip() or None
+
     data = compute_atendimento_tendencias(
         org,
         months=months,
         granularity=granularity,
         departamento_id=departamento_id,
         top_n=30,
+        focus_motivo=focus_motivo,
+        focus_tag=focus_tag,
     )
+
+    motivo_focus_json = None
+    if data["motivo_focus"]:
+        motivo_focus_json = charts.atendimento_categoria_trend(
+            data["buckets"], [data["motivo_focus"]]
+        )
+    tag_focus_json = None
+    if data["tag_focus"]:
+        tag_focus_json = charts.atendimento_categoria_trend(
+            data["buckets"], [data["tag_focus"]]
+        )
 
     return render(
         request,
@@ -1368,6 +1384,8 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
             "tags_trend_json": charts.atendimento_categoria_trend(
                 data["buckets"], data["tags_series"]
             ),
+            "motivo_focus_json": motivo_focus_json,
+            "tag_focus_json": tag_focus_json,
         },
     )
 

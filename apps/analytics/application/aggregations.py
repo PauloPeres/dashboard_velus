@@ -5126,13 +5126,35 @@ def _build_categoria_series(
 
 
 @allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def _categoria_focus_series(
+    name: str | None,
+    by_bucket: dict[date_cls, Counter[str]],
+    buckets: list[date_cls],
+    total_counter: Counter[str],
+) -> dict[str, Any] | None:
+    """Série de uma única categoria (motivo/tag) por bucket, p/ a visão focada.
+
+    Retorna None se `name` vazio ou ausente na janela. Serve pra "destacar" uma
+    tag/motivo especifico sem poluir o gráfico geral.
+    """
+    if not name or name not in total_counter:
+        return None
+    return {
+        "name": name,
+        "values": [by_bucket.get(b, Counter()).get(name, 0) for b in buckets],
+        "total": total_counter[name],
+    }
+
+
 def compute_atendimento_tendencias(
     organization: Organization,
     *,
     months: int = 6,
     granularity: str = "week",
     departamento_id: int | None = None,
-    top_n: int = 10,
+    top_n: int | None = 10,
+    focus_motivo: str | None = None,
+    focus_tag: str | None = None,
 ) -> dict[str, Any]:
     """Séries temporais de motivos e tags de atendimento (Opa! Suite) — F2.
 
@@ -5207,6 +5229,16 @@ def compute_atendimento_tendencias(
         tag_total, tag_by_bucket, buckets, top_n=top_n
     )
 
+    # Listas completas (ordenadas por frequência) p/ os seletores de "destacar".
+    motivos_all = [name for name, _ in motivo_total.most_common()]
+    tags_all = [name for name, _ in tag_total.most_common()]
+    motivo_focus = _categoria_focus_series(
+        focus_motivo, motivo_by_bucket, buckets, motivo_total
+    )
+    tag_focus = _categoria_focus_series(
+        focus_tag, tag_by_bucket, buckets, tag_total
+    )
+
     departamentos = list(
         Departamento.objects.filter(organization=organization)
         .order_by("nome")
@@ -5223,6 +5255,12 @@ def compute_atendimento_tendencias(
         "buckets": labels,
         "motivos_series": motivos_series,
         "tags_series": tags_series,
+        "motivos_all": motivos_all,
+        "tags_all": tags_all,
+        "motivo_focus": motivo_focus,
+        "tag_focus": tag_focus,
+        "focus_motivo": focus_motivo if motivo_focus else None,
+        "focus_tag": focus_tag if tag_focus else None,
         "n_motivos_distintos": len(motivo_total),
         "n_tags_distintas": len(tag_total),
         "atendimentos_com_tag": atendimentos_com_tag,
