@@ -23,6 +23,7 @@ from apps.analytics.application.aggregations import (
     compute_arpu_by_plan,
     compute_at_risk_contracts,
     compute_atendimento_detail,
+    compute_atendimento_tendencias,
     compute_atendimento_triagem,
     compute_bad_conversations,
     compute_bandwidth_summary,
@@ -1324,6 +1325,44 @@ def atendimento(request: HttpRequest) -> HttpResponse:
             "motivos_chart_json": charts.atendimento_top_motivos(data["top_motivos"]),
             "deflection_chart_json": charts.bot_deflection_trend(
                 deflection["deflection_trend"]
+            ),
+        },
+    )
+
+
+@login_required
+@never_cache
+def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
+    """Tendências de atendimento: motivos e tags ao longo do tempo (F2)."""
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+    months = _get_months(request)
+
+    granularity = request.GET.get("g", "week")
+    if granularity not in ("week", "month"):
+        granularity = "week"
+
+    departamento_id: int | None = None
+    raw_dep = request.GET.get("departamento", "")
+    if raw_dep.isdigit():
+        departamento_id = int(raw_dep)
+
+    data = compute_atendimento_tendencias(
+        org, months=months, granularity=granularity, departamento_id=departamento_id
+    )
+
+    return render(
+        request,
+        "dashboards/atendimento_tendencias.html",
+        {
+            **data,
+            "motivos_trend_json": charts.atendimento_categoria_trend(
+                data["buckets"], data["motivos_series"]
+            ),
+            "tags_trend_json": charts.atendimento_categoria_trend(
+                data["buckets"], data["tags_series"]
             ),
         },
     )

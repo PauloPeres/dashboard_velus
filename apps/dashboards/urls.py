@@ -28,6 +28,11 @@ urlpatterns = [
     path("operations/os/", views.os_dashboard, name="os_dashboard"),
     path("operations/tecnicos/", views.tecnicos, name="tecnicos"),
     path("operations/atendimento/", views.atendimento, name="atendimento"),
+    path(
+        "operations/atendimento-tendencias/",
+        views.atendimento_tendencias,
+        name="atendimento_tendencias",
+    ),
     path("operations/conversas-ruins/", views.conversas_ruins, name="conversas_ruins"),
     path("operations/qa/", views.qa_supervisor, name="qa_supervisor"),
     path(

@@ -5070,6 +5070,169 @@ def compute_atendimento_triagem(
     }
 
 
+_TENDENCIA_GRANULARIDADES = ("week", "month")
+
+
+def _bucket_start(d: date_cls, granularity: str) -> date_cls:
+    """Início do bucket (segunda-feira p/ semana, dia 1 p/ mês) de uma data."""
+    if granularity == "month":
+        return d.replace(day=1)
+    return d - timedelta(days=d.weekday())  # segunda da semana
+
+
+def _next_bucket(d: date_cls, granularity: str) -> date_cls:
+    """Início do bucket seguinte (avança 1 semana ou 1 mês)."""
+    if granularity == "month":
+        return (d.replace(day=1) + relativedelta(months=1))
+    return d + timedelta(days=7)
+
+
+def _bucket_label(d: date_cls, granularity: str) -> str:
+    """Rótulo do eixo: 'dd/mm' (semana começando na segunda) ou 'mmm/yy' (mês)."""
+    if granularity == "month":
+        return d.strftime("%b/%y")
+    return d.strftime("%d/%m")
+
+
+def _build_categoria_series(
+    total_counter: Counter[str],
+    by_bucket: dict[date_cls, Counter[str]],
+    buckets: list[date_cls],
+    *,
+    top_n: int,
+) -> list[dict[str, Any]]:
+    """Séries por categoria (motivo/tag) prontas p/ área empilhada.
+
+    Pega as `top_n` categorias mais frequentes na janela; o restante vira uma
+    série agregada "Outros". Cada série tem um valor por bucket (0 quando
+    ausente), na ordem de `buckets`.
+    """
+    top = [name for name, _ in total_counter.most_common(top_n)]
+    top_set = set(top)
+    series: list[dict[str, Any]] = []
+    for name in top:
+        series.append(
+            {"name": name, "values": [by_bucket.get(b, Counter()).get(name, 0) for b in buckets]}
+        )
+    # "Outros" = soma das categorias fora do top_n, por bucket.
+    if len(total_counter) > len(top):
+        outros = []
+        for b in buckets:
+            c = by_bucket.get(b, Counter())
+            outros.append(sum(v for k, v in c.items() if k not in top_set))
+        series.append({"name": "Outros", "values": outros, "is_outros": True})
+    return series
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_tendencias(
+    organization: Organization,
+    *,
+    months: int = 6,
+    granularity: str = "week",
+    departamento_id: int | None = None,
+    top_n: int = 10,
+) -> dict[str, Any]:
+    """Séries temporais de motivos e tags de atendimento (Opa! Suite) — F2.
+
+    Agrega, por bucket semanal ou mensal de `opened_at`, quantos atendimentos
+    tiveram cada motivo e cada tag (um atendimento pode ter N de cada — conta
+    cada ocorrência). Retorna as `top_n` categorias + "Outros", com o eixo de
+    buckets completo (buckets sem dado aparecem como zero) — pronto pro gráfico
+    de área empilhada. Motivos/tags são JSONField (list[str]), então a
+    contagem é feita em Python, igual a `top_motivos`.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento, Departamento
+
+    if granularity not in _TENDENCIA_GRANULARIDADES:
+        granularity = "week"
+
+    now = timezone.now()
+    window_start = (now - relativedelta(months=months)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    qs = Atendimento.objects.filter(
+        organization=organization,
+        opened_at__gte=window_start,
+        opened_at__isnull=False,
+    )
+    if departamento_id is not None:
+        qs = qs.filter(departamento_id=departamento_id)
+
+    motivo_by_bucket: dict[date_cls, Counter[str]] = defaultdict(Counter)
+    tag_by_bucket: dict[date_cls, Counter[str]] = defaultdict(Counter)
+    motivo_total: Counter[str] = Counter()
+    tag_total: Counter[str] = Counter()
+    atendimentos_com_tag = 0
+    total = 0
+
+    for opened_at, motivos, tags in qs.values_list(
+        "opened_at", "motivos", "tags"
+    ).iterator(chunk_size=2000):
+        if opened_at is None:
+            continue
+        total += 1
+        bucket = _bucket_start(timezone.localtime(opened_at).date(), granularity)
+        if motivos:
+            for m in motivos:
+                if m:
+                    motivo_by_bucket[bucket][m] += 1
+                    motivo_total[m] += 1
+        if tags:
+            has_tag = False
+            for t in tags:
+                if t:
+                    tag_by_bucket[bucket][t] += 1
+                    tag_total[t] += 1
+                    has_tag = True
+            if has_tag:
+                atendimentos_com_tag += 1
+
+    # Eixo de buckets completo (do início da janela até agora), pra buracos
+    # virarem zero em vez de sumir do gráfico.
+    buckets: list[date_cls] = []
+    cursor = _bucket_start(timezone.localtime(window_start).date(), granularity)
+    last = _bucket_start(timezone.localtime(now).date(), granularity)
+    while cursor <= last:
+        buckets.append(cursor)
+        cursor = _next_bucket(cursor, granularity)
+
+    labels = [_bucket_label(b, granularity) for b in buckets]
+    motivos_series = _build_categoria_series(
+        motivo_total, motivo_by_bucket, buckets, top_n=top_n
+    )
+    tags_series = _build_categoria_series(
+        tag_total, tag_by_bucket, buckets, top_n=top_n
+    )
+
+    departamentos = list(
+        Departamento.objects.filter(organization=organization)
+        .order_by("nome")
+        .values("id", "nome")
+    )
+    selected_nome = None
+    if departamento_id is not None:
+        selected_nome = next(
+            (d["nome"] for d in departamentos if d["id"] == departamento_id), None
+        )
+
+    return {
+        "granularity": granularity,
+        "buckets": labels,
+        "motivos_series": motivos_series,
+        "tags_series": tags_series,
+        "n_motivos_distintos": len(motivo_total),
+        "n_tags_distintas": len(tag_total),
+        "atendimentos_com_tag": atendimentos_com_tag,
+        "total": total,
+        "top_n": top_n,
+        "departamentos": departamentos,
+        "selected_departamento_id": departamento_id,
+        "selected_departamento_nome": selected_nome,
+    }
+
+
 @allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
 def compute_bot_deflection_trend(
     organization: Organization, *, months: int = 3

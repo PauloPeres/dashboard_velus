@@ -112,6 +112,12 @@
                 Atendimento
             </a>
 
+            <a href="{% url 'dashboards:atendimento_tendencias' %}"
+               class="flex items-center px-3 py-2 rounded-md
+                      {% if u == 'atendimento_tendencias' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
+                Tendências de Atendimento
+            </a>
+
             <a href="{% url 'dashboards:conversas_ruins' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'conversas_ruins' or u == 'atendimento_detail' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
