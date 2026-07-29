@@ -95,6 +95,22 @@ class TestAtendimentoTendencias:
         assert sum(outros) == 1  # só o C
         assert data["n_tags_distintas"] == 3
 
+    def test_top_n_none_shows_all_without_outros(
+        self, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        now = timezone.now()
+        for i, t in enumerate(["A", "A", "B", "C", "D"]):
+            _at(organization_a, external_id=f"x{i}", opened_at=now - timedelta(days=2),
+                tags=[t])
+
+        data = compute_atendimento_tendencias(
+            organization_a, months=6, granularity="week", top_n=None
+        )
+        names = [s["name"] for s in data["tags_series"]]
+        assert "Outros" not in names
+        assert set(names) == {"A", "B", "C", "D"}  # todas as categorias
+
     def test_weekly_vs_monthly_bucket_count(
         self, organization_a: Organization
     ) -> None:

@@ -1813,6 +1813,10 @@ def atendimento_top_motivos(rows: list[dict[str, Any]]) -> str:
 _TREND_PALETTE = [
     "#6366f1", "#06b6d4", "#10b981", "#f59e0b", "#ef4444",
     "#8b5cf6", "#ec4899", "#0ea5e9", "#f97316", "#84cc16",
+    "#14b8a6", "#a855f7", "#eab308", "#3b82f6", "#f43f5e",
+    "#22c55e", "#d946ef", "#fb923c", "#2dd4bf", "#818cf8",
+    "#65a30d", "#0891b2", "#db2777", "#ca8a04", "#4f46e5",
+    "#059669", "#e11d48", "#7c3aed", "#0d9488", "#c026d3",
 ]
 
 
