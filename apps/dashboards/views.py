@@ -1354,15 +1354,19 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
     focus_motivo = request.GET.get("motivo", "").strip() or None
     focus_tag = request.GET.get("tag", "").strip() or None
 
-    # Gráfico horário sazonal (F3) — janela própria em dias (?hd=7|14|30).
+    # Gráfico horário sazonal (F3) — janela própria em dias (?hd=7|14|30) e foco
+    # (?foco=todos|suporte|rede). O foco recorta o alvo vigiado (padrão: suporte).
     try:
         horario_dias = int(request.GET.get("hd", 14))
     except (ValueError, TypeError):
         horario_dias = 14
     if horario_dias not in (7, 14, 30):
         horario_dias = 14
+    foco = request.GET.get("foco", "suporte")
+    if foco not in ("todos", "suporte", "rede"):
+        foco = "suporte"
     horario = compute_atendimento_horario(
-        org, days=horario_dias, departamento_id=departamento_id
+        org, days=horario_dias, foco=foco
     )
 
     data = compute_atendimento_tendencias(

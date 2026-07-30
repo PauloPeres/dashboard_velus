@@ -5287,6 +5287,15 @@ def compute_atendimento_tendencias(
 
 _ATENDIMENTO_TZ = ZoneInfo("America/Sao_Paulo")
 _HORARIO_DIAS_VALIDOS = (7, 14, 30)
+_HORARIO_FOCOS = ("todos", "suporte", "rede")
+
+# Foco "Rede": motivos/tags que sinalizam problema de rede (confirmado c/ Paulo
+# 2026-07-30). Um atendimento entra no foco se tiver QUALQUER um (motivo OU tag).
+_REDE_MOTIVOS = ["Sem Cobertura", "Lentidão", "Quedas", "Problema no Wi-Fi", "WI-FI"]
+_REDE_TAGS = [
+    "Sem Conexão", "Sem cobertura", "Lentidão", "Rompimento", "LOS",
+    "Quedas", "WiFi – 2.4", "WiFi",
+]
 
 
 @allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
@@ -5295,7 +5304,9 @@ def compute_atendimento_horario(
     *,
     days: int = 14,
     baseline_weeks: int = 8,
-    k: float = 2.0,
+    k: float = 3.0,
+    foco: str = "suporte",
+    min_abs_anomaly: int = 5,
     departamento_id: int | None = None,
     billing_min_invoices: int = 30,
     billing_window_days: int = 1,
@@ -5304,22 +5315,32 @@ def compute_atendimento_horario(
 
     Pra cada hora da janela de `days` dias, compara o volume real com o
     esperado pra aquele *slot sazonal*, estimado pelas últimas `baseline_weeks`
-    semanas ANTERIORES à janela. Marca como anomalia (pico) as horas acima de
-    `média + k·desvio` do slot — pra flagar volume anormal (ex.: incidente de
-    rede).
+    semanas ANTERIORES à janela. Marca como anomalia (só PICO) as horas bem
+    acima do esperado — pra flagar volume anormal (ex.: incidente de rede).
+
+    `foco`: recorte vigiado — "todos", "suporte" (departamento Suporte) ou
+    "rede" (atendimentos com motivo/tag de rede: Sem Conexão, Quedas,
+    Rompimento, LOS, ...). O foco de rede é o alarme mais nítido de queda
+    estrutural.
+
+    Sensibilidade conservadora (k=3): a banda usa `k · max(desvio, √média)` —
+    o piso de Poisson (√média) evita falso alarme em horas de baixo volume
+    (madrugada) onde o desvio amostral é instável. Anomalia exige também um piso
+    absoluto (`min_abs_anomaly`). O baseline descarta o maior outlier de cada
+    slot pra um incidente passado não inflar o esperado das semanas seguintes.
 
     v2 — baseline por proximidade de vencimento: dias com >= `billing_min_invoices`
-    faturas vencendo (± `billing_window_days` dias) geram pico LEGÍTIMO de
-    cobrança. Esses dias usam um baseline PRÓPRIO (por hora, agregando dias de
-    cobrança), separado do baseline normal (dia-da-semana × hora). Assim um pico
-    de cobrança não vira falsa anomalia, e uma anomalia de rede num dia de
-    vencimento ainda aparece (é comparada contra o baseline de cobrança).
+    faturas vencendo (± `billing_window_days` dias) usam um baseline PRÓPRIO de
+    cobrança (por hora), separado do normal — pico de cobrança não vira falsa
+    anomalia, e anomalia de rede num dia de vencimento ainda aparece.
     """
     from apps.atendimento.infrastructure.models import Atendimento, Departamento
     from apps.financial.infrastructure.models import Invoice
 
     if days not in _HORARIO_DIAS_VALIDOS:
         days = 14
+    if foco not in _HORARIO_FOCOS:
+        foco = "suporte"
 
     now = timezone.now()
     now_local = timezone.localtime(now, _ATENDIMENTO_TZ)
@@ -5333,7 +5354,14 @@ def compute_atendimento_horario(
         opened_at__gte=baseline_start,
         opened_at__isnull=False,
     )
-    if departamento_id is not None:
+    if foco == "suporte":
+        qs = qs.filter(departamento__nome__iexact="Suporte")
+    elif foco == "rede":
+        qs = qs.filter(
+            Q(motivos__has_any_keys=_REDE_MOTIVOS)
+            | Q(tags__has_any_keys=_REDE_TAGS)
+        )
+    elif departamento_id is not None:
         qs = qs.filter(departamento_id=departamento_id)
 
     # Contagem por hora (no fuso local) — chave = datetime truncado na hora.
@@ -5387,8 +5415,13 @@ def compute_atendimento_horario(
         cursor += timedelta(hours=1)
 
     def _stats(samples: list[int]) -> tuple[float, float]:
-        mean = statistics.fmean(samples) if samples else 0.0
-        std = statistics.pstdev(samples) if len(samples) > 1 else 0.0
+        # Descarta o maior outlier quando há amostra suficiente, pra um incidente
+        # passado não inflar o "esperado" das semanas seguintes.
+        s = sorted(samples)
+        if len(s) >= 6:
+            s = s[:-1]
+        mean = statistics.fmean(s) if s else 0.0
+        std = statistics.pstdev(s) if len(s) > 1 else 0.0
         return mean, std
 
     normal_stats = {slot: _stats(s) for slot, s in normal_samples.items()}
@@ -5413,8 +5446,11 @@ def compute_atendimento_horario(
             mean, std = billing_stats[cursor.hour]
         else:
             mean, std = normal_stats.get((cursor.weekday(), cursor.hour), (0.0, 0.0))
-        up = mean + k * std
-        lo = max(0.0, mean - k * std)
+        # Desvio efetivo com piso de Poisson (√média): estabiliza a banda em
+        # horas de baixo volume, onde o desvio amostral é ~0 e instável.
+        sigma_eff = max(std, math.sqrt(mean))
+        up = mean + k * sigma_eff
+        lo = max(0.0, mean - k * sigma_eff)
         val = counts.get(cursor, 0)
         label = cursor.strftime("%d/%m %Hh")
         labels.append(label)
@@ -5423,9 +5459,9 @@ def compute_atendimento_horario(
         upper.append(round(up, 2))
         lower.append(round(lo, 2))
         is_billing.append(billing)
-        # Anomalia = pico acima da banda (com folga mínima pra não flagar ruído
-        # quando o baseline é ~0).
-        if val > up and val >= mean + 1 and val >= 2:
+        # Anomalia = SÓ pico bem acima da banda + piso absoluto (queda não conta;
+        # queda no suporte/rede é sinal de que está tudo bem).
+        if val > up and val >= min_abs_anomaly:
             anomaly_x.append(label)
             anomaly_y.append(val)
         cursor += timedelta(hours=1)
@@ -5478,6 +5514,7 @@ def compute_atendimento_horario(
         "n_billing_days": len(billing_day_labels),
         "baseline_weeks": baseline_weeks,
         "k": k,
+        "foco": foco,
         "departamentos": departamentos,
         "selected_departamento_id": departamento_id,
         "selected_departamento_nome": selected_nome,

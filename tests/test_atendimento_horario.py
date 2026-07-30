@@ -15,7 +15,7 @@ import pytest
 from django.utils import timezone
 
 from apps.analytics.application.aggregations import compute_atendimento_horario
-from apps.atendimento.infrastructure.models import Atendimento
+from apps.atendimento.infrastructure.models import Atendimento, Departamento
 from apps.financial.infrastructure.models import Invoice
 from apps.integrations.shared.enums import SourceType
 from apps.shared.context import set_current_organization
@@ -24,13 +24,24 @@ from apps.tenancy.models import Organization, User
 _SP = ZoneInfo("America/Sao_Paulo")
 
 
-def _at(org: Organization, *, external_id: str, opened_at: Any) -> Atendimento:
+def _at(
+    org: Organization,
+    *,
+    external_id: str,
+    opened_at: Any,
+    departamento: Departamento | None = None,
+    tags: list[str] | None = None,
+    motivos: list[str] | None = None,
+) -> Atendimento:
     return Atendimento.objects.create(
         organization=org,
         source_type=SourceType.OPA.value,
         external_id=external_id,
         status=Atendimento.Status.CLOSED.value,
         opened_at=opened_at,
+        departamento=departamento,
+        tags=tags or [],
+        motivos=motivos or [],
     )
 
 
@@ -62,7 +73,7 @@ class TestAtendimentoHorario:
         for i in range(5):
             _at(organization_a, external_id=f"s{i}", opened_at=spike_at)
 
-        data = compute_atendimento_horario(organization_a, days=14)
+        data = compute_atendimento_horario(organization_a, days=14, foco="todos")
         assert data["n_anomalias"] >= 1
         assert max(data["anomaly_y"]) == 5
         assert data["total_janela"] == 5
@@ -71,14 +82,51 @@ class TestAtendimentoHorario:
         self, organization_a: Organization
     ) -> None:
         set_current_organization(organization_a)
-        # 1 atendimento isolado (val=1) não vira anomalia (regra exige val>=2).
+        # 1 atendimento isolado (val=1) não vira anomalia (piso absoluto = 5).
         _at(
             organization_a,
             external_id="a1",
             opened_at=timezone.now() - timedelta(days=1),
         )
-        data = compute_atendimento_horario(organization_a, days=14)
+        data = compute_atendimento_horario(organization_a, days=14, foco="todos")
         assert data["n_anomalias"] == 0
+
+    def test_foco_suporte_filtra_departamento(
+        self, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        now = timezone.now()
+        sup = Departamento.objects.create(
+            organization=organization_a, source_type=SourceType.OPA.value,
+            external_id="dsup", nome="Suporte",
+        )
+        com = Departamento.objects.create(
+            organization=organization_a, source_type=SourceType.OPA.value,
+            external_id="dcom", nome="Comercial",
+        )
+        _at(organization_a, external_id="s1", opened_at=now - timedelta(days=1),
+            departamento=sup)
+        _at(organization_a, external_id="c1", opened_at=now - timedelta(days=1),
+            departamento=com)
+        data = compute_atendimento_horario(organization_a, days=14, foco="suporte")
+        assert data["foco"] == "suporte"
+        assert data["total_janela"] == 1  # só o do Suporte
+
+    def test_foco_rede_filtra_por_motivo_ou_tag(
+        self, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        now = timezone.now()
+        # rede via tag, rede via motivo, e um não-rede.
+        _at(organization_a, external_id="r1", opened_at=now - timedelta(days=1),
+            tags=["Sem Conexão"])
+        _at(organization_a, external_id="r2", opened_at=now - timedelta(days=1),
+            motivos=["Quedas"])
+        _at(organization_a, external_id="x1", opened_at=now - timedelta(days=1),
+            tags=["Financeiro em Atraso"], motivos=["Financeiro"])
+        data = compute_atendimento_horario(organization_a, days=14, foco="rede")
+        assert data["foco"] == "rede"
+        assert data["total_janela"] == 2  # só os de rede
 
     def test_billing_baseline_suppresses_false_anomaly(
         self, organization_a: Organization
@@ -118,7 +166,7 @@ class TestAtendimentoHorario:
 
         # v2 ligada (window=0 pra baseline de cobrança limpo, sem diluir vizinhos)
         on = compute_atendimento_horario(
-            organization_a, days=14, billing_window_days=0
+            organization_a, days=14, billing_window_days=0, foco="todos"
         )
         idx = on["labels"].index(target_label)
         assert on["is_billing"][idx] is True
@@ -128,7 +176,7 @@ class TestAtendimentoHorario:
         # v2 desligada (nenhum dia vira "de cobrança") -> baseline normal vazio
         # pra aquele dia-da-semana×12h -> o mesmo pico vira anomalia.
         off = compute_atendimento_horario(
-            organization_a, days=14, billing_min_invoices=100000
+            organization_a, days=14, billing_min_invoices=100000, foco="todos"
         )
         idx_off = off["labels"].index(target_label)
         assert off["expected"][idx_off] == pytest.approx(0, abs=0.5)
