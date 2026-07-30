@@ -6,7 +6,30 @@ import json
 
 from django import forms
 
-from .models import OrganizationDataSource
+from .models import AccessGroup, OrganizationDataSource
+
+
+class AccessGroupForm(forms.ModelForm):
+    """Form do admin p/ grupo de acesso: abas como checkboxes (não JSON cru)."""
+
+    allowed_pages = forms.MultipleChoiceField(
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        label="Abas liberadas",
+        help_text="Páginas que os membros deste grupo podem ver/acessar.",
+    )
+
+    class Meta:
+        model = AccessGroup
+        fields = ("organization", "name", "allowed_pages")
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        from apps.dashboards.pages import PAGES
+
+        self.fields["allowed_pages"].choices = [
+            (p["key"], f'{p["section"]} · {p["label"]}') for p in PAGES
+        ]
 
 
 class DataSourceCredentialsForm(forms.ModelForm):

@@ -42,3 +42,24 @@ def period_context(request: HttpRequest) -> dict[str, Any]:
             {"value": 24, "label": "24 meses"},
         ],
     }
+
+
+def page_access(request: HttpRequest) -> dict[str, Any]:
+    """Expõe ao template as abas que o usuário pode ver (RBAC por grupo, #65).
+
+    `allowed_all` = True pro OWNER (ou quando não há membership resolvida — evita
+    esconder tudo por engano). `allowed_pages` = conjunto de keys liberadas.
+    """
+    user = getattr(request, "user", None)
+    if user is None or not user.is_authenticated:
+        return {"allowed_all": False, "allowed_pages": set(), "is_owner": False}
+    membership = user.get_active_membership()
+    if membership is None:
+        # Sem membership o middleware não bloqueia; não escondemos o nav.
+        return {"allowed_all": True, "allowed_pages": set(), "is_owner": False}
+    allowed = membership.allowed_page_keys()
+    return {
+        "allowed_all": "*" in allowed,
+        "allowed_pages": allowed,
+        "is_owner": membership.is_owner,
+    }
