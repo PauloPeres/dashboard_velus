@@ -5545,7 +5545,13 @@ _CONVERSAO_MIN_VOL = 30  # volume mínimo pra uma tag/motivo entrar no ranking d
 
 
 def _conversao_acc() -> dict[str, Any]:
-    return {"n": 0, "churn": 0, "conv": 0, "churn_custs": set(), "conv_custs": set()}
+    return {
+        "n": 0, "churn": 0, "conv": 0,
+        "churn_custs": set(), "conv_custs": set(),
+        # Dedup por CONTRATO (unidade real do desfecho): ids distintos de
+        # contratos cancelados/ativados após uma conversa da categoria.
+        "churn_contratos": set(), "conv_contratos": set(),
+    }
 
 
 @allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
@@ -5593,21 +5599,21 @@ def compute_atendimento_conversao(
 
     cust_ids = set(qs.values_list("customer_id", flat=True))
 
-    # Datas de cancelamento/ativação por cliente (contratos dos clientes envolvidos).
-    cust_cancels: dict[int, list[datetime]] = defaultdict(list)
-    cust_activations: dict[int, list[datetime]] = defaultdict(list)
-    cust_cancel_mrr: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
+    # Cancelamentos/ativações por cliente, carregando o id do CONTRATO (pra
+    # dedup por contrato) e o MRR do contrato.
+    cust_cancels: dict[int, list[tuple[datetime, int]]] = defaultdict(list)
+    cust_activations: dict[int, list[tuple[datetime, int]]] = defaultdict(list)
+    contract_mrr: dict[int, Decimal] = {}
     if cust_ids:
         for c in Contract.objects.filter(
             organization=organization, customer_id__in=cust_ids
-        ).values("customer_id", "canceled_at", "activated_at", "monthly_amount", "status"):
+        ).values("id", "customer_id", "canceled_at", "activated_at", "monthly_amount"):
             cid = c["customer_id"]
+            contract_mrr[c["id"]] = c["monthly_amount"] or Decimal("0")
             if c["canceled_at"] is not None:
-                cust_cancels[cid].append(c["canceled_at"])
-                if c["status"] == "CANCELED":
-                    cust_cancel_mrr[cid] += c["monthly_amount"] or Decimal("0")
+                cust_cancels[cid].append((c["canceled_at"], c["id"]))
             if c["activated_at"] is not None:
-                cust_activations[cid].append(c["activated_at"])
+                cust_activations[cid].append((c["activated_at"], c["id"]))
 
     by_tag: dict[str, dict[str, Any]] = defaultdict(_conversao_acc)
     by_motivo: dict[str, dict[str, Any]] = defaultdict(_conversao_acc)
@@ -5621,35 +5627,40 @@ def compute_atendimento_conversao(
         cid = at["customer_id"]
         opened = at["opened_at"]
         end = opened + horizon
-        churned = any(opened < dt <= end for dt in cust_cancels.get(cid, ()))
-        converted = any(opened < dt <= end for dt in cust_activations.get(cid, ()))
+        churn_contracts = [
+            kid for dt, kid in cust_cancels.get(cid, ()) if opened < dt <= end
+        ]
+        conv_contracts = [
+            kid for dt, kid in cust_activations.get(cid, ()) if opened < dt <= end
+        ]
+        churned = bool(churn_contracts)
+        converted = bool(conv_contracts)
         total_linked += 1
         churn_total += 1 if churned else 0
         conv_total += 1 if converted else 0
-        for name in set(at["tags"] or []):
-            acc = by_tag[name]
-            acc["n"] += 1
-            if churned:
-                acc["churn"] += 1
-                acc["churn_custs"].add(cid)
-            if converted:
-                acc["conv"] += 1
-                acc["conv_custs"].add(cid)
-        for name in set(at["motivos"] or []):
-            acc = by_motivo[name]
-            acc["n"] += 1
-            if churned:
-                acc["churn"] += 1
-                acc["churn_custs"].add(cid)
-            if converted:
-                acc["conv"] += 1
-                acc["conv_custs"].add(cid)
+        for group, names in ((by_tag, at["tags"]), (by_motivo, at["motivos"])):
+            for name in set(names or []):
+                acc = group[name]
+                acc["n"] += 1
+                if churned:
+                    acc["churn"] += 1
+                    acc["churn_custs"].add(cid)
+                    acc["churn_contratos"].update(churn_contracts)
+                if converted:
+                    acc["conv"] += 1
+                    acc["conv_custs"].add(cid)
+                    acc["conv_contratos"].update(conv_contracts)
 
     def _rows(acc_map: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         rows = []
         for name, a in acc_map.items():
             n = a["n"]
-            mrr = sum((cust_cancel_mrr.get(c, Decimal("0")) for c in a["churn_custs"]), Decimal("0"))
+            # MRR perdido = soma do MRR dos CONTRATOS cancelados (dedup por
+            # contrato — sem contar o mesmo contrato duas vezes).
+            mrr = sum(
+                (contract_mrr.get(k, Decimal("0")) for k in a["churn_contratos"]),
+                Decimal("0"),
+            )
             rows.append(
                 {
                     "name": name,
@@ -5658,6 +5669,8 @@ def compute_atendimento_conversao(
                     "churn_pct": round(a["churn"] / n * 100, 1) if n else 0.0,
                     "conv": a["conv"],
                     "conv_pct": round(a["conv"] / n * 100, 1) if n else 0.0,
+                    "churn_contratos": len(a["churn_contratos"]),
+                    "conv_contratos": len(a["conv_contratos"]),
                     "mrr_churn": float(mrr),
                 }
             )

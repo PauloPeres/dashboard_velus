@@ -113,6 +113,29 @@ class TestAtendimentoConversao:
         data = compute_atendimento_conversao(organization_a, months=12, horizon_days=90)
         assert data["churn_total"] == 0
 
+    def test_churn_deduped_by_contract(
+        self, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        now = timezone.now()
+        cust = _customer(organization_a, doc="777")
+        # 1 contrato cancelado após a conversa, mas o cliente teve 3 conversas
+        # com a mesma tag -> churn (por atendimento) conta 3, mas churn_contratos
+        # dedup = 1; MRR = o do contrato (200), não 3x.
+        _contract(
+            organization_a, cust, ext="k1", status="CANCELED",
+            canceled_at=now - timedelta(days=10), mrr="200.00",
+        )
+        for i in range(3):
+            _at(organization_a, ext=f"a{i}", cust=cust,
+                opened_at=now - timedelta(days=30), tags=["Bloqueio"])
+
+        data = compute_atendimento_conversao(organization_a, months=6, horizon_days=90)
+        row = _by_name(data["by_tag"], "Bloqueio")
+        assert row["churn"] == 3            # por atendimento
+        assert row["churn_contratos"] == 1  # dedup por contrato
+        assert row["mrr_churn"] == 200.0    # MRR do contrato, sem multiplicar
+
     def test_conversion_after_conversation(
         self, organization_a: Organization
     ) -> None:
