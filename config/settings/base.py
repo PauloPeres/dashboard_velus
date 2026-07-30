@@ -113,6 +113,7 @@ TEMPLATES = [
                 "apps.shared.context_processors.tenant",
                 "apps.dashboards.context_processors.period_context",
                 "apps.dashboards.context_processors.page_access",
+                "apps.dashboards.context_processors.data_lineage",
             ],
         },
     },

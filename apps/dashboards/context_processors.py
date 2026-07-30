@@ -63,3 +63,13 @@ def page_access(request: HttpRequest) -> dict[str, Any]:
         "allowed_pages": allowed,
         "is_owner": membership.is_owner,
     }
+
+
+def data_lineage(request: HttpRequest) -> dict[str, Any]:
+    """Expõe as fontes de dados da página atual (badge + hover, #67)."""
+    from .data_lineage import lineage_for
+
+    match = getattr(request, "resolver_match", None)
+    if match is None:
+        return {"data_sources": []}
+    return {"data_sources": lineage_for(match.namespace, match.url_name)}
