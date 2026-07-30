@@ -15,6 +15,7 @@ from .models import (
     AccessGroup,
     Organization,
     OrganizationDataSource,
+    OrganizationInvite,
     OrganizationMembership,
     User,
 )
@@ -92,6 +93,15 @@ class OrganizationMembershipAdmin(SimpleHistoryAdmin):
     list_editable = ("access_group",)
     search_fields = ("user__email", "organization__slug")
     autocomplete_fields = ("user", "organization", "access_group")
+
+
+@admin.register(OrganizationInvite)
+class OrganizationInviteAdmin(admin.ModelAdmin):
+    list_display = ("email", "organization", "role", "access_group", "invited_by", "created_at")
+    list_filter = ("organization", "role")
+    search_fields = ("email", "organization__slug")
+    autocomplete_fields = ("organization", "access_group", "invited_by", "user")
+    readonly_fields = ("created_at",)
 
 
 @admin.register(OrganizationDataSource)
