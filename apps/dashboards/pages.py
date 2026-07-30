@@ -55,6 +55,10 @@ _ROUTE_TO_KEY.update({
 })
 
 
+# Rotas do namespace dashboards restritas ao OWNER (gestão de acesso).
+OWNER_ONLY: set[str] = {"settings", "access_management"}
+
+
 def route_to_key(namespace: str | None, url_name: str | None) -> str | None:
     """Chave de acesso da rota (namespace:url_name), ou None se não protegida."""
     if not url_name:
