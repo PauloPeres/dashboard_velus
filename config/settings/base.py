@@ -86,6 +86,7 @@ MIDDLEWARE = [
     "django_structlog.middlewares.RequestMiddleware",
     "allauth.account.middleware.AccountMiddleware",
     "apps.shared.middleware.TenantMiddleware",  # injeta organization no contextvar
+    "apps.dashboards.middleware.PageAccessMiddleware",  # RBAC por grupo (#65)
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "csp.middleware.CSPMiddleware",
@@ -111,6 +112,7 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "apps.shared.context_processors.tenant",
                 "apps.dashboards.context_processors.period_context",
+                "apps.dashboards.context_processors.page_access",
             ],
         },
     },

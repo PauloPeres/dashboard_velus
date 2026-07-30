@@ -43,128 +43,166 @@
         <nav class="flex-1 px-2 py-3 overflow-y-auto space-y-0.5 text-sm">
             {% with u=request.resolver_match.url_name %}
 
+            {% if allowed_all or 'executive' in allowed_pages %}
             <a href="{% url 'dashboards:executive' %}"
                class="flex items-center px-3 py-2 rounded-md font-medium
                       {% if u == 'executive' %}bg-blue-50 text-blue-700{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Executivo
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'revenue' in allowed_pages %}
             <a href="{% url 'dashboards:revenue' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'revenue' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Receita
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'contracts' in allowed_pages %}
             <a href="{% url 'dashboards:contracts' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'contracts' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Contratos
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'financial' in allowed_pages %}
             <a href="{% url 'dashboards:financial' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'financial' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Inadimplência
             </a>
+            {% endif %}
 
             <!-- ── Grupo Despesas ── -->
+            {% if allowed_all or 'cashflow' in allowed_pages or 'dre' in allowed_pages or 'burn' in allowed_pages or 'forecast' in allowed_pages or 'pessoas' in allowed_pages or 'compromissos' in allowed_pages or 'descasamento' in allowed_pages %}
             {% if u == 'cashflow' or u == 'dre' or u == 'dre_detalhe' or u == 'burn' or u == 'forecast' or u == 'pessoas' or u == 'compromissos' or u == 'descasamento' %}
-                {% with despesas_open=True %}
-                {% include "dashboards/_sidebar_despesas.html" with u=u open=despesas_open %}
-                {% endwith %}
+                {% include "dashboards/_sidebar_despesas.html" with u=u open=True %}
             {% else %}
                 {% include "dashboards/_sidebar_despesas.html" with u=u open=False %}
             {% endif %}
+            {% endif %}
 
+            {% if allowed_all or 'churn' in allowed_pages %}
             <a href="{% url 'dashboards:churn' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'churn' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Churn
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'risk' in allowed_pages %}
             <a href="{% url 'dashboards:risk' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'risk' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Risco de Churn
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'operations' in allowed_pages %}
             <a href="{% url 'dashboards:operations' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'operations' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Operações
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'os_dashboard' in allowed_pages %}
             <a href="{% url 'dashboards:os_dashboard' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'os_dashboard' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Ordens de Serviço
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'tecnicos' in allowed_pages %}
             <a href="{% url 'dashboards:tecnicos' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'tecnicos' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Técnicos
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'atendimento' in allowed_pages %}
             <a href="{% url 'dashboards:atendimento' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'atendimento' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Atendimento
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'atendimento_tendencias' in allowed_pages %}
             <a href="{% url 'dashboards:atendimento_tendencias' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'atendimento_tendencias' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Tendências de Atendimento
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'atendimento_conversao' in allowed_pages %}
             <a href="{% url 'dashboards:atendimento_conversao' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'atendimento_conversao' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Conversão &amp; Churn
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'conversas_ruins' in allowed_pages %}
             <a href="{% url 'dashboards:conversas_ruins' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'conversas_ruins' or u == 'atendimento_detail' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Conversas Ruins
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'qa_supervisor' in allowed_pages %}
             <a href="{% url 'dashboards:qa_supervisor' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'qa_supervisor' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 QA de Atendimento
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'network' in allowed_pages %}
             <a href="{% url 'dashboards:network' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'network' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Rede
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'sales' in allowed_pages %}
             <a href="{% url 'dashboards:sales' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'sales' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Vendas / CRM
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'customers' in allowed_pages %}
             <a href="{% url 'dashboards:customers' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'customers' or u == 'customer_detail' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Clientes 360
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'simuladores' in allowed_pages %}
             <a href="{% url 'scenarios:pj_vs_clt' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'pj_vs_clt' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Simuladores
             </a>
+            {% endif %}
 
+            {% if allowed_all or 'sync' in allowed_pages %}
             <a href="{% url 'sync:status' %}"
                class="flex items-center px-3 py-2 rounded-md
                       {% if u == 'status' %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
                 Sync
             </a>
+            {% endif %}
 
             {% endwith %}
         </nav>

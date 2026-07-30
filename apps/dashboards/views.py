@@ -97,6 +97,13 @@ def home(request: HttpRequest) -> HttpResponse:  # noqa: ARG001
     return HttpResponseRedirect(reverse("dashboards:executive"))
 
 
+@login_required
+@never_cache
+def no_access(request: HttpRequest) -> HttpResponse:
+    """Fallback quando a membership não tem nenhuma aba liberada (RBAC #65)."""
+    return render(request, "dashboards/no_access.html", status=403)
+
+
 def _fmt_brl(value: float) -> str:
     """Formata float como 'R$ 326.802' (separador de milhar BR, sem centavos)."""
     v = int(round(value))

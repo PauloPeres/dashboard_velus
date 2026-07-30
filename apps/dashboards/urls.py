@@ -10,6 +10,7 @@ app_name = "dashboards"
 
 urlpatterns = [
     path("", views.home, name="home"),
+    path("no-access/", views.no_access, name="no_access"),
     path("executive/", views.executive, name="executive"),
     path("revenue/", views.revenue, name="revenue"),
     path("contracts/", views.contracts, name="contracts"),

@@ -1,0 +1,11 @@
+{% extends "dashboards/base.html" %}
+{% block title %}Sem acesso · Velus{% endblock %}
+{% block content %}
+<div class="max-w-lg mx-auto mt-16 text-center">
+  <div class="mx-auto w-12 h-12 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center mb-4">
+    <svg class="w-6 h-6 text-amber-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0 3.75h.007M10.34 3.94l-7.11 12.3A1.5 1.5 0 004.53 18.5h14.94a1.5 1.5 0 001.3-2.26l-7.11-12.3a1.5 1.5 0 00-2.6 0z"/></svg>
+  </div>
+  <h1 class="text-xl font-bold text-gray-900 mb-1">Você ainda não tem acesso a nenhuma aba</h1>
+  <p class="text-sm text-gray-500">Peça ao administrador da organização para te adicionar a um grupo de acesso.</p>
+</div>
+{% endblock %}
