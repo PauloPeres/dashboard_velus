@@ -52,6 +52,14 @@
 
   {% if is_owner %}
   <!-- ── Owner: convidar usuários e acesso ── -->
+  <div class="flex items-center justify-between bg-white rounded-xl shadow-sm border border-gray-200 p-4 mt-6">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-700">Grupos de acesso</h2>
+      <p class="text-xs text-gray-400">Crie grupos de abas e atribua pessoas — sem precisar do /admin.</p>
+    </div>
+    <a href="{% url 'dashboards:access_management' %}" class="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 whitespace-nowrap">Gerenciar grupos</a>
+  </div>
+
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mt-6">
     <h2 class="text-sm font-semibold text-gray-700 mb-1">Convidar usuário</h2>
     <p class="text-xs text-gray-400 mb-4">

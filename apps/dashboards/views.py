@@ -2106,3 +2106,82 @@ def settings_view(request: HttpRequest) -> HttpResponse:
         )
 
     return render(request, "dashboards/settings.html", ctx)
+
+
+@login_required
+@never_cache
+def access_management(request: HttpRequest) -> HttpResponse:
+    """Gestão self-service de grupos de acesso (owner-only, #70)."""
+    from apps.dashboards.pages import sections
+    from apps.tenancy.models import AccessGroup, OrganizationMembership
+
+    user = request.user
+    membership = user.get_active_membership()
+    if membership is None or not membership.is_owner:
+        return HttpResponseRedirect(reverse("dashboards:no_access"))
+    org = membership.organization
+
+    valid_keys = {p["key"] for grp in sections() for p in grp["pages"]}
+    if request.method == "POST":
+        action = request.POST.get("action", "")
+        if action == "create_group":
+            name = request.POST.get("name", "").strip()
+            pages = [k for k in request.POST.getlist("pages") if k in valid_keys]
+            if name:
+                AccessGroup.objects.update_or_create(
+                    organization=org, name=name, defaults={"allowed_pages": pages}
+                )
+        elif action == "update_group":
+            gid = request.POST.get("group_id", "")
+            if gid.isdigit():
+                g = AccessGroup.objects.filter(organization=org, id=int(gid)).first()
+                if g:
+                    g.allowed_pages = [
+                        k for k in request.POST.getlist("pages") if k in valid_keys
+                    ]
+                    new_name = request.POST.get("name", "").strip()
+                    if new_name:
+                        g.name = new_name
+                    g.save()
+        elif action == "delete_group":
+            gid = request.POST.get("group_id", "")
+            if gid.isdigit():
+                AccessGroup.objects.filter(organization=org, id=int(gid)).delete()
+        elif action == "assign":
+            mid = request.POST.get("membership_id", "")
+            gid = request.POST.get("group_id", "")
+            m = (
+                OrganizationMembership.objects.filter(organization=org, id=int(mid))
+                .first()
+                if mid.isdigit()
+                else None
+            )
+            if m and not m.is_owner:
+                m.access_group = (
+                    AccessGroup.objects.filter(organization=org, id=int(gid)).first()
+                    if gid.isdigit()
+                    else None
+                )
+                m.save(update_fields=["access_group"])
+        return HttpResponseRedirect(
+            f"{reverse('dashboards:access_management')}?ok=1"
+        )
+
+    groups = list(AccessGroup.objects.filter(organization=org).order_by("name"))
+    for g in groups:
+        g.pages_set = set(g.allowed_pages or [])
+    members = list(
+        OrganizationMembership.objects.filter(organization=org)
+        .select_related("user", "access_group")
+        .order_by("user__email")
+    )
+    return render(
+        request,
+        "dashboards/access_management.html",
+        {
+            "sections": sections(),
+            "groups": groups,
+            "members": members,
+            "saved": request.GET.get("ok") == "1",
+        },
+    )

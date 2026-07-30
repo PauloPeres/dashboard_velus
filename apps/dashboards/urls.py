@@ -51,4 +51,5 @@ urlpatterns = [
     path("customers/", views.customers, name="customers"),
     path("customers/<int:customer_id>/", views.customer_detail, name="customer_detail"),
     path("settings/", views.settings_view, name="settings"),
+    path("settings/acesso/", views.access_management, name="access_management"),
 ]

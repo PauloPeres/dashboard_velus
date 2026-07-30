@@ -17,7 +17,7 @@ from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect
 from django.urls import reverse
 
-from .pages import PAGE_KEYS, page_url, route_to_key
+from .pages import OWNER_ONLY, PAGE_KEYS, page_url, route_to_key
 
 
 class PageAccessMiddleware:
@@ -48,8 +48,8 @@ class PageAccessMiddleware:
         if membership.is_owner:
             return None  # owner vê tudo
 
-        # Settings (gestão de acesso) é só do owner.
-        if match.namespace == "dashboards" and match.url_name == "settings":
+        # Gestão de acesso (settings, grupos) é só do owner.
+        if match.namespace == "dashboards" and match.url_name in OWNER_ONLY:
             return self._deny(membership)
 
         key = route_to_key(match.namespace, match.url_name)
