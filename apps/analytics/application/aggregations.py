@@ -5287,7 +5287,7 @@ def compute_atendimento_tendencias(
 
 _ATENDIMENTO_TZ = ZoneInfo("America/Sao_Paulo")
 _HORARIO_DIAS_VALIDOS = (7, 14, 30)
-_HORARIO_FOCOS = ("todos", "suporte", "rede")
+_HORARIO_FOCOS = ("todos", "suporte", "rede", "comercial")
 
 # Foco "Rede": motivos/tags que sinalizam problema de rede (confirmado c/ Paulo
 # 2026-07-30). Um atendimento entra no foco se tiver QUALQUER um (motivo OU tag).
@@ -5307,6 +5307,8 @@ def compute_atendimento_horario(
     k: float = 3.0,
     foco: str = "suporte",
     min_abs_anomaly: int = 5,
+    drop_ratio: float = 0.34,
+    min_expected_drop: float = 4.0,
     departamento_id: int | None = None,
     billing_min_invoices: int = 30,
     billing_window_days: int = 1,
@@ -5315,13 +5317,22 @@ def compute_atendimento_horario(
 
     Pra cada hora da janela de `days` dias, compara o volume real com o
     esperado pra aquele *slot sazonal*, estimado pelas últimas `baseline_weeks`
-    semanas ANTERIORES à janela. Marca como anomalia (só PICO) as horas bem
-    acima do esperado — pra flagar volume anormal (ex.: incidente de rede).
+    semanas ANTERIORES à janela.
 
-    `foco`: recorte vigiado — "todos", "suporte" (departamento Suporte) ou
-    "rede" (atendimentos com motivo/tag de rede: Sem Conexão, Quedas,
-    Rompimento, LOS, ...). O foco de rede é o alarme mais nítido de queda
-    estrutural.
+    `foco`: recorte vigiado —
+    - "suporte" (departamento Suporte) / "rede" (motivo/tag de rede: Sem Conexão,
+      Quedas, Rompimento, LOS…) / "todos": detecta **PICO** (volume acima do
+      normal → possível incidente de rede);
+    - "comercial" (departamento Comercial): detecta **QUEDA** (volume bem abaixo
+      do esperado → menos oportunidade comercial). Queda em suporte/rede NÃO é
+      anomalia (significa que está tudo bem), por isso só o foco comercial olha
+      quedas.
+
+    Detecção de queda (comercial): flag quando, numa hora que normalmente tem
+    movimento (`esperado >= min_expected_drop`), o real cai pra `<=
+    esperado · drop_ratio` (ex.: caiu a 1/3 do normal). A banda de Poisson com
+    k=3 zera o limite inferior em volumes baixos, então a queda usa razão, não a
+    banda.
 
     Sensibilidade conservadora (k=3): a banda usa `k · max(desvio, √média)` —
     o piso de Poisson (√média) evita falso alarme em horas de baixo volume
@@ -5356,6 +5367,8 @@ def compute_atendimento_horario(
     )
     if foco == "suporte":
         qs = qs.filter(departamento__nome__iexact="Suporte")
+    elif foco == "comercial":
+        qs = qs.filter(departamento__nome__iexact="Comercial")
     elif foco == "rede":
         qs = qs.filter(
             Q(motivos__has_any_keys=_REDE_MOTIVOS)
@@ -5459,11 +5472,16 @@ def compute_atendimento_horario(
         upper.append(round(up, 2))
         lower.append(round(lo, 2))
         is_billing.append(billing)
-        # Anomalia = SÓ pico bem acima da banda + piso absoluto (queda não conta;
-        # queda no suporte/rede é sinal de que está tudo bem).
-        if val > up and val >= min_abs_anomaly:
-            anomaly_x.append(label)
-            anomaly_y.append(val)
+        if foco == "comercial":
+            # Queda: hora que normalmente tem movimento caiu bem abaixo do normal.
+            if mean >= min_expected_drop and val <= mean * drop_ratio:
+                anomaly_x.append(label)
+                anomaly_y.append(val)
+        else:
+            # Pico bem acima da banda + piso absoluto (queda não conta).
+            if val > up and val >= min_abs_anomaly:
+                anomaly_x.append(label)
+                anomaly_y.append(val)
         cursor += timedelta(hours=1)
 
     # Vencimentos na janela de exibição (p/ marcadores). billing=dia de cobrança
@@ -5515,6 +5533,7 @@ def compute_atendimento_horario(
         "baseline_weeks": baseline_weeks,
         "k": k,
         "foco": foco,
+        "detect": "drop" if foco == "comercial" else "spike",
         "departamentos": departamentos,
         "selected_departamento_id": departamento_id,
         "selected_departamento_nome": selected_nome,

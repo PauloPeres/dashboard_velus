@@ -1363,7 +1363,7 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
     if horario_dias not in (7, 14, 30):
         horario_dias = 14
     foco = request.GET.get("foco", "suporte")
-    if foco not in ("todos", "suporte", "rede"):
+    if foco not in ("todos", "suporte", "rede", "comercial"):
         foco = "suporte"
     horario = compute_atendimento_horario(
         org, days=horario_dias, foco=foco

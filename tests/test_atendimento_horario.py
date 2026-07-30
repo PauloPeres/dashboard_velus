@@ -128,6 +128,58 @@ class TestAtendimentoHorario:
         assert data["foco"] == "rede"
         assert data["total_janela"] == 2  # só os de rede
 
+    def _seed_comercial_baseline(
+        self, org: Organization, com: Departamento, disp: Any, disp_count: int
+    ) -> None:
+        # Baseline mesmo dia-da-semana×12h, 21..63 dias antes do slot de exibição
+        # (todos garantidamente na janela de baseline, sem overlap), 10 cada ->
+        # esperado ~10. Depois `disp_count` atendimentos no slot de exibição.
+        n = 0
+        for off in range(21, 64, 7):
+            day = disp - timedelta(days=off)
+            for _ in range(10):
+                n += 1
+                _at(org, external_id=f"b{off}-{n}", opened_at=day, departamento=com)
+        for i in range(disp_count):
+            _at(org, external_id=f"d{i}", opened_at=disp, departamento=com)
+
+    def test_foco_comercial_detecta_queda(
+        self, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        com = Departamento.objects.create(
+            organization=organization_a, source_type=SourceType.OPA.value,
+            external_id="dcom", nome="Comercial",
+        )
+        disp = (timezone.localtime(timezone.now(), _SP) - timedelta(days=5)).replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        # esperado ~10, real 2 -> queda (2 <= 10*0.34).
+        self._seed_comercial_baseline(organization_a, com, disp, disp_count=2)
+        data = compute_atendimento_horario(
+            organization_a, days=14, foco="comercial"
+        )
+        assert data["detect"] == "drop"
+        assert disp.strftime("%d/%m 12h") in data["anomaly_x"]
+
+    def test_foco_comercial_sem_queda_quando_normal(
+        self, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        com = Departamento.objects.create(
+            organization=organization_a, source_type=SourceType.OPA.value,
+            external_id="dcom", nome="Comercial",
+        )
+        disp = (timezone.localtime(timezone.now(), _SP) - timedelta(days=5)).replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        # real 9 ~ no patamar -> não é queda.
+        self._seed_comercial_baseline(organization_a, com, disp, disp_count=9)
+        data = compute_atendimento_horario(
+            organization_a, days=14, foco="comercial"
+        )
+        assert disp.strftime("%d/%m 12h") not in data["anomaly_x"]
+
     def test_billing_baseline_suppresses_false_anomaly(
         self, organization_a: Organization
     ) -> None:
