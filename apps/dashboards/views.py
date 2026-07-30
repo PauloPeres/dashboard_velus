@@ -2038,21 +2038,71 @@ def risk(request: HttpRequest) -> HttpResponse:
 @login_required
 @never_cache
 def settings_view(request: HttpRequest) -> HttpResponse:
-    """Preferências do usuário — opt-in dos digests de risco de churn por email."""
-    user = request.user
-    saved = False
-    if request.method == "POST":
-        user.churn_digest_weekly = bool(request.POST.get("churn_digest_weekly"))
-        user.churn_digest_monthly = bool(request.POST.get("churn_digest_monthly"))
-        user.save(update_fields=["churn_digest_weekly", "churn_digest_monthly"])
-        saved = True
-
-    return render(
-        request,
-        "dashboards/settings.html",
-        {
-            "churn_digest_weekly": user.churn_digest_weekly,
-            "churn_digest_monthly": user.churn_digest_monthly,
-            "saved": saved,
-        },
+    """Preferências do usuário + (owner) convite de usuários e gestão de acesso."""
+    from apps.tenancy.invites import invite_user
+    from apps.tenancy.models import (
+        AccessGroup,
+        OrganizationInvite,
+        OrganizationMembership,
     )
+
+    user = request.user
+    membership = user.get_active_membership()
+    is_owner = bool(membership and membership.is_owner)
+    org = membership.organization if membership else None
+
+    saved = False
+    invite_msg = None
+    if request.method == "POST":
+        action = request.POST.get("action", "prefs")
+        if action == "invite" and is_owner and org is not None:
+            email = request.POST.get("email", "").strip()
+            role = request.POST.get("role", OrganizationMembership.Role.MEMBER)
+            group_id = request.POST.get("access_group", "")
+            group = None
+            if group_id.isdigit():
+                group = AccessGroup.objects.filter(
+                    organization=org, id=int(group_id)
+                ).first()
+            if email:
+                result = invite_user(
+                    organization=org, email=email, role=role,
+                    access_group=group, invited_by=user, request=request,
+                )
+                sent = "e-mail de acesso enviado" if result.email_sent else (
+                    "conta provisionada (não consegui enviar o e-mail — envie o link "
+                    "de definir senha manualmente)"
+                )
+                invite_msg = f"{email}: {sent}."
+            else:
+                invite_msg = "Informe um e-mail."
+        else:
+            user.churn_digest_weekly = bool(request.POST.get("churn_digest_weekly"))
+            user.churn_digest_monthly = bool(request.POST.get("churn_digest_monthly"))
+            user.save(update_fields=["churn_digest_weekly", "churn_digest_monthly"])
+            saved = True
+
+    ctx: dict[str, Any] = {
+        "churn_digest_weekly": user.churn_digest_weekly,
+        "churn_digest_monthly": user.churn_digest_monthly,
+        "saved": saved,
+        "is_owner": is_owner,
+        "invite_msg": invite_msg,
+    }
+    if is_owner and org is not None:
+        ctx["access_groups"] = list(
+            AccessGroup.objects.filter(organization=org).order_by("name")
+        )
+        ctx["members"] = list(
+            OrganizationMembership.objects.filter(organization=org)
+            .select_related("user", "access_group")
+            .order_by("user__email")
+        )
+        ctx["roles"] = OrganizationMembership.Role.choices
+        ctx["recent_invites"] = list(
+            OrganizationInvite.objects.filter(organization=org)
+            .select_related("access_group")
+            .order_by("-created_at")[:10]
+        )
+
+    return render(request, "dashboards/settings.html", ctx)

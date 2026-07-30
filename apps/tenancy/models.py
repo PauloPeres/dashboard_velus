@@ -245,6 +245,60 @@ class AccessGroup(models.Model):
 
 
 # =============================================================================
+# OrganizationInvite — registro de convite (auditoria + reenvio)
+# =============================================================================
+class OrganizationInvite(models.Model):
+    """Registro de um convite de usuário (#66).
+
+    Como o signup público é fechado, o convite PROVISIONA a conta na hora
+    (cria User + OrganizationMembership) e dispara um e-mail de definir senha
+    (reset do allauth). Este model guarda a auditoria e permite reenviar.
+    """
+
+    organization = models.ForeignKey(
+        "tenancy.Organization",
+        on_delete=models.CASCADE,
+        related_name="invites",
+    )
+    email = models.EmailField()
+    role = models.CharField(
+        max_length=16,
+        choices=OrganizationMembership.Role.choices,
+        default=OrganizationMembership.Role.MEMBER,
+    )
+    access_group = models.ForeignKey(
+        "tenancy.AccessGroup",
+        on_delete=models.SET_NULL,
+        related_name="invites",
+        null=True,
+        blank=True,
+    )
+    invited_by = models.ForeignKey(
+        "tenancy.User",
+        on_delete=models.SET_NULL,
+        related_name="sent_invites",
+        null=True,
+        blank=True,
+    )
+    user = models.ForeignKey(
+        "tenancy.User",
+        on_delete=models.CASCADE,
+        related_name="invites",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("Convite de organização")
+        verbose_name_plural = _("Convites de organização")
+        indexes = [
+            models.Index(fields=["organization", "created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"convite {self.email} @ {self.organization.slug} ({self.role})"
+
+
+# =============================================================================
 # OrganizationDataSource — configuração de adapter externo por org
 # =============================================================================
 class OrganizationDataSource(models.Model):
