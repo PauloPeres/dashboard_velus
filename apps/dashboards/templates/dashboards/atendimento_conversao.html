@@ -56,7 +56,7 @@
 
 <!-- Como ler -->
 <div class="bg-amber-50 border border-amber-100 rounded-lg p-4 mb-6 text-xs text-amber-800 leading-relaxed">
-  <strong>Como ler:</strong> taxas sobre atendimentos <em>vinculados a um cliente</em> (ponte por CPF/CNPJ). <strong>Churn</strong> = o cliente teve contrato cancelado depois da conversa, dentro da janela. <strong>Conversão</strong> = contrato ativado depois da conversa (novo/reativação). É correlação, não causa: uma tag com churn alto sinaliza atrito, não que a conversa causou o cancelamento. Prospect que ainda não é cliente não vincula (conversão dele fica invisível). Rankings de % só mostram tags/motivos com ≥ {{ min_vol }} atendimentos.
+  <strong>Como ler:</strong> taxas sobre atendimentos <em>vinculados a um cliente</em> (ponte por CPF/CNPJ). <strong>Churn</strong> = o cliente teve contrato cancelado depois da conversa, dentro da janela. <strong>Conversão</strong> = contrato ativado depois da conversa (novo/reativação). É correlação, não causa: uma tag com churn alto sinaliza atrito, não que a conversa causou o cancelamento. Prospect que ainda não é cliente não vincula (conversão dele fica invisível). Rankings de % só mostram tags/motivos com ≥ {{ min_vol }} atendimentos. <strong>Contratos cancel./ativ.</strong> = contagem deduplicada por contrato (a unidade real do desfecho — não conta o mesmo contrato duas vezes, mesmo com várias conversas); o MRR perdido soma o valor desses contratos cancelados.
 </div>
 
 <!-- Gráficos: top tags por churn / conversão -->
@@ -87,7 +87,9 @@
           <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{{ tabela.titulo }}</th>
           <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Atend.</th>
           <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Churn</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Contratos cancel.</th>
           <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Conversão</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Contratos ativ.</th>
           <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">MRR perdido</th>
         </tr>
       </thead>
@@ -97,11 +99,13 @@
           <td class="px-4 py-2.5 font-medium text-gray-900 truncate max-w-[260px]">{{ r.name }}</td>
           <td class="px-4 py-2.5 text-right tabular-nums text-gray-700">{{ r.n|intcomma }}</td>
           <td class="px-4 py-2.5 text-right tabular-nums {% if r.churn_pct >= 15 %}text-red-600 font-medium{% else %}text-gray-600{% endif %}">{{ r.churn_pct }}%</td>
+          <td class="px-4 py-2.5 text-right tabular-nums text-red-700">{{ r.churn_contratos|intcomma }}</td>
           <td class="px-4 py-2.5 text-right tabular-nums {% if r.conv_pct >= 10 %}text-emerald-700 font-medium{% else %}text-gray-600{% endif %}">{{ r.conv_pct }}%</td>
+          <td class="px-4 py-2.5 text-right tabular-nums text-emerald-700">{{ r.conv_contratos|intcomma }}</td>
           <td class="px-4 py-2.5 text-right tabular-nums text-gray-500">R$ {{ r.mrr_churn|floatformat:0|intcomma }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="5" class="px-6 py-8 text-center text-gray-500">Sem atendimentos vinculados no período</td></tr>
+        <tr><td colspan="6" class="px-6 py-8 text-center text-gray-500">Sem atendimentos vinculados no período</td></tr>
         {% endfor %}
       </tbody>
     </table>
