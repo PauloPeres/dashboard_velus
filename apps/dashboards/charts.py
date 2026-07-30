@@ -1941,13 +1941,21 @@ def atendimento_horario_sazonal(d: dict[str, Any]) -> str:
             hovertemplate="<b>%{x}</b><br>Real: %{y}<extra></extra>",
         )
     )
-    # Anomalias (picos acima da banda).
+    # Anomalias: pico (vermelho) ou queda (laranja, foco comercial).
     if d["anomaly_x"]:
+        is_drop = d.get("detect") == "drop"
         fig.add_trace(
             go.Scatter(
-                x=d["anomaly_x"], y=d["anomaly_y"], mode="markers", name="Anomalia",
-                marker={"color": "#ef4444", "size": 9, "symbol": "circle"},
-                hovertemplate="<b>%{x}</b><br>Anomalia: %{y}<extra></extra>",
+                x=d["anomaly_x"], y=d["anomaly_y"], mode="markers",
+                name="Queda" if is_drop else "Anomalia",
+                marker={
+                    "color": "#f59e0b" if is_drop else "#ef4444",
+                    "size": 10,
+                    "symbol": "triangle-down" if is_drop else "circle",
+                },
+                hovertemplate="<b>%{x}</b><br>"
+                + ("Queda" if is_drop else "Anomalia")
+                + ": %{y}<extra></extra>",
             )
         )
     # Span (1ª..última hora) de cada dia, a partir dos rótulos "%d/%m %Hh".

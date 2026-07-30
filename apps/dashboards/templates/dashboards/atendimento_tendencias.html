@@ -67,6 +67,7 @@
       <div class="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
         <button onclick="setParam('foco','rede')" class="px-2.5 py-1 text-xs rounded-md {% if horario.foco == 'rede' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Rede</button>
         <button onclick="setParam('foco','suporte')" class="px-2.5 py-1 text-xs rounded-md {% if horario.foco == 'suporte' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Suporte</button>
+        <button onclick="setParam('foco','comercial')" class="px-2.5 py-1 text-xs rounded-md {% if horario.foco == 'comercial' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Comercial</button>
         <button onclick="setParam('foco','todos')" class="px-2.5 py-1 text-xs rounded-md {% if horario.foco == 'todos' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Todos</button>
       </div>
       <!-- Janela em dias -->
@@ -78,10 +79,16 @@
     </div>
   </div>
   <p class="text-xs text-gray-400 mb-3">
-    Foco <strong>{% if horario.foco == 'rede' %}Rede{% elif horario.foco == 'suporte' %}Suporte{% else %}Todos{% endif %}</strong>{% if horario.foco == 'rede' %} (motivos/tags de conexão: Sem Conexão, Quedas, Rompimento, LOS…){% elif horario.foco == 'suporte' %} (departamento Suporte){% endif %}. Linha azul = atendimentos abertos por hora. Faixa cinza = esperado pra aquele dia-da-semana × hora (últimas {{ horario.baseline_weeks }} semanas). Pontos vermelhos = <strong>só picos</strong> bem acima do normal (alerta conservador; queda não conta). <span class="text-amber-600">Faixa âmbar</span> = dias de vencimento pesado (baseline próprio de cobrança). Um pico anômalo no foco Rede é um sinal forte de problema estrutural.
+    Foco <strong>{% if horario.foco == 'rede' %}Rede{% elif horario.foco == 'suporte' %}Suporte{% elif horario.foco == 'comercial' %}Comercial{% else %}Todos{% endif %}</strong>{% if horario.foco == 'rede' %} (motivos/tags de conexão: Sem Conexão, Quedas, Rompimento, LOS…){% elif horario.foco == 'suporte' %} (departamento Suporte){% elif horario.foco == 'comercial' %} (departamento Comercial){% endif %}. Linha azul = atendimentos abertos por hora. Faixa cinza = esperado pra aquele dia-da-semana × hora (últimas {{ horario.baseline_weeks }} semanas).
+    {% if horario.detect == 'drop' %}<span class="text-amber-600">Triângulos laranja</span> = <strong>quedas</strong> anormais (hora que normalmente tem movimento caiu pra ~1/3 do normal → menos oportunidade comercial).{% else %}Pontos vermelhos = <strong>só picos</strong> bem acima do normal (alerta conservador; queda não conta). Um pico no foco Rede é sinal forte de problema estrutural.{% endif %}
+    <span class="text-amber-600">Faixa âmbar</span> = dias de vencimento pesado (baseline próprio de cobrança).
   </p>
   <div class="flex flex-wrap gap-4 mb-3 text-xs">
+    {% if horario.detect == 'drop' %}
+    <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 bg-amber-500" style="clip-path:polygon(50% 100%,0 0,100% 0)"></span>{{ horario.n_anomalias }} hora{{ horario.n_anomalias|pluralize }} com queda anormal</span>
+    {% else %}
     <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>{{ horario.n_anomalias }} hora{{ horario.n_anomalias|pluralize }} com pico anômalo</span>
+    {% endif %}
     <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm bg-amber-200"></span>{{ horario.n_billing_days }} dia{{ horario.n_billing_days|pluralize }} de cobrança</span>
     <span class="text-gray-400">{{ horario.total_janela|intcomma }} atendimentos na janela de {{ horario_dias }} dias</span>
   </div>
