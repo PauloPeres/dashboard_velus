@@ -52,6 +52,22 @@ def _departamento(org: Organization, *, external_id: str, nome: str) -> Departam
     )
 
 
+def _membro_do_grupo(
+    org: Organization, *, email: str, pages: list[str]
+) -> User:
+    """Usuário MEMBER num grupo de acesso com as abas indicadas (RBAC #65)."""
+    grupo = AccessGroup.objects.create(
+        organization=org, name=f"Grupo {email}", allowed_pages=pages
+    )
+    user = User.objects.create_user(email=email)
+    OrganizationMembership.objects.create(
+        user=user, organization=org,
+        role=OrganizationMembership.Role.MEMBER, is_active=True,
+        access_group=grupo,
+    )
+    return user
+
+
 def _at(
     org: Organization,
     *,
@@ -282,14 +298,8 @@ class TestAtendimentoHoraView:
     def test_sem_acesso_a_aba_de_tendencias(
         self, client: Any, organization_a: Organization
     ) -> None:
-        grupo = AccessGroup.objects.create(
-            organization=organization_a, name="Só executivo", allowed_pages=["executive"]
-        )
-        user = User.objects.create_user(email="sem-acesso@acme.test")
-        OrganizationMembership.objects.create(
-            user=user, organization=organization_a,
-            role=OrganizationMembership.Role.MEMBER, is_active=True,
-            access_group=grupo,
+        user = _membro_do_grupo(
+            organization_a, email="sem-acesso@acme.test", pages=["executive"]
         )
         client.force_login(user)
         resp = client.get(f"{URL}?h={_h_param(_hour())}")
@@ -300,18 +310,60 @@ class TestAtendimentoHoraView:
     def test_acesso_herdado_da_aba_de_tendencias(
         self, client: Any, organization_a: Organization
     ) -> None:
-        grupo = AccessGroup.objects.create(
-            organization=organization_a, name="Atendimento",
-            allowed_pages=["atendimento_tendencias"],
-        )
-        user = User.objects.create_user(email="com-acesso@acme.test")
-        OrganizationMembership.objects.create(
-            user=user, organization=organization_a,
-            role=OrganizationMembership.Role.MEMBER, is_active=True,
-            access_group=grupo,
+        user = _membro_do_grupo(
+            organization_a, email="com-acesso@acme.test",
+            pages=["atendimento_tendencias"],
         )
         client.force_login(user)
         assert client.get(f"{URL}?h={_h_param(_hour())}").status_code == 200
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestAtendimentoHoraLinksPorRbac:
+    """Links da tabela apontam pra abas de OUTRAS chaves (customers /
+    conversas_ruins) — só renderizam pra quem tem acesso a elas."""
+
+    def _seed(self, org: Organization) -> datetime:
+        set_current_organization(org)
+        h = _hour()
+        customer = Customer.objects.create(
+            organization=org, source_type="IXC", external_id="ixc-1",
+            document="12345678901", name="Fulano de Tal",
+            status=Customer.Status.ACTIVE.value,
+        )
+        _at(
+            org, external_id="a1", opened_at=h, customer=customer,
+            customer_name="Fulano de Tal", protocol="P1",
+        )
+        return h
+
+    def test_grupo_so_com_tendencias_nao_ve_links(
+        self, client: Any, organization_a: Organization
+    ) -> None:
+        h = self._seed(organization_a)
+        user = _membro_do_grupo(
+            organization_a, email="restrito@acme.test",
+            pages=["atendimento_tendencias"],
+        )
+        client.force_login(user)
+        resp = client.get(f"{URL}?h={_h_param(h)}&foco=todos")
+        assert resp.status_code == 200
+        html = resp.content.decode()
+        assert "/customers/" not in html
+        assert "/operations/conversas-ruins/" not in html
+        # Texto continua visível, só não é link.
+        assert "Fulano de Tal" in html
+        assert "P1" in html
+
+    def test_acesso_total_ve_links(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        h = self._seed(organization_a)
+        client.force_login(user_a)
+        html = client.get(f"{URL}?h={_h_param(h)}&foco=todos").content.decode()
+        assert 'href="/customers/' in html
+        assert 'href="/operations/conversas-ruins/' in html
 
 
 @pytest.mark.django_db

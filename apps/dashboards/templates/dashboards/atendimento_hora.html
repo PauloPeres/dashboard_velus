@@ -52,9 +52,13 @@
     <tbody class="divide-y divide-gray-100">
       {% for r in rows %}
       <tr class="hover:bg-blue-50">
+        {# Link só quando o grupo de acesso libera a aba de destino (RBAC #65) —
+           senão o clique cairia num redirect/403 do PageAccessMiddleware. #}
         <td class="px-4 py-3 font-medium text-gray-900 truncate max-w-[220px]">
           {% if r.customer_id %}
-          <a href="{% url 'dashboards:customer_detail' r.customer_id %}" class="text-blue-700 hover:underline">{{ r.customer_name }}</a>
+            {% if allowed_all or 'customers' in allowed_pages %}
+            <a href="{% url 'dashboards:customer_detail' r.customer_id %}" class="text-blue-700 hover:underline">{{ r.customer_name }}</a>
+            {% else %}{{ r.customer_name }}{% endif %}
           {% else %}{{ r.customer_name }}{% endif %}
         </td>
         <td class="px-4 py-3 tabular-nums text-gray-700">{{ r.opened_at_str }}</td>
@@ -70,7 +74,9 @@
         </td>
         <td class="px-4 py-3 text-gray-700">
           {% if r.protocol %}
-          <a href="{% url 'dashboards:atendimento_detail' r.atendimento_id %}" class="text-blue-600 hover:underline">{{ r.protocol }}</a>
+            {% if allowed_all or 'conversas_ruins' in allowed_pages %}
+            <a href="{% url 'dashboards:atendimento_detail' r.atendimento_id %}" class="text-blue-600 hover:underline">{{ r.protocol }}</a>
+            {% else %}{{ r.protocol }}{% endif %}
           {% else %}<span class="text-gray-300">—</span>{% endif %}
         </td>
       </tr>
