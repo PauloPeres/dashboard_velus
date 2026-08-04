@@ -30,6 +30,107 @@
   </a>
 </div>
 
+<!-- Navegação hora a hora (#77) -->
+<div class="flex items-center justify-between gap-2 mb-4">
+  <a href="?{{ prev_query }}"
+     class="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50">
+    &larr; {{ prev_label }}
+  </a>
+  {% if next_is_future %}
+  <span class="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-gray-100 bg-gray-50 text-gray-300">
+    {{ next_label }} &rarr;
+  </span>
+  {% else %}
+  <a href="?{{ next_query }}"
+     class="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50">
+    {{ next_label }} &rarr;
+  </a>
+  {% endif %}
+</div>
+
+<!-- Resumo da hora (#77) -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="grid grid-cols-1 md:grid-cols-4 gap-5">
+    <!-- Volume vs esperado -->
+    <div>
+      <p class="text-xs font-medium text-gray-500 uppercase mb-2">Volume</p>
+      <p class="text-3xl font-bold text-gray-900 tabular-nums">{{ total|intcomma }}</p>
+      <p class="text-xs text-gray-500 mt-1">
+        esperado ~{{ esperado.esperado|floatformat:1 }}
+        {% if esperado.ratio %}
+          · <strong class="{% if esperado.ratio >= 2 %}text-red-600{% else %}text-gray-700{% endif %}">{{ esperado.ratio|floatformat:1 }}×</strong> o normal
+        {% endif %}
+      </p>
+      <p class="text-[11px] text-gray-400 mt-1">
+        Baseline sazonal das {{ esperado.baseline_weeks }} semanas anteriores (mesmo dia-da-semana × hora){% if esperado.is_billing %}, com baseline próprio de cobrança{% endif %}.
+      </p>
+      {% if esperado.anomalia %}
+      <span class="inline-flex items-center gap-1.5 mt-2 text-[11px] {% if esperado.detect == 'drop' %}bg-amber-50 text-amber-700{% else %}bg-red-50 text-red-700{% endif %} px-2 py-0.5 rounded-full">
+        {% if esperado.detect == 'drop' %}Queda anormal{% else %}Pico anômalo{% endif %}
+      </span>
+      {% endif %}
+    </div>
+
+    <!-- Top categorias -->
+    <div>
+      <p class="text-xs font-medium text-gray-500 uppercase mb-2">Principais categorias</p>
+      {% if resumo.top_categorias %}
+      <ul class="space-y-1">
+        {% for c in resumo.top_categorias %}
+        <li class="flex items-baseline justify-between gap-2 text-xs">
+          <span class="text-gray-700 truncate">{{ c.nome }}</span>
+          <span class="text-gray-500 tabular-nums whitespace-nowrap">{{ c.count }} · {{ c.pct|floatformat:1 }}%</span>
+        </li>
+        {% endfor %}
+      </ul>
+      <p class="text-[11px] text-gray-400 mt-2">Motivos + tags · {{ resumo.n_categorias }} distinta{{ resumo.n_categorias|pluralize }} na hora.</p>
+      {% else %}
+      <p class="text-xs text-gray-400">Sem motivos/tags nessa hora.</p>
+      {% endif %}
+    </div>
+
+    <!-- Atendentes -->
+    <div>
+      <p class="text-xs font-medium text-gray-500 uppercase mb-2">Atendentes ({{ resumo.n_atendentes }})</p>
+      {% if resumo.atendentes %}
+      <ul class="space-y-1 max-h-40 overflow-y-auto pr-1">
+        {% for a in resumo.atendentes %}
+        <li class="flex items-baseline justify-between gap-2 text-xs">
+          <span class="text-gray-700 truncate">{{ a.nome }}</span>
+          <span class="text-gray-500 tabular-nums">{{ a.count }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="text-xs text-gray-400">—</p>
+      {% endif %}
+    </div>
+
+    <!-- Distribuição -->
+    <div>
+      <p class="text-xs font-medium text-gray-500 uppercase mb-2">Distribuição</p>
+      <p class="text-[11px] text-gray-400 mb-1">Status</p>
+      <ul class="space-y-1 mb-3">
+        {% for s in resumo.status_dist %}
+        <li class="flex items-baseline justify-between gap-2 text-xs">
+          <span class="text-gray-700 truncate">{{ s.nome }}</span>
+          <span class="text-gray-500 tabular-nums whitespace-nowrap">{{ s.count }} · {{ s.pct|floatformat:1 }}%</span>
+        </li>
+        {% empty %}<li class="text-xs text-gray-400">—</li>{% endfor %}
+      </ul>
+      <p class="text-[11px] text-gray-400 mb-1">Canal</p>
+      <ul class="space-y-1">
+        {% for c in resumo.canal_dist %}
+        <li class="flex items-baseline justify-between gap-2 text-xs">
+          <span class="text-gray-700 truncate">{{ c.nome }}</span>
+          <span class="text-gray-500 tabular-nums whitespace-nowrap">{{ c.count }} · {{ c.pct|floatformat:1 }}%</span>
+        </li>
+        {% empty %}<li class="text-xs text-gray-400">—</li>{% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+
 {% if truncated %}
 <p class="mb-3 text-xs text-amber-600">
   Mostrando as primeiras {{ limite|intcomma }} linhas de {{ total|intcomma }} — o CSV traz todas.

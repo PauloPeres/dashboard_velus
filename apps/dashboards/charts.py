@@ -1910,6 +1910,9 @@ def atendimento_horario_sazonal(d: dict[str, Any]) -> str:
     linhas verticais tracejadas = dias com vencimento de fatura.
     """
     labels = d["labels"]
+    # ISO local de cada slot — viaja como `customdata` nos traces clicáveis pra
+    # o handler saber qual hora abrir no drill-down (#77).
+    slots = d.get("slots") or labels
     fig = go.Figure()
     # Banda esperada (lower invisível + upper com fill até o lower).
     fig.add_trace(
@@ -1938,6 +1941,7 @@ def atendimento_horario_sazonal(d: dict[str, Any]) -> str:
         go.Scatter(
             x=labels, y=d["actual"], mode="lines", name="Real",
             line={"color": "#2563eb", "width": 2},
+            customdata=slots,
             hovertemplate="<b>%{x}</b><br>Real: %{y}<extra></extra>",
         )
     )
@@ -1953,6 +1957,7 @@ def atendimento_horario_sazonal(d: dict[str, Any]) -> str:
                     "size": 10,
                     "symbol": "triangle-down" if is_drop else "circle",
                 },
+                customdata=d.get("anomaly_slots") or d["anomaly_x"],
                 hovertemplate="<b>%{x}</b><br>"
                 + ("Queda" if is_drop else "Anomalia")
                 + ": %{y}<extra></extra>",

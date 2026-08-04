@@ -5299,6 +5299,9 @@ def compute_atendimento_tendencias(
 _ATENDIMENTO_TZ = ZoneInfo("America/Sao_Paulo")
 _HORARIO_DIAS_VALIDOS = (7, 14, 30)
 _HORARIO_FOCOS = ("todos", "suporte", "rede", "comercial")
+# ISO local (sem fuso) de um slot horário — formato do `?h=` da página da hora
+# e do `customdata` dos pontos do gráfico (#77).
+_ATENDIMENTO_SLOT_FMT = "%Y-%m-%dT%H:%M"
 
 # Foco "Rede": motivos/tags que sinalizam problema de rede (confirmado c/ Paulo
 # 2026-07-30). Um atendimento entra no foco se tiver QUALQUER um (motivo OU tag).
@@ -5488,6 +5491,7 @@ def compute_atendimento_horario(
 
     # Série da janela de exibição, hora a hora.
     labels: list[str] = []
+    slots: list[str] = []
     actual: list[int] = []
     expected: list[float] = []
     upper: list[float] = []
@@ -5495,6 +5499,7 @@ def compute_atendimento_horario(
     is_billing: list[bool] = []
     anomaly_x: list[str] = []
     anomaly_y: list[int] = []
+    anomaly_slots: list[str] = []
 
     cursor = display_start
     while cursor <= display_end:
@@ -5512,7 +5517,11 @@ def compute_atendimento_horario(
         lo = max(0.0, mean - k * sigma_eff)
         val = counts.get(cursor, 0)
         label = cursor.strftime("%d/%m %Hh")
+        # `slot`: mesmo instante do ponto em ISO local — é o que o clique no
+        # gráfico manda pra página da hora (#77). `label` é só exibição.
+        slot = cursor.strftime(_ATENDIMENTO_SLOT_FMT)
         labels.append(label)
+        slots.append(slot)
         actual.append(val)
         expected.append(round(mean, 2))
         upper.append(round(up, 2))
@@ -5523,11 +5532,13 @@ def compute_atendimento_horario(
             if mean >= min_expected_drop and val <= mean * drop_ratio:
                 anomaly_x.append(label)
                 anomaly_y.append(val)
+                anomaly_slots.append(slot)
         else:
             # Pico bem acima da banda + piso absoluto (queda não conta).
             if val > up and val >= min_abs_anomaly:
                 anomaly_x.append(label)
                 anomaly_y.append(val)
+                anomaly_slots.append(slot)
         cursor += timedelta(hours=1)
 
     # Vencimentos na janela de exibição (p/ marcadores). billing=dia de cobrança
@@ -5567,6 +5578,7 @@ def compute_atendimento_horario(
         "window_end": display_end,
         "n_slots": len(labels),
         "labels": labels,
+        "slots": slots,
         "actual": actual,
         "expected": expected,
         "upper": upper,
@@ -5574,6 +5586,7 @@ def compute_atendimento_horario(
         "is_billing": is_billing,
         "anomaly_x": anomaly_x,
         "anomaly_y": anomaly_y,
+        "anomaly_slots": anomaly_slots,
         "n_anomalias": len(anomaly_x),
         "total_janela": sum(actual),
         "vencimentos": vencimentos,
@@ -5646,6 +5659,7 @@ def compute_atendimento_hora(
                 "categorias": categorias,
                 "protocol": at.protocol,
                 "status_label": at.get_status_display(),
+                "canal": at.canal or "—",
             }
         )
 
@@ -5669,6 +5683,96 @@ def compute_atendimento_hora(
         "departamento_nome": departamento_nome,
         "total": len(rows),
         "rows": rows,
+        "resumo": atendimento_hora_resumo(rows),
+    }
+
+
+_HORA_TOP_CATEGORIAS = 5
+
+
+def _dist(
+    counter: Counter[str], total: int, *, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """`Counter` → lista ordenada com contagem e % do total (desc, nome como desempate)."""
+    itens = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+    if limit is not None:
+        itens = itens[:limit]
+    return [
+        {
+            "nome": nome,
+            "count": count,
+            "pct": round(count * 100 / total, 1) if total else 0.0,
+        }
+        for nome, count in itens
+    ]
+
+
+def atendimento_hora_resumo(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Resumo da hora (#77) a partir das MESMAS linhas exibidas na lista.
+
+    Sem segunda fonte de verdade: recebe `rows` de `compute_atendimento_hora` e
+    só conta. Categorias = motivos + tags já deduplicados por atendimento (um
+    atendimento conta no máximo uma vez por categoria); os percentuais são sobre
+    o total de atendimentos da hora, então somam mais de 100% quando um
+    atendimento tem várias categorias.
+    """
+    total = len(rows)
+    categorias: Counter[str] = Counter()
+    atendentes: Counter[str] = Counter()
+    status: Counter[str] = Counter()
+    canais: Counter[str] = Counter()
+    for r in rows:
+        categorias.update(r["categorias"])
+        atendentes[r["atendente_nome"]] += 1
+        status[r["status_label"]] += 1
+        canais[r["canal"]] += 1
+    return {
+        "total": total,
+        "n_categorias": len(categorias),
+        "top_categorias": _dist(categorias, total, limit=_HORA_TOP_CATEGORIAS),
+        "atendentes": _dist(atendentes, total),
+        "n_atendentes": len(atendentes),
+        "status_dist": _dist(status, total),
+        "canal_dist": _dist(canais, total),
+    }
+
+
+def atendimento_hora_esperado(
+    organization: Organization,
+    *,
+    hour_start: datetime,
+    foco: str = "suporte",
+    departamento_id: int | None = None,
+) -> dict[str, Any]:
+    """Esperado do baseline pro slot de uma hora (#77).
+
+    Reaproveita `compute_atendimento_horario` com a janela de exibição reduzida
+    a UM slot (`start == end == hour_start`): o baseline sazonal continua sendo
+    o mesmo (as `baseline_weeks` semanas anteriores àquela hora), mas a série
+    exibida tem um ponto só. Assim o "esperado" é literalmente o do gráfico —
+    nada recalculado à mão — sem varrer a janela inteira da página.
+    """
+    d = compute_atendimento_horario(
+        organization,
+        start=hour_start,
+        end=hour_start,
+        foco=foco,
+        departamento_id=departamento_id,
+    )
+    esperado = d["expected"][0] if d["expected"] else 0.0
+    real = d["actual"][0] if d["actual"] else 0
+    return {
+        "esperado": esperado,
+        "real": real,
+        "upper": d["upper"][0] if d["upper"] else 0.0,
+        "lower": d["lower"][0] if d["lower"] else 0.0,
+        "is_billing": bool(d["is_billing"][0]) if d["is_billing"] else False,
+        "anomalia": bool(d["anomaly_x"]),
+        "detect": d["detect"],
+        "baseline_weeks": d["baseline_weeks"],
+        # Razão real/esperado ("4,1× o normal"). None quando o baseline é ~0 —
+        # aí a razão explodiria e não diz nada.
+        "ratio": round(real / esperado, 1) if esperado >= 0.5 else None,
     }
 
 
