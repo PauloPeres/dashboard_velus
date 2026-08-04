@@ -6,6 +6,7 @@ e via context_processor exposto em `current_organization`.
 
 from __future__ import annotations
 
+import csv
 import re
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
@@ -27,6 +28,7 @@ from apps.analytics.application.aggregations import (
     compute_at_risk_contracts,
     compute_atendimento_conversao,
     compute_atendimento_detail,
+    compute_atendimento_hora,
     compute_atendimento_horario,
     compute_atendimento_tendencias,
     compute_atendimento_triagem,
@@ -1597,6 +1599,113 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
             ),
             "motivo_focus_json": motivo_focus_json,
             "tag_focus_json": tag_focus_json,
+        },
+    )
+
+
+# Teto de linhas exibidas na lista de uma hora (#76) — o CSV leva tudo.
+_HORA_LISTA_LIMITE = 500
+_HORA_CSV_HEADER = (
+    "Cliente", "Documento", "Horário", "Atendente", "Departamento",
+    "Categorias", "Protocolo", "Status",
+)
+
+
+def _parse_hora(raw: str) -> datetime | None:
+    """`?h=2026-08-03T14:00` (ISO local) → datetime aware truncado na hora."""
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if timezone.is_naive(parsed):
+        parsed = parsed.replace(tzinfo=_PERIOD_TZ)
+    return timezone.localtime(parsed, _PERIOD_TZ).replace(
+        minute=0, second=0, microsecond=0
+    )
+
+
+def _hora_csv_response(data: dict[str, Any]) -> HttpResponse:
+    """CSV pt-BR da lista da hora: separador `;` + BOM UTF-8 (abre no Excel)."""
+    hour = data["hour_start"]
+    filename = f"atendimentos_{hour.strftime('%Y-%m-%d_%Hh')}.csv"
+    response = HttpResponse(content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response.write("﻿")  # BOM — sem ele o Excel pt-BR erra os acentos
+    writer = csv.writer(response, delimiter=";", lineterminator="\r\n")
+    writer.writerow(_HORA_CSV_HEADER)
+    for r in data["rows"]:
+        writer.writerow([
+            r["customer_name"],
+            r["customer_document"],
+            r["opened_at_str"],
+            r["atendente_nome"],
+            r["departamento_nome"],
+            ", ".join(r["categorias"]),
+            r["protocol"],
+            r["status_label"],
+        ])
+    return response
+
+
+@login_required
+@never_cache
+def atendimento_hora(request: HttpRequest) -> HttpResponse:
+    """Atendimentos de uma hora do gráfico horário (#76) — lista + export CSV.
+
+    `?h=` é a hora (ISO local) e `?foco=`/`?departamento=` repetem o recorte do
+    gráfico. O período da página de Tendências (#75) viaja junto só pra o link
+    de volta reproduzir a mesma janela.
+    """
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    period = _get_period(request)
+    foco = request.GET.get("foco", "suporte")
+    if foco not in ("todos", "suporte", "rede", "comercial"):
+        foco = "suporte"
+
+    departamento_id: int | None = None
+    raw_dep = request.GET.get("departamento", "")
+    if raw_dep.isdigit():
+        departamento_id = int(raw_dep)
+
+    hour_start = _parse_hora(request.GET.get("h", "").strip())
+    if hour_start is None:
+        # Hora ausente/inválida não tem lista: volta pra Tendências preservando
+        # período e recorte.
+        back = reverse("dashboards:atendimento_tendencias")
+        query = f"{period.query}&foco={foco}"
+        if departamento_id is not None:
+            query += f"&departamento={departamento_id}"
+        return HttpResponseRedirect(f"{back}?{query}")
+
+    data = compute_atendimento_hora(
+        org, hour_start=hour_start, foco=foco, departamento_id=departamento_id
+    )
+
+    if request.GET.get("format") == "csv":
+        return _hora_csv_response(data)
+
+    query = f"{period.query}&foco={foco}"
+    if departamento_id is not None:
+        query += f"&departamento={departamento_id}"
+    csv_query = f"{query}&h={hour_start.strftime('%Y-%m-%dT%H:%M')}&format=csv"
+
+    return render(
+        request,
+        "dashboards/atendimento_hora.html",
+        {
+            **data,
+            "rows": data["rows"][:_HORA_LISTA_LIMITE],
+            "shown": min(data["total"], _HORA_LISTA_LIMITE),
+            "limite": _HORA_LISTA_LIMITE,
+            "truncated": data["total"] > _HORA_LISTA_LIMITE,
+            "period": period,
+            "period_label": period.label,
+            "voltar_query": query,
+            "csv_query": csv_query,
         },
     )
 

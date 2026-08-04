@@ -73,9 +73,19 @@ LINEAGE: dict[str, list[dict[str, str]]] = {
 
 _DEFAULT: list[dict[str, str]] = [{"source": _IXC, "detail": "Dados do ERP IXC via sincronização."}]
 
+# Rotas que herdam a chave de acesso do pai (RBAC) mas têm fonte própria — a
+# linhagem é da rota, não da aba. Ex.: a lista de uma hora (#76) lê só a Opa!,
+# sem o marcador de vencimento (IXC) da página de tendências.
+_ROUTE_LINEAGE: dict[tuple[str, str], list[dict[str, str]]] = {
+    ("dashboards", "atendimento_hora"): [{"source": _OPA, "detail": _D_OPA}],
+}
+
 
 def lineage_for(namespace: str | None, url_name: str | None) -> list[dict[str, str]]:
     """Fontes de dados da página resolvida (badge + detalhe), ou [] se não é aba."""
+    override = _ROUTE_LINEAGE.get((namespace or "", url_name or ""))
+    if override is not None:
+        return override
     key = route_to_key(namespace, url_name)
     if key is None:
         return []

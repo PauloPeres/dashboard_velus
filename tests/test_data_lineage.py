@@ -24,6 +24,11 @@ class TestLineageFor:
         # rota de detalhe herda a página pai (customer_detail -> customers)
         assert lineage_for("dashboards", "customer_detail")[0]["source"] == "IXC"
 
+    def test_lista_de_uma_hora_e_so_opa(self) -> None:
+        # #76: herda a aba de tendências no RBAC, mas a fonte é só a Opa!.
+        srcs = lineage_for("dashboards", "atendimento_hora")
+        assert [s["source"] for s in srcs] == ["Opa Suite"]
+
     def test_non_page_empty(self) -> None:
         assert lineage_for("admin", "index") == []
 

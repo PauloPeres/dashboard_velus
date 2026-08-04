@@ -52,6 +52,7 @@ _ROUTE_TO_KEY.update({
     ("dashboards", "dre_detalhe"): "dre",
     ("dashboards", "customer_detail"): "customers",
     ("dashboards", "atendimento_detail"): "conversas_ruins",
+    ("dashboards", "atendimento_hora"): "atendimento_tendencias",
 })
 
 
