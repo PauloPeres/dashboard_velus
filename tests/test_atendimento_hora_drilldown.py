@@ -235,6 +235,15 @@ class TestCustomdataNoGrafico:
             "2026-08-03T13:00", "2026-08-03T14:00",
         ]
         assert list(por_nome["Anomalia"]["customdata"]) == ["2026-08-03T14:00"]
+        # Invariante que o handler do clique precisa respeitar: com
+        # `hovermode: "x unified"` o evento traz um ponto de CADA trace daquele
+        # x, e o primeiro deles ("Esperado") NÃO tem customdata — por isso o JS
+        # procura o primeiro ponto COM customdata em vez de usar `points[0]`.
+        assert fig["layout"]["hovermode"] == "x unified"
+        assert "customdata" not in por_nome["Esperado"]
+        assert [t.get("name") for t in fig["data"]].index("Esperado") < [
+            t.get("name") for t in fig["data"]
+        ].index("Real")
 
 
 @pytest.mark.django_db
