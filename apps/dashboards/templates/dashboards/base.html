@@ -342,6 +342,8 @@ function toggleDespesas() {
  * renderChart — carrega dados Plotly do json_script e renderiza no div.
  * Resolve double-encoding: fig.to_json() → string → json_script → string novamente.
  * Suporta line/bar (x) e pie (labels). Remove animate-pulse após renderizar.
+ * Devolve a Promise do Plotly.newPlot (ou undefined quando não renderizou), pra
+ * quem precisa registrar evento no gráfico só depois de ele existir (#77).
  */
 function renderChart(divId, dataId) {
     var el = document.getElementById(divId);
@@ -369,7 +371,7 @@ function renderChart(divId, dataId) {
             el.classList.remove("animate-pulse", "bg-gray-50");
             return;
         }
-        Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false })
+        return Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false })
             .then(function () { el.classList.remove("animate-pulse", "bg-gray-50", "rounded-lg"); });
     } catch (e) {
         console.error("renderChart error [" + divId + "]", e);

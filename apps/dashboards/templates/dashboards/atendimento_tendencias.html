@@ -118,6 +118,7 @@
     Foco <strong>{% if horario.foco == 'rede' %}Rede{% elif horario.foco == 'suporte' %}Suporte{% elif horario.foco == 'comercial' %}Comercial{% else %}Todos{% endif %}</strong>{% if horario.foco == 'rede' %} (motivos/tags de conexão: Sem Conexão, Quedas, Rompimento, LOS…){% elif horario.foco == 'suporte' %} (departamento Suporte){% elif horario.foco == 'comercial' %} (departamento Comercial){% endif %}. Linha azul = atendimentos abertos por hora. Faixa cinza = esperado pra aquele dia-da-semana × hora (últimas {{ horario.baseline_weeks }} semanas).
     {% if horario.detect == 'drop' %}<span class="text-amber-600">Triângulos laranja</span> = <strong>quedas</strong> anormais (hora que normalmente tem movimento caiu pra ~1/3 do normal → menos oportunidade comercial).{% else %}Pontos vermelhos = <strong>só picos</strong> bem acima do normal (alerta conservador; queda não conta). Um pico no foco Rede é sinal forte de problema estrutural.{% endif %}
     <span class="text-amber-600">Faixa âmbar</span> = dias de vencimento pesado (baseline próprio de cobrança).
+    <strong class="text-gray-500">Clique em um ponto pra ver os atendimentos daquela hora.</strong>
   </p>
   <div class="flex flex-wrap gap-4 mb-3 text-xs">
     {% if horario.detect == 'drop' %}
@@ -229,7 +230,31 @@
     });
     window.location.href = url.toString();
   }
-  renderChart("horario-chart", "horario-data");
+  // Drill-down (#77): clique num ponto do gráfico horário abre a lista daquela
+  // hora, levando o recorte da tela (foco/departamento) e o período (#75).
+  // O ISO local do slot viaja no `customdata` do ponto — `x` é só rótulo.
+  var HORA_URL = "{% url 'dashboards:atendimento_hora' %}";
+  var HORA_QUERY = "{{ period_query|escapejs }}&foco={{ horario.foco|escapejs }}{% if selected_departamento_id %}&departamento={{ selected_departamento_id }}{% endif %}";
+
+  function bindHorarioDrilldown() {
+    var el = document.getElementById("horario-chart");
+    if (!el || !el.on) return;
+    el.on("plotly_click", function (ev) {
+      var pt = (ev.points || [])[0];
+      if (!pt || !pt.customdata) return;
+      var slot = Array.isArray(pt.customdata) ? pt.customdata[0] : pt.customdata;
+      window.location.href = HORA_URL + "?h=" + encodeURIComponent(slot) + "&" + HORA_QUERY;
+    });
+    // Cursor de "clicável" sobre a área do plot (o padrão do Plotly é crosshair).
+    el.querySelectorAll(".nsewdrag").forEach(function (d) {
+      d.style.cursor = "pointer";
+    });
+  }
+
+  var horarioPlot = renderChart("horario-chart", "horario-data");
+  if (horarioPlot && horarioPlot.then) {
+    horarioPlot.then(bindHorarioDrilldown);
+  }
   renderChart("motivos-trend-chart", "motivos-trend-data");
   renderChart("tags-trend-chart", "tags-trend-data");
   {% if motivo_focus_json %}renderChart("motivo-focus-chart", "motivo-focus-data");{% endif %}

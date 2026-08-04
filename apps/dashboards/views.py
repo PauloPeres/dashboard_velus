@@ -23,6 +23,7 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 
 from apps.analytics.application.aggregations import (
+    atendimento_hora_esperado,
     compute_aging_distribution,
     compute_arpu_by_plan,
     compute_at_risk_contracts,
@@ -1539,8 +1540,16 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
     foco = request.GET.get("foco", "suporte")
     if foco not in ("todos", "suporte", "rede", "comercial"):
         foco = "suporte"
+    # `departamento_id` entra também aqui (#77): o clique num ponto abre a lista
+    # da hora com o mesmo recorte, então gráfico e lista precisam do MESMO
+    # filtro. (Na prática só muda algo no foco "todos" — nos demais o próprio
+    # foco define o recorte; ver `atendimento_foco_queryset`.)
     horario = compute_atendimento_horario(
-        org, start=period.start, end=period.end, foco=foco
+        org,
+        start=period.start,
+        end=period.end,
+        foco=foco,
+        departamento_id=departamento_id,
     )
 
     data = compute_atendimento_tendencias(
@@ -1650,11 +1659,14 @@ def _hora_csv_response(data: dict[str, Any]) -> HttpResponse:
 @login_required
 @never_cache
 def atendimento_hora(request: HttpRequest) -> HttpResponse:
-    """Atendimentos de uma hora do gráfico horário (#76) — lista + export CSV.
+    """Atendimentos de uma hora do gráfico horário (#76) — resumo + lista + CSV.
 
     `?h=` é a hora (ISO local) e `?foco=`/`?departamento=` repetem o recorte do
     gráfico. O período da página de Tendências (#75) viaja junto só pra o link
     de volta reproduzir a mesma janela.
+
+    O resumo (#77) sai do mesmo queryset da lista (`data["resumo"]`); só o
+    "esperado" vem do baseline sazonal, por `atendimento_hora_esperado`.
     """
     org_or_redirect = _require_org(request)
     if not hasattr(org_or_redirect, "slug"):
@@ -1691,13 +1703,29 @@ def atendimento_hora(request: HttpRequest) -> HttpResponse:
     query = f"{period.query}&foco={foco}"
     if departamento_id is not None:
         query += f"&departamento={departamento_id}"
-    csv_query = f"{query}&h={hour_start.strftime('%Y-%m-%dT%H:%M')}&format=csv"
+    hora_query = f"h={hour_start.strftime('%Y-%m-%dT%H:%M')}&{query}"
+    csv_query = f"{hora_query}&format=csv"
+    prev_hour = hour_start - timedelta(hours=1)
+    next_hour = hour_start + timedelta(hours=1)
+
+    # "Esperado" do baseline pro slot: vem do próprio gráfico horário, mas com a
+    # janela de exibição reduzida a esta hora (ver `atendimento_hora_esperado`).
+    esperado = atendimento_hora_esperado(
+        org, hour_start=hour_start, foco=foco, departamento_id=departamento_id
+    )
 
     return render(
         request,
         "dashboards/atendimento_hora.html",
         {
             **data,
+            "esperado": esperado,
+            "hora_query": hora_query,
+            "prev_query": f"h={prev_hour.strftime('%Y-%m-%dT%H:%M')}&{query}",
+            "next_query": f"h={next_hour.strftime('%Y-%m-%dT%H:%M')}&{query}",
+            "prev_label": prev_hour.strftime("%d/%m %Hh"),
+            "next_label": next_hour.strftime("%d/%m %Hh"),
+            "next_is_future": next_hour > timezone.localtime(timezone.now(), _PERIOD_TZ),
             "rows": data["rows"][:_HORA_LISTA_LIMITE],
             "shown": min(data["total"], _HORA_LISTA_LIMITE),
             "limite": _HORA_LISTA_LIMITE,
