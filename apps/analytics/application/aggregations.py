@@ -5152,6 +5152,8 @@ def compute_atendimento_tendencias(
     organization: Organization,
     *,
     months: int = 6,
+    start: datetime | None = None,
+    end: datetime | None = None,
     granularity: str = "week",
     departamento_id: int | None = None,
     top_n: int | None = 10,
@@ -5166,6 +5168,10 @@ def compute_atendimento_tendencias(
     buckets completo (buckets sem dado aparecem como zero) — pronto pro gráfico
     de área empilhada. Motivos/tags são JSONField (list[str]), então a
     contagem é feita em Python, igual a `top_motivos`.
+
+    Janela (#75): `start`/`end` arbitrários têm precedência; quando ausentes,
+    cai no atalho `months` (últimos N meses até agora) — mantido pra
+    compatibilidade com chamadas antigas.
     """
     from apps.atendimento.infrastructure.models import Atendimento, Departamento
 
@@ -5173,13 +5179,15 @@ def compute_atendimento_tendencias(
         granularity = "week"
 
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
+    window_end = end or now
+    window_start = start or (now - relativedelta(months=months)).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
 
     qs = Atendimento.objects.filter(
         organization=organization,
         opened_at__gte=window_start,
+        opened_at__lte=window_end,
         opened_at__isnull=False,
     )
     if departamento_id is not None:
@@ -5218,7 +5226,7 @@ def compute_atendimento_tendencias(
     # virarem zero em vez de sumir do gráfico.
     buckets: list[date_cls] = []
     cursor = _bucket_start(timezone.localtime(window_start).date(), granularity)
-    last = _bucket_start(timezone.localtime(now).date(), granularity)
+    last = _bucket_start(timezone.localtime(window_end).date(), granularity)
     while cursor <= last:
         buckets.append(cursor)
         cursor = _next_bucket(cursor, granularity)
@@ -5263,6 +5271,8 @@ def compute_atendimento_tendencias(
 
     return {
         "granularity": granularity,
+        "window_start": window_start,
+        "window_end": window_end,
         "buckets": labels,
         "motivos_series": motivos_series,
         "tags_series": tags_series,
@@ -5303,6 +5313,8 @@ def compute_atendimento_horario(
     organization: Organization,
     *,
     days: int = 14,
+    start: datetime | None = None,
+    end: datetime | None = None,
     baseline_weeks: int = 8,
     k: float = 3.0,
     foco: str = "suporte",
@@ -5315,9 +5327,13 @@ def compute_atendimento_horario(
 ) -> dict[str, Any]:
     """Série horária de atendimentos abertos vs baseline sazonal (F3, gráfico 1).
 
-    Pra cada hora da janela de `days` dias, compara o volume real com o
-    esperado pra aquele *slot sazonal*, estimado pelas últimas `baseline_weeks`
-    semanas ANTERIORES à janela.
+    Pra cada hora da janela, compara o volume real com o esperado pra aquele
+    *slot sazonal*, estimado pelas últimas `baseline_weeks` semanas ANTERIORES
+    ao início da janela.
+
+    Janela (#75): `start`/`end` arbitrários (datetimes aware) têm precedência.
+    Quando ausentes, cai no atalho `days` (últimos N dias até agora, com N
+    restrito a `_HORARIO_DIAS_VALIDOS`) — mantido pra compatibilidade.
 
     `foco`: recorte vigiado —
     - "suporte" (departamento Suporte) / "rede" (motivo/tag de rede: Sem Conexão,
@@ -5348,21 +5364,32 @@ def compute_atendimento_horario(
     from apps.atendimento.infrastructure.models import Atendimento, Departamento
     from apps.financial.infrastructure.models import Invoice
 
-    if days not in _HORARIO_DIAS_VALIDOS:
-        days = 14
     if foco not in _HORARIO_FOCOS:
         foco = "suporte"
 
-    now = timezone.now()
-    now_local = timezone.localtime(now, _ATENDIMENTO_TZ)
-    display_start = now_local.replace(minute=0, second=0, microsecond=0) - timedelta(
-        days=days
-    )
+    now_local = timezone.localtime(timezone.now(), _ATENDIMENTO_TZ)
+    if start is not None and end is not None:
+        # Janela explícita (#75): primeira e última hora exibidas, inclusivas.
+        display_start = timezone.localtime(start, _ATENDIMENTO_TZ).replace(
+            minute=0, second=0, microsecond=0
+        )
+        display_end = timezone.localtime(end, _ATENDIMENTO_TZ).replace(
+            minute=0, second=0, microsecond=0
+        )
+        if display_end < display_start:
+            display_end = display_start
+        days = (display_end.date() - display_start.date()).days + 1
+    else:
+        if days not in _HORARIO_DIAS_VALIDOS:
+            days = 14
+        display_end = now_local.replace(minute=0, second=0, microsecond=0)
+        display_start = display_end - timedelta(days=days) + timedelta(hours=1)
     baseline_start = display_start - timedelta(weeks=baseline_weeks)
 
     qs = Atendimento.objects.filter(
         organization=organization,
         opened_at__gte=baseline_start,
+        opened_at__lt=display_end + timedelta(hours=1),
         opened_at__isnull=False,
     )
     if foco == "suporte":
@@ -5398,7 +5425,7 @@ def compute_atendimento_horario(
         Invoice.objects.filter(
             organization=organization,
             due_date__gte=baseline_start.date(),
-            due_date__lte=now_local.date(),
+            due_date__lte=display_end.date(),
         )
         .values("due_date")
         .annotate(c=Count("id"))
@@ -5450,8 +5477,8 @@ def compute_atendimento_horario(
     anomaly_x: list[str] = []
     anomaly_y: list[int] = []
 
-    cursor = display_start + timedelta(hours=1)
-    while cursor <= now_local:
+    cursor = display_start
+    while cursor <= display_end:
         billing = cursor.date() in billing_proximal
         # Usa o baseline de cobrança quando o dia é de cobrança e há amostra
         # daquela hora; senão cai no baseline sazonal normal.
@@ -5493,14 +5520,14 @@ def compute_atendimento_horario(
             "billing": d in billing_days,
         }
         for d in sorted(due_by_date)
-        if display_start.date() <= d <= now_local.date()
+        if display_start.date() <= d <= display_end.date()
     ]
     # Rótulos "%d/%m" dos dias de cobrança visíveis na janela (p/ sombrear).
     billing_day_labels = sorted(
         {
             d.strftime("%d/%m")
             for d in billing_proximal
-            if display_start.date() <= d <= now_local.date()
+            if display_start.date() <= d <= display_end.date()
         }
     )
 
@@ -5517,6 +5544,9 @@ def compute_atendimento_horario(
 
     return {
         "days": days,
+        "window_start": display_start,
+        "window_end": display_end,
+        "n_slots": len(labels),
         "labels": labels,
         "actual": actual,
         "expected": expected,
