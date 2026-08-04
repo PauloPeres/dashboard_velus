@@ -3,12 +3,23 @@
 
 {% block title %}Tendências de Atendimento · Velus{% endblock %}
 
+{# Período da página é o da barra própria (#75) — sem o seletor global da sidebar. #}
+{% block period_selector %}{% endblock %}
+
 {% block content %}
 <!-- Cabeçalho -->
 <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
   <div>
     <h1 class="text-2xl font-bold text-gray-900">Tendências de Atendimento</h1>
     <p class="text-xs text-gray-400 mt-0.5">Evolução dos motivos e das tags dos atendimentos ao longo do tempo — pra comparar mix e detectar mudanças</p>
+    <p class="mt-2">
+      <span class="inline-flex items-center gap-1.5 bg-gray-900 text-white text-sm font-medium px-3 py-1.5 rounded-lg">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3M3 11h18M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+        </svg>
+        {{ period_label }}
+      </span>
+    </p>
   </div>
   <!-- Filtro de departamento -->
   <div class="relative">
@@ -30,6 +41,37 @@
       </svg>
     </span>
   </div>
+</div>
+
+<!-- Período único da página (#75): presets + personalizado -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
+  <div class="flex flex-wrap items-center gap-3">
+    <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Período</span>
+    <div class="inline-flex flex-wrap rounded-lg border border-gray-200 bg-white p-0.5">
+      {% for p in period_presets %}
+      <button onclick="setPeriodo('{{ p.key }}')"
+        class="px-2.5 py-1 text-xs rounded-md {% if p.active %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">{{ p.name }}</button>
+      {% endfor %}
+    </div>
+
+    <form method="get" class="flex flex-wrap items-center gap-2">
+      <input type="hidden" name="g" value="{{ granularity }}">
+      <input type="hidden" name="foco" value="{{ horario.foco }}">
+      {% if selected_departamento_id %}<input type="hidden" name="departamento" value="{{ selected_departamento_id }}">{% endif %}
+      {% if focus_motivo %}<input type="hidden" name="motivo" value="{{ focus_motivo }}">{% endif %}
+      {% if focus_tag %}<input type="hidden" name="tag" value="{{ focus_tag }}">{% endif %}
+      <label class="text-xs text-gray-500" for="periodo-de">Personalizado:</label>
+      <input type="date" id="periodo-de" name="de" value="{{ period_de }}"
+             class="text-sm border border-gray-200 rounded-lg px-2 py-1 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+      <span class="text-xs text-gray-400">até</span>
+      <input type="date" id="periodo-ate" name="ate" value="{{ period_ate }}"
+             class="text-sm border border-gray-200 rounded-lg px-2 py-1 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+      <button type="submit" class="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">Aplicar</button>
+    </form>
+  </div>
+  {% if period_warning %}
+  <p class="mt-2 text-xs text-amber-600">{{ period_warning }}</p>
+  {% endif %}
 </div>
 
 <!-- Barra de contexto: granularidade + filtro ativo + resumo -->
@@ -70,12 +112,6 @@
         <button onclick="setParam('foco','comercial')" class="px-2.5 py-1 text-xs rounded-md {% if horario.foco == 'comercial' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Comercial</button>
         <button onclick="setParam('foco','todos')" class="px-2.5 py-1 text-xs rounded-md {% if horario.foco == 'todos' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Todos</button>
       </div>
-      <!-- Janela em dias -->
-      <div class="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
-        <button onclick="setParam('hd','7')" class="px-2.5 py-1 text-xs rounded-md {% if horario_dias == 7 %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">7d</button>
-        <button onclick="setParam('hd','14')" class="px-2.5 py-1 text-xs rounded-md {% if horario_dias == 14 %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">14d</button>
-        <button onclick="setParam('hd','30')" class="px-2.5 py-1 text-xs rounded-md {% if horario_dias == 30 %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">30d</button>
-      </div>
     </div>
   </div>
   <p class="text-xs text-gray-400 mb-3">
@@ -90,7 +126,7 @@
     <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>{{ horario.n_anomalias }} hora{{ horario.n_anomalias|pluralize }} com pico anômalo</span>
     {% endif %}
     <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm bg-amber-200"></span>{{ horario.n_billing_days }} dia{{ horario.n_billing_days|pluralize }} de cobrança</span>
-    <span class="text-gray-400">{{ horario.total_janela|intcomma }} atendimentos na janela de {{ horario_dias }} dias</span>
+    <span class="text-gray-400">{{ horario.total_janela|intcomma }} atendimentos · {{ period_label }}</span>
   </div>
   <div id="horario-chart" style="height:360px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
 </div>
@@ -99,7 +135,7 @@
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
   <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 mb-1">
     <h2 class="text-sm font-semibold text-gray-700">Motivos de atendimento ao longo do tempo</h2>
-    <span class="text-xs text-gray-400">{{ n_motivos_distintos }} motivos{% if n_motivos_distintos > top_n %} · top {{ top_n }} + “Outros”{% endif %} · por {% if granularity == 'month' %}mês{% else %}semana{% endif %}</span>
+    <span class="text-xs text-gray-400">{{ n_motivos_distintos }} motivos{% if n_motivos_distintos > top_n %} · top {{ top_n }} + “Outros”{% endif %} · por {% if granularity == 'month' %}mês{% else %}semana{% endif %} · {{ period_label }}</span>
   </div>
   <p class="text-xs text-gray-400 mb-3">Motivos configurados na Opa!, contados por {% if granularity == 'month' %}mês{% else %}semana{% endif %} de abertura. Um atendimento pode ter mais de um motivo.</p>
   <div id="motivos-trend-chart" style="height:380px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
@@ -135,7 +171,7 @@
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
   <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 mb-1">
     <h2 class="text-sm font-semibold text-gray-700">Tags de atendimento ao longo do tempo</h2>
-    <span class="text-xs text-gray-400">{{ n_tags_distintas }} tags{% if n_tags_distintas > top_n %} · top {{ top_n }} + “Outros”{% endif %} · por {% if granularity == 'month' %}mês{% else %}semana{% endif %}</span>
+    <span class="text-xs text-gray-400">{{ n_tags_distintas }} tags{% if n_tags_distintas > top_n %} · top {{ top_n }} + “Outros”{% endif %} · por {% if granularity == 'month' %}mês{% else %}semana{% endif %} · {{ period_label }}</span>
   </div>
   <p class="text-xs text-gray-400 mb-3">Tags configuradas na Opa!, contadas por {% if granularity == 'month' %}mês{% else %}semana{% endif %} de abertura. Um atendimento pode ter várias tags — cada uma é contada. {{ atendimentos_com_tag|intcomma }} atendimentos com ao menos uma tag.</p>
   <div id="tags-trend-chart" style="height:380px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
@@ -182,6 +218,15 @@
     } else {
       url.searchParams.delete(key);
     }
+    window.location.href = url.toString();
+  }
+  // Preset de período (#75): limpa o personalizado e os parâmetros legados.
+  function setPeriodo(value) {
+    var url = new URL(window.location.href);
+    url.searchParams.set("periodo", value);
+    ["de", "ate", "months", "hd"].forEach(function (k) {
+      url.searchParams.delete(k);
+    });
     window.location.href = url.toString();
   }
   renderChart("horario-chart", "horario-data");

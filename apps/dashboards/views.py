@@ -6,8 +6,11 @@ e via context_processor exposto em `current_organization`.
 
 from __future__ import annotations
 
-from datetime import timedelta
+import re
+from dataclasses import dataclass, replace
+from datetime import date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
 from django.contrib.auth.decorators import login_required
@@ -118,6 +121,169 @@ def _get_months(request: HttpRequest) -> int:
         return v if v in (1, 2, 3, 6, 12, 24) else 12
     except (ValueError, TypeError):
         return 12
+
+
+# =============================================================================
+# Período único da página (#75) — usado hoje só em Tendências de Atendimento
+# =============================================================================
+_PERIOD_TZ = ZoneInfo("America/Sao_Paulo")
+_PERIOD_MAX_MONTHS = 24
+_PERIOD_MAX_DAYS = 366 * 2  # teto de 24 meses, também pro formato em dias
+# Presets exibidos como botões. Outros valores no formato Nd/Nm ainda são
+# aceitos (URLs antigas ?months=/?hd= são convertidas pra cá).
+_PERIOD_PRESETS: tuple[tuple[str, str], ...] = (
+    ("7d", "Últimos 7 dias"),
+    ("14d", "Últimos 14 dias"),
+    ("30d", "Últimos 30 dias"),
+    ("3m", "Últimos 3 meses"),
+    ("6m", "Últimos 6 meses"),
+    ("12m", "Últimos 12 meses"),
+)
+_PERIOD_RE = re.compile(r"^(\d{1,3})([dm])$")
+
+
+@dataclass(frozen=True)
+class Period:
+    """Janela de análise resolvida uma única vez por request.
+
+    `start`/`end` são datetimes aware (America/Sao_Paulo), ambos inclusivos:
+    `start` é o primeiro instante do dia inicial e `end` é o último instante do
+    dia final (ou "agora", quando o dia final é hoje).
+    """
+
+    key: str  # preset ("7d", "3m", …) ou "custom"
+    start: datetime
+    end: datetime
+    label: str
+    warning: str | None = None
+
+    @property
+    def is_custom(self) -> bool:
+        return self.key == "custom"
+
+    @property
+    def start_date(self) -> date:
+        return self.start.date()
+
+    @property
+    def end_date(self) -> date:
+        return self.end.date()
+
+    @property
+    def query(self) -> str:
+        """Fragmento de querystring que reproduz o período (propagação #75)."""
+        if self.is_custom:
+            return f"de={self.start_date.isoformat()}&ate={self.end_date.isoformat()}"
+        return f"periodo={self.key}"
+
+
+def _fmt_period_date(d: date) -> str:
+    return d.strftime("%d/%m/%Y")
+
+
+def _period_bounds(start_date: date, end_date: date) -> tuple[datetime, datetime]:
+    """Datas inclusivas → instantes aware; o fim nunca passa de agora."""
+    now = timezone.localtime(timezone.now(), _PERIOD_TZ)
+    start = datetime.combine(start_date, time.min, tzinfo=_PERIOD_TZ)
+    end = datetime.combine(end_date, time.max, tzinfo=_PERIOD_TZ)
+    return start, min(end, now)
+
+
+def _period_preset(n: int, unit: str) -> Period:
+    """Preset de N dias/meses ancorado em hoje (ambos os extremos inclusivos)."""
+    today = timezone.localtime(timezone.now(), _PERIOD_TZ).date()
+    if unit == "d":
+        start_date = today - timedelta(days=n - 1)
+        default_name = f"Últimos {n} dias"
+    else:
+        start_date = today - relativedelta(months=n) + timedelta(days=1)
+        default_name = f"Últimos {n} meses"
+    key = f"{n}{unit}"
+    name = dict(_PERIOD_PRESETS).get(key, default_name)
+    start, end = _period_bounds(start_date, today)
+    label = f"{name} ({_fmt_period_date(start_date)} – {_fmt_period_date(today)})"
+    return Period(key=key, start=start, end=end, label=label)
+
+
+def _period_from_preset(key: str) -> Period | None:
+    """Constrói um preset a partir da chave `Nd`/`Nm`. None se inválida."""
+    m = _PERIOD_RE.match(key)
+    if not m:
+        return None
+    n, unit = int(m.group(1)), m.group(2)
+    if n < 1:
+        return None
+    if (unit == "d" and n > _PERIOD_MAX_DAYS) or (
+        unit == "m" and n > _PERIOD_MAX_MONTHS
+    ):
+        return None
+    return _period_preset(n, unit)
+
+
+def _period_default(warning: str | None = None) -> Period:
+    """Default da página (30 dias), opcionalmente com aviso de entrada inválida."""
+    period = _period_preset(30, "d")
+    if warning is None:
+        return period
+    return replace(period, warning=warning)
+
+
+def _get_period(request: HttpRequest) -> Period:
+    """Resolve o período único da página (#75).
+
+    Precedência: `?de=&ate=` (personalizado) > `?periodo=` (preset) > URLs
+    antigas `?months=N` / `?hd=N` (convertidas pra `Nm` / `Nd`) > default 30d.
+    Quando as duas legadas vêm juntas, `months` vence: ela governava dois dos
+    três gráficos da página.
+
+    Entrada inválida nunca quebra a página — cai no default com `warning`.
+    """
+    raw_de = request.GET.get("de", "").strip()
+    raw_ate = request.GET.get("ate", "").strip()
+    if raw_de or raw_ate:
+        return _parse_custom_period(raw_de, raw_ate)
+
+    raw = request.GET.get("periodo", "").strip()
+    if not raw:
+        legacy_months = request.GET.get("months", "").strip()
+        legacy_days = request.GET.get("hd", "").strip()
+        if legacy_months.isdigit():
+            raw = f"{legacy_months}m"
+        elif legacy_days.isdigit():
+            raw = f"{legacy_days}d"
+    if not raw:
+        return _period_default()
+    return _period_from_preset(raw) or _period_default()
+
+
+def _parse_custom_period(raw_de: str, raw_ate: str) -> Period:
+    """Valida `?de=&ate=` (YYYY-MM-DD, inclusivos). Inválido → default + aviso."""
+    try:
+        start_date = date.fromisoformat(raw_de)
+        end_date = date.fromisoformat(raw_ate)
+    except ValueError:
+        return _period_default("Datas inválidas — mostrando os últimos 30 dias.")
+
+    today = timezone.localtime(timezone.now(), _PERIOD_TZ).date()
+    if end_date < start_date:
+        return _period_default(
+            "Data final antes da inicial — mostrando os últimos 30 dias."
+        )
+    if end_date > today:
+        return _period_default(
+            "Data final no futuro — mostrando os últimos 30 dias."
+        )
+    if start_date < end_date - relativedelta(months=_PERIOD_MAX_MONTHS):
+        return _period_default(
+            f"Período maior que {_PERIOD_MAX_MONTHS} meses — "
+            "mostrando os últimos 30 dias."
+        )
+
+    start, end = _period_bounds(start_date, end_date)
+    label = (
+        f"Período: {_fmt_period_date(start_date)} – {_fmt_period_date(end_date)}"
+    )
+    return Period(key="custom", start=start, end=end, label=label)
 
 
 @login_required
@@ -1342,12 +1508,17 @@ def atendimento(request: HttpRequest) -> HttpResponse:
 @login_required
 @never_cache
 def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
-    """Tendências de atendimento: motivos e tags ao longo do tempo (F2)."""
+    """Tendências de atendimento: motivos e tags ao longo do tempo (F2).
+
+    Período único da página (#75): resolvido uma vez em `_get_period` e passado
+    igual pra todos os gráficos — nenhum bloco lê `?months=`/`?hd=` por conta
+    própria (esses parâmetros só sobrevivem como compatibilidade de URL antiga).
+    """
     org_or_redirect = _require_org(request)
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    period = _get_period(request)
 
     granularity = request.GET.get("g", "week")
     if granularity not in ("week", "month"):
@@ -1361,24 +1532,19 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
     focus_motivo = request.GET.get("motivo", "").strip() or None
     focus_tag = request.GET.get("tag", "").strip() or None
 
-    # Gráfico horário sazonal (F3) — janela própria em dias (?hd=7|14|30) e foco
-    # (?foco=todos|suporte|rede). O foco recorta o alvo vigiado (padrão: suporte).
-    try:
-        horario_dias = int(request.GET.get("hd", 14))
-    except (ValueError, TypeError):
-        horario_dias = 14
-    if horario_dias not in (7, 14, 30):
-        horario_dias = 14
+    # Gráfico horário sazonal (F3) — mesma janela da página; só o foco
+    # (?foco=todos|suporte|rede|comercial) é próprio dele (padrão: suporte).
     foco = request.GET.get("foco", "suporte")
     if foco not in ("todos", "suporte", "rede", "comercial"):
         foco = "suporte"
     horario = compute_atendimento_horario(
-        org, days=horario_dias, foco=foco
+        org, start=period.start, end=period.end, foco=foco
     )
 
     data = compute_atendimento_tendencias(
         org,
-        months=months,
+        start=period.start,
+        end=period.end,
         granularity=granularity,
         departamento_id=departamento_id,
         top_n=30,
@@ -1407,8 +1573,17 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
         "dashboards/atendimento_tendencias.html",
         {
             **data,
+            "period": period,
+            "period_label": period.label,
+            "period_warning": period.warning,
+            "period_query": period.query,
+            "period_presets": [
+                {"key": key, "name": name, "active": period.key == key}
+                for key, name in _PERIOD_PRESETS
+            ],
+            "period_de": period.start_date.isoformat(),
+            "period_ate": period.end_date.isoformat(),
             "horario": horario,
-            "horario_dias": horario_dias,
             "horario_json": charts.atendimento_horario_sazonal(horario),
             "motivos_trend_json": charts.atendimento_categoria_trend(
                 data["buckets"],
