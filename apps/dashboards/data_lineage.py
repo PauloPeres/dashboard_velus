@@ -54,6 +54,7 @@ LINEAGE: dict[str, list[dict[str, str]]] = {
     "atendimento_tendencias": [
         {"source": _OPA, "detail": _D_OPA},
         {"source": _IXC, "detail": "IXC (faturas p/ marcador de vencimento) → financial_invoice."},
+        {"source": _INT, "detail": "Eventos de rede registrados à mão na própria página → atendimento_eventorede."},
     ],
     "atendimento_conversao": [
         {"source": _OPA, "detail": _D_OPA},

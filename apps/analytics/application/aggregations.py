@@ -5603,6 +5603,93 @@ def compute_atendimento_horario(
 
 
 @allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_eventos_rede(
+    organization: Organization,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+) -> list[dict[str, Any]]:
+    """Eventos de rede (#78) que intersectam a janela exibida do gráfico horário.
+
+    `window_start`/`window_end` são a primeira e a última hora exibidas
+    (inclusivas — os mesmos `window_start`/`window_end` de
+    `compute_atendimento_horario`); a janela real vai até `window_end + 1h`.
+
+    Interseção:
+    - evento com fim entra se `ended_at > window_start` (fim exatamente no
+      início da janela **não** intersecta — o evento já tinha acabado) e
+      `started_at < window_end + 1h`;
+    - evento pontual entra se `window_start <= started_at < window_end + 1h`.
+
+    Cada evento sai com `slot_start`/`slot_end`: o ISO local (`_ATENDIMENTO_SLOT_FMT`)
+    da hora **recortada na janela** — é a chave que o chart casa com `slots` pra
+    achar o rótulo do eixo categórico ("%d/%m %Hh"). Evento que começa antes da
+    janela é clampado no primeiro slot; que termina depois, no último.
+    """
+    from apps.atendimento.infrastructure.models import EventoRede
+
+    ws = timezone.localtime(window_start, _ATENDIMENTO_TZ).replace(
+        minute=0, second=0, microsecond=0
+    )
+    we = timezone.localtime(window_end, _ATENDIMENTO_TZ).replace(
+        minute=0, second=0, microsecond=0
+    )
+    we_excl = we + timedelta(hours=1)
+
+    qs = (
+        EventoRede.objects.filter(
+            organization=organization, started_at__lt=we_excl
+        )
+        .filter(
+            Q(ended_at__isnull=False, ended_at__gt=ws)
+            | Q(ended_at__isnull=True, started_at__gte=ws)
+        )
+        .order_by("started_at")
+    )
+
+    def _slot(dt: datetime) -> str:
+        local = timezone.localtime(dt, _ATENDIMENTO_TZ).replace(
+            minute=0, second=0, microsecond=0
+        )
+        local = min(max(local, ws), we)
+        return local.strftime(_ATENDIMENTO_SLOT_FMT)
+
+    eventos: list[dict[str, Any]] = []
+    for ev in qs:
+        started_local = timezone.localtime(ev.started_at, _ATENDIMENTO_TZ)
+        ended_local = (
+            timezone.localtime(ev.ended_at, _ATENDIMENTO_TZ)
+            if ev.ended_at is not None
+            else None
+        )
+        eventos.append(
+            {
+                "id": ev.id,
+                "tipo": ev.tipo,
+                "tipo_label": ev.get_tipo_display(),
+                "titulo": ev.titulo,
+                "descricao": ev.descricao,
+                "cor": ev.cor,
+                "pontual": ev.is_pontual,
+                "started_at": ev.started_at,
+                "ended_at": ev.ended_at,
+                "started_at_str": started_local.strftime("%d/%m/%Y %H:%M"),
+                "ended_at_str": (
+                    ended_local.strftime("%d/%m/%Y %H:%M") if ended_local else ""
+                ),
+                # Valores pro <input type="datetime-local"> da edição.
+                "started_at_input": started_local.strftime("%Y-%m-%dT%H:%M"),
+                "ended_at_input": (
+                    ended_local.strftime("%Y-%m-%dT%H:%M") if ended_local else ""
+                ),
+                "slot_start": _slot(ev.started_at),
+                "slot_end": _slot(ev.ended_at) if ev.ended_at else _slot(ev.started_at),
+            }
+        )
+    return eventos
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
 def compute_atendimento_hora(
     organization: Organization,
     *,

@@ -16,11 +16,17 @@ from zoneinfo import ZoneInfo
 from dateutil.relativedelta import relativedelta
 from django.contrib.auth.decorators import login_required
 from django.db.models import Avg, Count, F
-from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
+from django.http import (
+    HttpRequest,
+    HttpResponse,
+    HttpResponseForbidden,
+    HttpResponseRedirect,
+)
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_POST
 
 from apps.analytics.application.aggregations import (
     atendimento_hora_esperado,
@@ -29,6 +35,7 @@ from apps.analytics.application.aggregations import (
     compute_at_risk_contracts,
     compute_atendimento_conversao,
     compute_atendimento_detail,
+    compute_atendimento_eventos_rede,
     compute_atendimento_hora,
     compute_atendimento_horario,
     compute_atendimento_tendencias,
@@ -1517,6 +1524,8 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
     igual pra todos os gráficos — nenhum bloco lê `?months=`/`?hd=` por conta
     própria (esses parâmetros só sobrevivem como compatibilidade de URL antiga).
     """
+    from apps.atendimento.infrastructure.models import EventoRede
+
     org_or_redirect = _require_org(request)
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
@@ -1551,6 +1560,21 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
         foco=foco,
         departamento_id=departamento_id,
     )
+
+    # Eventos de rede (#78): só os que intersectam a janela EXIBIDA do gráfico
+    # (não o período bruto) — a view carrega, o chart só desenha.
+    eventos = compute_atendimento_eventos_rede(
+        org,
+        window_start=horario["window_start"],
+        window_end=horario["window_end"],
+    )
+    membership = request.user.get_active_membership()
+    pode_editar_eventos = bool(membership and membership.is_owner)
+    # Querystring que o POST devolve pra voltar na MESMA visão (período, foco,
+    # granularidade e departamento).
+    evento_voltar_query = f"{period.query}&g={granularity}&foco={foco}"
+    if departamento_id is not None:
+        evento_voltar_query += f"&departamento={departamento_id}"
 
     data = compute_atendimento_tendencias(
         org,
@@ -1595,7 +1619,15 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
             "period_de": period.start_date.isoformat(),
             "period_ate": period.end_date.isoformat(),
             "horario": horario,
-            "horario_json": charts.atendimento_horario_sazonal(horario),
+            "horario_json": charts.atendimento_horario_sazonal(horario, eventos),
+            "eventos_rede": eventos,
+            "evento_tipos": EventoRede.Tipo.choices,
+            "pode_editar_eventos": pode_editar_eventos,
+            "evento_erro": request.GET.get("evento_erro") == "1",
+            "evento_default_inicio": timezone.localtime(
+                timezone.now(), _PERIOD_TZ
+            ).strftime(_EVENTO_DT_FMT),
+            "evento_voltar_query": evento_voltar_query,
             "motivos_trend_json": charts.atendimento_categoria_trend(
                 data["buckets"],
                 data["motivos_series"],
@@ -1736,6 +1768,125 @@ def atendimento_hora(request: HttpRequest) -> HttpResponse:
             "csv_query": csv_query,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Eventos de rede (#78) — registro manual sobre o gráfico horário
+# ---------------------------------------------------------------------------
+# Formato do <input type="datetime-local">.
+_EVENTO_DT_FMT = "%Y-%m-%dT%H:%M"
+
+
+def _parse_evento_dt(raw: str) -> datetime | None:
+    """`datetime-local` (ISO sem fuso) → datetime aware em `_PERIOD_TZ`."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if timezone.is_naive(parsed):
+        parsed = parsed.replace(tzinfo=_PERIOD_TZ)
+    return parsed
+
+
+def _evento_redirect_url(request: HttpRequest, *, erro: bool = False) -> str:
+    """URL de volta pras Tendências com os mesmos filtros (veio no POST)."""
+    query = request.POST.get("q", "").strip().lstrip("?").replace("#", "")
+    if erro:
+        query = f"{query}&evento_erro=1" if query else "evento_erro=1"
+    url = reverse("dashboards:atendimento_tendencias")
+    return f"{url}?{query}" if query else url
+
+
+def _evento_org(request: HttpRequest) -> Any:
+    """Org do usuário se ele pode mexer em evento; None se não pode.
+
+    Mesma regra de permissão da UI de grupos de acesso (`access_management`):
+    membership ativa **e** OWNER da org.
+    """
+    membership = request.user.get_active_membership()
+    if membership is None or not membership.is_owner:
+        return None
+    return membership.organization
+
+
+@login_required
+@never_cache
+@require_POST
+def evento_rede_novo(request: HttpRequest) -> HttpResponse:
+    """Cria um evento de rede a partir do form da página de Tendências (#78)."""
+    from apps.atendimento.infrastructure.models import EventoRede
+
+    org = _evento_org(request)
+    if org is None:
+        return HttpResponseForbidden("Sem permissão para registrar eventos de rede.")
+
+    titulo = request.POST.get("titulo", "").strip()
+    tipo = request.POST.get("tipo", "")
+    if tipo not in EventoRede.Tipo.values:
+        tipo = EventoRede.Tipo.OUTRO.value
+    started_at = _parse_evento_dt(request.POST.get("started_at", ""))
+    ended_at = _parse_evento_dt(request.POST.get("ended_at", ""))
+    if not titulo or started_at is None or (ended_at and ended_at < started_at):
+        return HttpResponseRedirect(_evento_redirect_url(request, erro=True))
+
+    EventoRede.objects.create(
+        organization=org,
+        tipo=tipo,
+        titulo=titulo[:255],
+        descricao=request.POST.get("descricao", "").strip(),
+        started_at=started_at,
+        ended_at=ended_at,
+        created_by=request.user,
+    )
+    return HttpResponseRedirect(_evento_redirect_url(request))
+
+
+@login_required
+@never_cache
+@require_POST
+def evento_rede_editar(request: HttpRequest, evento_id: int) -> HttpResponse:
+    """Edita (`action=update`) ou exclui (`action=delete`) um evento de rede.
+
+    Objeto sempre buscado por queryset escopado na org (defesa em profundidade
+    além do TenantManager) — evento de outra org responde 404.
+    """
+    from django.http import Http404
+
+    from apps.atendimento.infrastructure.models import EventoRede
+
+    org = _evento_org(request)
+    if org is None:
+        return HttpResponseForbidden("Sem permissão para editar eventos de rede.")
+
+    evento = EventoRede.objects.filter(organization=org, pk=evento_id).first()
+    if evento is None:
+        raise Http404("Evento de rede não encontrado")
+
+    if request.POST.get("action") == "delete":
+        evento.delete()
+        return HttpResponseRedirect(_evento_redirect_url(request))
+
+    titulo = request.POST.get("titulo", "").strip()
+    tipo = request.POST.get("tipo", "")
+    started_at = _parse_evento_dt(request.POST.get("started_at", ""))
+    ended_at = _parse_evento_dt(request.POST.get("ended_at", ""))
+    if not titulo or started_at is None or (ended_at and ended_at < started_at):
+        return HttpResponseRedirect(_evento_redirect_url(request, erro=True))
+
+    evento.titulo = titulo[:255]
+    if tipo in EventoRede.Tipo.values:
+        evento.tipo = tipo
+    evento.descricao = request.POST.get("descricao", "").strip()
+    evento.started_at = started_at
+    evento.ended_at = ended_at
+    evento.save(
+        update_fields=["titulo", "tipo", "descricao", "started_at", "ended_at",
+                       "updated_at"]
+    )
+    return HttpResponseRedirect(_evento_redirect_url(request))
 
 
 @login_required

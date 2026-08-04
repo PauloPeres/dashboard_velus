@@ -10,7 +10,7 @@ from simple_history.admin import SimpleHistoryAdmin
 
 from apps.shared.context import set_current_organization
 
-from .infrastructure.models import Atendimento, Departamento, Mensagem
+from .infrastructure.models import Atendimento, Departamento, EventoRede, Mensagem
 
 
 class _TenantAdminMixin:
@@ -58,3 +58,16 @@ class MensagemAdmin(_TenantAdminMixin, admin.ModelAdmin):
     list_filter = ("source_type", "direction", "tipo")
     search_fields = ("external_id", "atendimento_external_id", "texto")
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(EventoRede)
+class EventoRedeAdmin(_TenantAdminMixin, SimpleHistoryAdmin):
+    """Eventos de rede registrados a mao na pagina de Tendencias (#78)."""
+
+    list_display = (
+        "titulo", "tipo", "started_at", "ended_at", "created_by", "updated_at",
+    )
+    list_filter = ("tipo",)
+    search_fields = ("titulo", "descricao")
+    readonly_fields = ("created_at", "updated_at")
+    date_hierarchy = "started_at"

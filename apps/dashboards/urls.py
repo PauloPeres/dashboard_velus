@@ -40,6 +40,16 @@ urlpatterns = [
         name="atendimento_hora",
     ),
     path(
+        "operations/eventos-rede/novo/",
+        views.evento_rede_novo,
+        name="evento_rede_novo",
+    ),
+    path(
+        "operations/eventos-rede/<int:evento_id>/",
+        views.evento_rede_editar,
+        name="evento_rede_editar",
+    ),
+    path(
         "operations/atendimento-conversao/",
         views.atendimento_conversao,
         name="atendimento_conversao",
