@@ -158,7 +158,8 @@
           {% if pode_editar_eventos %}
           <span class="ml-auto flex items-center gap-2">
             <a href="#evento-{{ e.id }}" class="text-xs text-blue-600 hover:underline">editar</a>
-            <form method="post" action="{% url 'dashboards:evento_rede_editar' e.id %}">
+            <form method="post" action="{% url 'dashboards:evento_rede_editar' e.id %}"
+                  onsubmit="return confirm('Excluir o evento &quot;{{ e.titulo|escapejs }}&quot;? Ele deixa de aparecer sobre o gráfico.');">
               {% csrf_token %}
               <input type="hidden" name="action" value="delete">
               <input type="hidden" name="q" value="{{ evento_voltar_query }}">
