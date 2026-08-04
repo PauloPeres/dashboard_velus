@@ -1,0 +1,88 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Atendimentos de {{ hour_start|date:"d/m H:i" }} · Velus{% endblock %}
+
+{# Página é de uma hora específica (?h=) — o seletor global de período não vale. #}
+{% block period_selector %}{% endblock %}
+
+{% block content %}
+<!-- Cabeçalho -->
+<div class="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-6">
+  <div>
+    <a href="{% url 'dashboards:atendimento_tendencias' %}?{{ voltar_query }}"
+       class="text-xs text-blue-600 hover:underline">&larr; Voltar para Tendências de Atendimento</a>
+    <h1 class="text-2xl font-bold text-gray-900 mt-1">
+      {{ total|intcomma }} atendimento{{ total|pluralize }} entre {{ hour_label }}
+    </h1>
+    <p class="text-xs text-gray-400 mt-0.5">
+      Recorte igual ao do gráfico horário — foco
+      <strong>{% if foco == 'rede' %}Rede{% elif foco == 'suporte' %}Suporte{% elif foco == 'comercial' %}Comercial{% else %}Todos{% endif %}</strong>{% if departamento_nome %} · departamento <strong>{{ departamento_nome }}</strong>{% endif %}.
+      Horários no fuso de São Paulo.
+    </p>
+  </div>
+  <a href="?{{ csv_query }}"
+     class="inline-flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/>
+    </svg>
+    Exportar CSV
+  </a>
+</div>
+
+{% if truncated %}
+<p class="mb-3 text-xs text-amber-600">
+  Mostrando as primeiras {{ limite|intcomma }} linhas de {{ total|intcomma }} — o CSV traz todas.
+</p>
+{% endif %}
+
+<!-- Tabela: atendimentos da hora -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+  <div class="overflow-x-auto">
+  <table class="min-w-full text-sm">
+    <thead class="bg-gray-50">
+      <tr>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Horário</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Atendente</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Categoria</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Protocolo</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for r in rows %}
+      <tr class="hover:bg-blue-50">
+        <td class="px-4 py-3 font-medium text-gray-900 truncate max-w-[220px]">
+          {% if r.customer_id %}
+          <a href="{% url 'dashboards:customer_detail' r.customer_id %}" class="text-blue-700 hover:underline">{{ r.customer_name }}</a>
+          {% else %}{{ r.customer_name }}{% endif %}
+        </td>
+        <td class="px-4 py-3 tabular-nums text-gray-700">{{ r.opened_at_str }}</td>
+        <td class="px-4 py-3 text-gray-700">{{ r.atendente_nome }}</td>
+        <td class="px-4 py-3">
+          {% if r.categorias %}
+          <div class="flex flex-wrap gap-1">
+            {% for c in r.categorias %}
+            <span class="text-[10px] bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded">{{ c }}</span>
+            {% endfor %}
+          </div>
+          {% else %}<span class="text-gray-300">—</span>{% endif %}
+        </td>
+        <td class="px-4 py-3 text-gray-700">
+          {% if r.protocol %}
+          <a href="{% url 'dashboards:atendimento_detail' r.atendimento_id %}" class="text-blue-600 hover:underline">{{ r.protocol }}</a>
+          {% else %}<span class="text-gray-300">—</span>{% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="5" class="px-6 py-8 text-center text-gray-500">
+          Nenhum atendimento nessa hora com esse recorte
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

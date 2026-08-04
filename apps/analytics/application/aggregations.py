@@ -30,6 +30,7 @@ from django.db.models import (
     Max,
     OuterRef,
     Q,
+    QuerySet,
     Subquery,
     Sum,
 )
@@ -5308,6 +5309,34 @@ _REDE_TAGS = [
 ]
 
 
+def atendimento_foco_queryset(
+    qs: QuerySet[Any], foco: str, departamento_id: int | None = None
+) -> QuerySet[Any]:
+    """Recorte de `foco`/departamento do gráfico horário (#76).
+
+    Fonte única do filtro: o gráfico (`compute_atendimento_horario`) e a lista de
+    uma hora (`compute_atendimento_hora`) usam este helper, pra a contagem da
+    lista bater exatamente com o ponto do gráfico.
+
+    - "suporte"/"comercial": departamento pelo nome;
+    - "rede": motivo OU tag de conexão (`_REDE_MOTIVOS` / `_REDE_TAGS`);
+    - "todos": sem recorte de foco — aí sim `departamento_id` (filtro da página)
+      é aplicado; nos demais focos ele não vale, pois o próprio foco já define o
+      recorte.
+    """
+    if foco == "suporte":
+        return qs.filter(departamento__nome__iexact="Suporte")
+    if foco == "comercial":
+        return qs.filter(departamento__nome__iexact="Comercial")
+    if foco == "rede":
+        return qs.filter(
+            Q(motivos__has_any_keys=_REDE_MOTIVOS) | Q(tags__has_any_keys=_REDE_TAGS)
+        )
+    if departamento_id is not None:
+        return qs.filter(departamento_id=departamento_id)
+    return qs
+
+
 @allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
 def compute_atendimento_horario(
     organization: Organization,
@@ -5392,17 +5421,7 @@ def compute_atendimento_horario(
         opened_at__lt=display_end + timedelta(hours=1),
         opened_at__isnull=False,
     )
-    if foco == "suporte":
-        qs = qs.filter(departamento__nome__iexact="Suporte")
-    elif foco == "comercial":
-        qs = qs.filter(departamento__nome__iexact="Comercial")
-    elif foco == "rede":
-        qs = qs.filter(
-            Q(motivos__has_any_keys=_REDE_MOTIVOS)
-            | Q(tags__has_any_keys=_REDE_TAGS)
-        )
-    elif departamento_id is not None:
-        qs = qs.filter(departamento_id=departamento_id)
+    qs = atendimento_foco_queryset(qs, foco, departamento_id)
 
     # Contagem por hora (no fuso local) — chave = datetime truncado na hora.
     hourly_rows = (
@@ -5567,6 +5586,89 @@ def compute_atendimento_horario(
         "departamentos": departamentos,
         "selected_departamento_id": departamento_id,
         "selected_departamento_nome": selected_nome,
+    }
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_hora(
+    organization: Organization,
+    *,
+    hour_start: datetime,
+    foco: str = "suporte",
+    departamento_id: int | None = None,
+) -> dict[str, Any]:
+    """Atendimentos abertos dentro de uma hora do gráfico horário (#76).
+
+    Janela `[hour_start, hour_start + 1h)` no fuso `_ATENDIMENTO_TZ` — mesma
+    truncagem do gráfico, então um atendimento aberto exatamente em `hour_start`
+    entra e um aberto em `hour_start + 1h` não.
+
+    O recorte de `foco`/`departamento` é o mesmo do gráfico
+    (`atendimento_foco_queryset`), pra `total` bater com o ponto clicado.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento, Departamento
+
+    if foco not in _HORARIO_FOCOS:
+        foco = "suporte"
+
+    start = timezone.localtime(hour_start, _ATENDIMENTO_TZ).replace(
+        minute=0, second=0, microsecond=0
+    )
+    end = start + timedelta(hours=1)
+
+    qs = Atendimento.objects.filter(
+        organization=organization,
+        opened_at__gte=start,
+        opened_at__lt=end,
+    )
+    qs = atendimento_foco_queryset(qs, foco, departamento_id)
+
+    rows: list[dict[str, Any]] = []
+    for at in (
+        qs.select_related("departamento", "customer").order_by("opened_at", "id")
+    ):
+        opened_local = timezone.localtime(at.opened_at, _ATENDIMENTO_TZ)
+        # Categorias = motivos + tags, sem repetir e preservando a ordem.
+        categorias: list[str] = []
+        for c in list(at.motivos or []) + list(at.tags or []):
+            if c and c not in categorias:
+                categorias.append(c)
+        rows.append(
+            {
+                "atendimento_id": at.id,
+                "customer_id": at.customer_id,
+                "customer_name": at.customer_name or "—",
+                "customer_document": at.customer_document,
+                "opened_at": opened_local,
+                "opened_at_str": opened_local.strftime("%d/%m %H:%M"),
+                "atendente_nome": at.atendente_nome or "—",
+                "departamento_nome": at.departamento.nome if at.departamento else "",
+                "categorias": categorias,
+                "protocol": at.protocol,
+                "status_label": at.get_status_display(),
+            }
+        )
+
+    departamento_nome = None
+    if departamento_id is not None:
+        departamento_nome = (
+            Departamento.objects.filter(organization=organization, id=departamento_id)
+            .values_list("nome", flat=True)
+            .first()
+        )
+
+    return {
+        "hour_start": start,
+        "hour_end": end,
+        "hour_label": (
+            f"{start.strftime('%H:%M')} e {end.strftime('%H:%M')} "
+            f"de {start.strftime('%d/%m/%Y')}"
+        ),
+        "foco": foco,
+        "departamento_id": departamento_id,
+        "departamento_nome": departamento_nome,
+        "total": len(rows),
+        "rows": rows,
     }
 
 
