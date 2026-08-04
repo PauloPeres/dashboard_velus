@@ -144,3 +144,7 @@ output/
 tmp/
 *.tmp
 *.bak
+
+# Artefatos locais que nunca devem ir pro repo (público)
+_mobile_shots/
+plano_de_acao_custos.md
