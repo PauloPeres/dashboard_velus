@@ -130,6 +130,119 @@
     <span class="text-gray-400">{{ horario.total_janela|intcomma }} atendimentos · {{ period_label }}</span>
   </div>
   <div id="horario-chart" style="height:360px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+
+  <!-- Eventos de rede registrados a mão (#78) -->
+  <div class="mt-5 pt-4 border-t border-gray-100">
+    <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+      <h3 class="text-sm font-semibold text-gray-700">Eventos no período</h3>
+      <span class="text-xs text-gray-400">
+        Rompimento, manutenção, queda de link ou atualização registrados à mão — aparecem como faixa (com fim) ou linha tracejada (pontual) sobre o gráfico.
+      </span>
+    </div>
+
+    {% if evento_erro %}
+    <p class="text-xs text-red-600 mb-2">Não consegui salvar: confira título, início e fim (o fim não pode ser antes do início).</p>
+    {% endif %}
+
+    {% if eventos_rede %}
+    <ul class="divide-y divide-gray-100 text-sm mb-3">
+      {% for e in eventos_rede %}
+      <li class="py-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full" style="background-color: {{ e.cor }}"></span>
+          <span class="font-medium text-gray-800">{{ e.titulo }}</span>
+          <span class="text-xs text-gray-500">{{ e.tipo_label }}</span>
+          <span class="text-xs text-gray-400">
+            {{ e.started_at_str }}{% if e.ended_at_str %} → {{ e.ended_at_str }}{% else %} · pontual{% endif %}
+          </span>
+          {% if pode_editar_eventos %}
+          <span class="ml-auto flex items-center gap-2">
+            <a href="#evento-{{ e.id }}" class="text-xs text-blue-600 hover:underline">editar</a>
+            <form method="post" action="{% url 'dashboards:evento_rede_editar' e.id %}">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="delete">
+              <input type="hidden" name="q" value="{{ evento_voltar_query }}">
+              <button type="submit" class="text-xs text-red-600 hover:underline">excluir</button>
+            </form>
+          </span>
+          {% endif %}
+        </div>
+        {% if e.descricao %}<p class="text-xs text-gray-500 mt-1">{{ e.descricao }}</p>{% endif %}
+        {% if pode_editar_eventos %}
+        <details id="evento-{{ e.id }}" class="mt-2">
+          <summary class="text-xs text-gray-500 cursor-pointer">Editar este evento</summary>
+          <form method="post" action="{% url 'dashboards:evento_rede_editar' e.id %}" class="mt-2 grid gap-2 sm:grid-cols-5 items-end">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="update">
+            <input type="hidden" name="q" value="{{ evento_voltar_query }}">
+            <label class="text-xs text-gray-500 sm:col-span-1">Tipo
+              <select name="tipo" class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+                {% for value, label in evento_tipos %}
+                <option value="{{ value }}" {% if value == e.tipo %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="text-xs text-gray-500 sm:col-span-2">Título
+              <input type="text" name="titulo" value="{{ e.titulo }}" required maxlength="255"
+                     class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+            </label>
+            <label class="text-xs text-gray-500">Início
+              <input type="datetime-local" name="started_at" value="{{ e.started_at_input }}" required
+                     class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+            </label>
+            <label class="text-xs text-gray-500">Fim (opcional)
+              <input type="datetime-local" name="ended_at" value="{{ e.ended_at_input }}"
+                     class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+            </label>
+            <label class="text-xs text-gray-500 sm:col-span-4">Descrição
+              <input type="text" name="descricao" value="{{ e.descricao }}"
+                     class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+            </label>
+            <button type="submit" class="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">Salvar</button>
+          </form>
+        </details>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-xs text-gray-400 mb-3">Nenhum evento de rede registrado nesta janela.</p>
+    {% endif %}
+
+    {% if pode_editar_eventos %}
+    <details>
+      <summary class="text-sm text-blue-600 cursor-pointer font-medium">Registrar evento</summary>
+      <form method="post" action="{% url 'dashboards:evento_rede_novo' %}" class="mt-3 grid gap-2 sm:grid-cols-5 items-end">
+        {% csrf_token %}
+        <input type="hidden" name="q" value="{{ evento_voltar_query }}">
+        <label class="text-xs text-gray-500">Tipo
+          <select name="tipo" class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+            {% for value, label in evento_tipos %}
+            <option value="{{ value }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="text-xs text-gray-500 sm:col-span-2">Título
+          <input type="text" name="titulo" required maxlength="255" placeholder="Rompimento troncal bairro X"
+                 class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+        </label>
+        <label class="text-xs text-gray-500">Início
+          <input type="datetime-local" name="started_at" value="{{ evento_default_inicio }}" required
+                 class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+        </label>
+        <label class="text-xs text-gray-500">Fim (opcional)
+          <input type="datetime-local" name="ended_at"
+                 class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+        </label>
+        <label class="text-xs text-gray-500 sm:col-span-4">Descrição
+          <input type="text" name="descricao" placeholder="O que aconteceu, o que foi feito…"
+                 class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+        </label>
+        <button type="submit" class="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">Salvar evento</button>
+      </form>
+    </details>
+    {% endif %}
+  </div>
 </div>
 
 <!-- Gráfico 1: Motivos ao longo do tempo -->

@@ -1902,12 +1902,85 @@ def atendimento_conversao_bars(
     return _to_json(fig)
 
 
-def atendimento_horario_sazonal(d: dict[str, Any]) -> str:
+def _rgba(hex_color: str, alpha: float) -> str:
+    """`#rrggbb` + alpha -> `rgba(r,g,b,a)` (Plotly não aceita hex com alpha)."""
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _evento_rede_shapes(
+    labels: list[str], slots: list[str], eventos: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Shapes + anotações dos eventos de rede (#78) no eixo horário.
+
+    O eixo X do gráfico é **categórico**: cada ponto é o rótulo de exibição
+    ("%d/%m %Hh"), não um datetime — então uma shape só cai no lugar certo se
+    `x0`/`x1` forem exatamente rótulos existentes (é o que os marcadores de
+    vencimento já fazem). A ponte é o `slots` (#77): mesma lista, mesma ordem,
+    em ISO local. Cada evento chega com `slot_start`/`slot_end` já recortados na
+    janela e truncados na hora; aqui é só `slot -> índice -> label`.
+
+    Faixa (`rect`) quando o evento cobre horas diferentes; linha tracejada quando
+    é pontual — ou quando começa e termina dentro da MESMA hora, porque num eixo
+    categórico `x0 == x1` desenharia um retângulo de largura zero (invisível).
+    """
+    idx = {s: i for i, s in enumerate(slots)}
+    shapes: list[dict[str, Any]] = []
+    annotations: list[dict[str, Any]] = []
+    for ev in eventos:
+        i0 = idx.get(ev.get("slot_start", ""))
+        if i0 is None:
+            continue
+        i1 = idx.get(ev.get("slot_end", ""), i0)
+        cor = ev.get("cor") or "#7c3aed"
+        titulo = ev.get("titulo") or ev.get("tipo_label") or "Evento"
+        if not ev.get("pontual") and i1 > i0:
+            shapes.append(
+                {
+                    "type": "rect", "xref": "x", "yref": "paper",
+                    "x0": labels[i0], "x1": labels[i1], "y0": 0, "y1": 1,
+                    "fillcolor": _rgba(cor, 0.14),
+                    "line": {"color": _rgba(cor, 0.45), "width": 1},
+                    "layer": "below",
+                }
+            )
+        else:
+            shapes.append(
+                {
+                    "type": "line", "xref": "x", "yref": "paper",
+                    "x0": labels[i0], "x1": labels[i0], "y0": 0, "y1": 1,
+                    "line": {"color": cor, "width": 2, "dash": "dash"},
+                }
+            )
+        annotations.append(
+            {
+                "x": labels[i0], "xref": "x", "y": 1.0, "yref": "paper",
+                "text": titulo, "showarrow": False,
+                "xanchor": "left", "yanchor": "bottom",
+                "font": {"size": 10, "color": cor},
+                "hovertext": (
+                    f"{ev.get('tipo_label', '')} · {ev.get('started_at_str', '')}"
+                    + (f" → {ev['ended_at_str']}" if ev.get("ended_at_str") else "")
+                    + (f"<br>{ev['descricao']}" if ev.get("descricao") else "")
+                ),
+            }
+        )
+    return shapes, annotations
+
+
+def atendimento_horario_sazonal(
+    d: dict[str, Any], eventos: list[dict[str, Any]] | None = None
+) -> str:
     """Linha horária — atendimentos abertos vs banda esperada (baseline sazonal).
 
     Banda cinza = esperado (média ± k·desvio do slot dia-da-semana×hora);
     linha azul = real; pontos vermelhos = anomalias (pico acima da banda);
     linhas verticais tracejadas = dias com vencimento de fatura.
+
+    `eventos` (#78): eventos de rede registrados a mão que intersectam a janela,
+    já carregados pela view (a função de chart NÃO consulta o banco). Cada um
+    vira faixa vertical (com fim) ou linha tracejada (pontual), na cor do tipo.
     """
     labels = d["labels"]
     # ISO local de cada slot — viaja como `customdata` nos traces clicáveis pra
@@ -1998,12 +2071,18 @@ def atendimento_horario_sazonal(d: dict[str, Any]) -> str:
                     "line": {"color": "rgba(245,158,11,0.4)", "width": 1, "dash": "dash"},
                 }
             )
+    # Eventos de rede registrados a mão (#78) — faixa/linha + título no topo.
+    evento_shapes, evento_annotations = _evento_rede_shapes(
+        labels, slots, eventos or []
+    )
+    shapes.extend(evento_shapes)
     fig.update_layout(
         **{
             **_LAYOUT_BASE,
             "shapes": shapes,
+            "annotations": evento_annotations,
             "hovermode": "x unified",
-            "margin": {"l": 50, "r": 20, "t": 10, "b": 60},
+            "margin": {"l": 50, "r": 20, "t": 24 if evento_annotations else 10, "b": 60},
             "legend": {"orientation": "h", "y": -0.25, "font": {"size": 11}},
             "xaxis": {"tickangle": -45, "nticks": 24},
             "yaxis": {"title": "Atendimentos/hora", "rangemode": "tozero"},
