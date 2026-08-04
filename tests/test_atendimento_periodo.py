@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from django.test import RequestFactory
+from django.urls import reverse
 from django.utils import timezone
 
 from apps.analytics.application.aggregations import compute_atendimento_horario
@@ -280,6 +281,27 @@ class TestPeriodoNaView:
         assert resp.status_code == 200
         assert resp.context["period"].key == "30d"
         assert resp.context["period_warning"].encode() in resp.content
+
+    def test_sem_seletor_global_de_periodo_na_sidebar(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        """A página tem período próprio — o seletor global da sidebar sai (#75).
+
+        Dois controles de período na mesma tela seriam contraditórios (e o da
+        sidebar, que escreve ?months=, viraria controle morto).
+        """
+        client.force_login(user_a)
+        resp = client.get(URL)
+        assert resp.status_code == 200
+        assert b"setPeriodMonths(" not in resp.content
+
+    def test_outras_paginas_mantem_o_seletor_global(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(reverse("dashboards:executive"))
+        assert resp.status_code == 200
+        assert b"setPeriodMonths(" in resp.content
 
     def test_url_legada_continua_abrindo(
         self, client: Any, user_a: User, organization_a: Organization

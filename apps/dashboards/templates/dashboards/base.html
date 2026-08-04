@@ -207,7 +207,15 @@
             {% endwith %}
         </nav>
 
-        <!-- Seletor de período -->
+        <!-- Seletor de período (páginas com período próprio esvaziam o bloco) -->
+        {% block period_selector %}
+        <script>
+        function setPeriodMonths(months) {
+            var url = new URL(window.location.href);
+            url.searchParams.set("months", months);
+            window.location.href = url.toString();
+        }
+        </script>
         <div class="px-3 pt-3 pb-3 border-t border-gray-100">
             <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Período</label>
             <div class="relative">
@@ -229,6 +237,7 @@
                 </span>
             </div>
         </div>
+        {% endblock %}
 
         <!-- Usuário -->
         <div class="px-3 py-3 border-t border-gray-100">
@@ -367,12 +376,6 @@ function renderChart(divId, dataId) {
         el.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-red-400">Erro ao carregar gráfico</div>';
         el.classList.remove("animate-pulse", "bg-gray-50");
     }
-}
-
-function setPeriodMonths(months) {
-    var url = new URL(window.location.href);
-    url.searchParams.set("months", months);
-    window.location.href = url.toString();
 }
 </script>
 {% block scripts %}{% endblock %}
