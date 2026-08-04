@@ -153,8 +153,10 @@
     <tbody class="divide-y divide-gray-100">
       {% for r in rows %}
       <tr class="hover:bg-blue-50">
-        {# Link só quando o grupo de acesso libera a aba de destino (RBAC #65) —
-           senão o clique cairia num redirect/403 do PageAccessMiddleware. #}
+        {% comment %}
+        Link só quando o grupo de acesso libera a aba de destino (RBAC #65) —
+        senão o clique cairia num redirect/403 do PageAccessMiddleware.
+        {% endcomment %}
         <td class="px-4 py-3 font-medium text-gray-900 truncate max-w-[220px]">
           {% if r.customer_id %}
             {% if allowed_all or 'customers' in allowed_pages %}
