@@ -228,8 +228,14 @@ AUTH_PASSWORD_VALIDATORS = [
 # =============================================================================
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_AGE = 60 * 60 * 24  # 1 dia
-SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+# Janela deslizante: a sessão vale N dias (default 3) e `SAVE_EVERY_REQUEST`
+# renova a expiração a cada request. Quem usa o dashboard todo dia nunca é
+# deslogado; quem some por mais de N dias precisa logar de novo. Antes era
+# 1 dia + expirar ao fechar o navegador, o que forçava login diário sem ganho
+# real de segurança num dashboard read-only de estratégia.
+SESSION_COOKIE_AGE = 60 * 60 * 24 * env.SESSION_COOKIE_AGE_DAYS
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+SESSION_SAVE_EVERY_REQUEST = True
 
 CSRF_COOKIE_HTTPONLY = False  # precisa ser False pra HTMX ler do cookie
 CSRF_COOKIE_SAMESITE = "Lax"
