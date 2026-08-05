@@ -1,0 +1,35 @@
+{% comment %}
+Barra de período (#86): presets + personalizado + aviso.
+Contexto vem de `apps.dashboards.period.period_context` (context processor).
+Os params extras da página (foco, g, departamento, motivo, tag…) são propagados
+via `period_extra_params` — nada de hidden input hardcoded por template.
+{% endcomment %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
+  <div class="flex flex-wrap items-center gap-3">
+    <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Período</span>
+    <div class="inline-flex flex-wrap rounded-lg border border-gray-200 bg-white p-0.5">
+      {% for p in period_presets %}
+      <button onclick="setPeriodo('{{ p.key }}')"
+        class="px-2.5 py-1 text-xs rounded-md {% if p.active %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">{{ p.name }}</button>
+      {% endfor %}
+    </div>
+
+    {% if period_allow_custom %}
+    <form method="get" class="flex flex-wrap items-center gap-2">
+      {% for name, value in period_extra_params.items %}
+      <input type="hidden" name="{{ name }}" value="{{ value }}">
+      {% endfor %}
+      <label class="text-xs text-gray-500" for="periodo-de">Personalizado:</label>
+      <input type="date" id="periodo-de" name="de" value="{{ period_de }}"
+             class="text-sm border border-gray-200 rounded-lg px-2 py-1 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+      <span class="text-xs text-gray-400">até</span>
+      <input type="date" id="periodo-ate" name="ate" value="{{ period_ate }}"
+             class="text-sm border border-gray-200 rounded-lg px-2 py-1 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+      <button type="submit" class="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">Aplicar</button>
+    </form>
+    {% endif %}
+  </div>
+  {% if period_warning %}
+  <p class="mt-2 text-xs text-amber-600">{{ period_warning }}</p>
+  {% endif %}
+</div>

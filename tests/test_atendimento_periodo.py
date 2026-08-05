@@ -295,13 +295,20 @@ class TestPeriodoNaView:
         assert resp.status_code == 200
         assert b"setPeriodMonths(" not in resp.content
 
-    def test_outras_paginas_mantem_o_seletor_global(
+    def test_outras_paginas_usam_a_mesma_barra(
         self, client: Any, user_a: User, organization_a: Organization
     ) -> None:
+        """#86: o `<select>` da sidebar saiu; todas as páginas usam a barra nova.
+
+        O Executivo é página de série mensal — mesma barra, presets em meses e
+        default de 12 meses (o que o `?months=` fazia antes).
+        """
         client.force_login(user_a)
         resp = client.get(reverse("dashboards:executive"))
         assert resp.status_code == 200
-        assert b"setPeriodMonths(" in resp.content
+        assert b"setPeriodMonths(" not in resp.content
+        assert b'onclick="setPeriodo(' in resp.content
+        assert resp.context["period"].key == "12m"
 
     def test_url_legada_continua_abrindo(
         self, client: Any, user_a: User, organization_a: Organization

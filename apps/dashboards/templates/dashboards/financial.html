@@ -10,6 +10,8 @@
   <a href="{% url 'dashboards:revenue' %}" class="text-xs text-blue-600 hover:underline">Ver receita →</a>
 </div>
 
+{% include "dashboards/_period_header.html" %}
+
 <!-- KPI Cards — linha 1: totais -->
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Estoque Total</h2>
 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">

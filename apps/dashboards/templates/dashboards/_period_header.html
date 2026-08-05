@@ -1,0 +1,8 @@
+{% comment %}
+Cabeçalho de período (#86): badge do período + barra de presets, nesta ordem.
+Vai logo depois do título/subtítulo da página — o badge abaixo do título é o
+ponto da issue, e a barra vem em seguida. Páginas com layout próprio (Tendências)
+incluem os dois partials na mão, no lugar que preferirem.
+{% endcomment %}
+<div class="mb-3">{% include "dashboards/_period_badge.html" %}</div>
+{% include "dashboards/_period_filter.html" %}

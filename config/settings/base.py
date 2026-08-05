@@ -87,6 +87,7 @@ MIDDLEWARE = [
     "allauth.account.middleware.AccountMiddleware",
     "apps.shared.middleware.TenantMiddleware",  # injeta organization no contextvar
     "apps.dashboards.middleware.PageAccessMiddleware",  # RBAC por grupo (#65)
+    "apps.dashboards.middleware.PeriodCookieMiddleware",  # persiste ?periodo= (#86)
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "csp.middleware.CSPMiddleware",
