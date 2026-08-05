@@ -1875,6 +1875,36 @@ def atendimento_categoria_trend(
     return _to_json(fig)
 
 
+def atendimento_dia_por_hora(slots: list[dict[str, Any]]) -> str:
+    """Barras por hora do dia (#88) — clique volta pro recorte daquela hora.
+
+    O ISO local do slot viaja no `customdata`, nunca no rótulo do eixo: o rótulo
+    é só "14h" e mudaria com a formatação, enquanto o `customdata` é o que a URL
+    `?h=` espera (mesmo contrato do gráfico horário de Tendências, #77).
+    """
+    labels = [s["label"] for s in slots]
+    values = [s["count"] for s in slots]
+    params = [s["param"] for s in slots]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=labels, y=values,
+                customdata=params,
+                marker_color="#6366f1",
+                hovertemplate="<b>%{x}</b><br>%{y:,} atendimentos<extra></extra>",
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "bargap": 0.2,
+            "margin": {"l": 40, "r": 16, "t": 10, "b": 36},
+            "xaxis": {"tickfont": {"size": 10}},
+            "yaxis": {"rangemode": "tozero"},
+        },
+    )
+    return _to_json(fig)
+
+
 def atendimento_conversao_bars(
     rows: list[dict[str, Any]], *, field: str, color: str
 ) -> str:

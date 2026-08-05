@@ -5884,6 +5884,62 @@ def compute_atendimento_lista(
 
 
 @allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_lista_por_hora(
+    organization: Organization,
+    *,
+    start: datetime,
+    end: datetime,
+    foco: str = "todos",
+    departamento_id: int | None = None,
+    motivo: str | None = None,
+    tag: str | None = None,
+) -> list[dict[str, Any]]:
+    """Contagem por hora local do MESMO recorte da lista (#88).
+
+    Alimenta o mini-gráfico do recorte de dia, onde cada barra volta pro recorte
+    daquela hora (`?h=`). O recorte sai de `atendimento_lista_queryset` — o mesmo
+    queryset que produz o `total` da tela —, então **a soma das barras é, por
+    construção, igual ao total do dia**: é a mesma linha do banco contada uma vez
+    em cada agrupamento.
+
+    Os slots são gerados por hora-de-parede a partir de `start` até `end`
+    (24 num dia normal), então uma hora vazia aparece como zero em vez de sumir.
+    """
+    qs = atendimento_lista_queryset(
+        organization,
+        start=start,
+        end=end,
+        foco=foco,
+        departamento_id=departamento_id,
+        motivo=motivo,
+        tag=tag,
+    )
+    counts: dict[datetime, int] = {}
+    rows = (
+        qs.annotate(h=TruncHour("opened_at", tzinfo=_ATENDIMENTO_TZ))
+        .values("h")
+        .annotate(c=Count("id"))
+    )
+    for row in rows:
+        if row["h"] is not None:
+            counts[timezone.localtime(row["h"], _ATENDIMENTO_TZ)] = row["c"]
+
+    slots: list[dict[str, Any]] = []
+    slot = timezone.localtime(start, _ATENDIMENTO_TZ).replace(
+        minute=0, second=0, microsecond=0
+    )
+    while slot < end:
+        slots.append({
+            "slot": slot,
+            "param": slot.strftime(_ATENDIMENTO_SLOT_FMT),
+            "label": slot.strftime("%Hh"),
+            "count": counts.get(slot, 0),
+        })
+        slot += timedelta(hours=1)
+    return slots
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
 def compute_atendimento_hora(
     organization: Organization,
     *,

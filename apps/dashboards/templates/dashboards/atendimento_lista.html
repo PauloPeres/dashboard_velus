@@ -15,6 +15,17 @@ recorte, e o período viaja apenas pro link de voltar.
   <div>
     <a href="{{ voltar_url }}?{{ voltar_query }}"
        class="text-xs text-blue-600 hover:underline">&larr; Voltar para {{ voltar_label }}</a>
+    {% comment %}
+    Breadcrumb do dia (#88): quando a tela do dia veio de uma hora, o caminho de
+    volta pra ELA fica explícito — e leva junto o período e os filtros da URL.
+    {% endcomment %}
+    {% if lista_kind == 'dia' and hora_origem_query %}
+    <p class="text-xs text-gray-500 mt-1">
+      <span class="text-gray-700 font-medium">Dia {{ dia_label }}</span>
+      <span class="text-gray-300">&rsaquo;</span>
+      <a href="?{{ hora_origem_query }}" class="text-blue-600 hover:underline">voltar para {{ hora_origem_label }}</a>
+    </p>
+    {% endif %}
     <h1 class="text-2xl font-bold text-gray-900 mt-1">
       {{ total|intcomma }} atendimento{{ total|pluralize }} {{ recorte_label }}
     </h1>
@@ -35,13 +46,26 @@ recorte, e o período viaja apenas pro link de voltar.
 
 {% if mostrar_periodo %}{% include "dashboards/_period_filter.html" %}{% endif %}
 
-{% if lista_kind == 'hora' %}
-<!-- Navegação hora a hora (#77) -->
+{% comment %}
+Navegação do recorte: hora a hora (#77) ou dia a dia (#88) — mesmo bloco, só
+muda o passo (a view preenche `prev_*`/`next_*` conforme o recorte). No meio, o
+atalho que troca de nível: da hora sobe pro dia inteiro em 1 clique.
+{% endcomment %}
+{% if lista_kind != 'periodo' %}
 <div class="flex items-center justify-between gap-2 mb-4">
   <a href="?{{ prev_query }}"
      class="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50">
     &larr; {{ prev_label }}
   </a>
+  {% if lista_kind == 'hora' %}
+  <a href="?{{ dia_query }}"
+     class="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 font-medium hover:bg-blue-100">
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3M3 11h18M5 5h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z"/>
+    </svg>
+    Ver o dia todo ({{ dia_label }})
+  </a>
+  {% endif %}
   {% if next_is_future %}
   <span class="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-gray-100 bg-gray-50 text-gray-300">
     {{ next_label }} &rarr;
@@ -142,6 +166,17 @@ recorte, e o período viaja apenas pro link de voltar.
   </div>
 </div>
 
+{% if lista_kind == 'dia' %}
+<!-- Mini-gráfico por hora (#88) — clique abre o recorte daquela hora -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <p class="text-xs font-medium text-gray-500 uppercase">Por hora do dia</p>
+  <p class="text-[11px] text-gray-400 mt-0.5">
+    Clique numa barra pra abrir o recorte daquela hora. A soma das barras é o total do dia.
+  </p>
+  <div id="horas-chart" style="height:200px;" class="mt-3 animate-pulse bg-gray-50 rounded-lg"></div>
+</div>
+{% endif %}
+
 <!-- Tabela: atendimentos do recorte -->
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
   <div class="overflow-x-auto">
@@ -226,4 +261,39 @@ truncava em 500 linhas sem dizer quantas ficaram de fora. O CSV leva tudo.
   </div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% if lista_kind == 'dia' %}
+{{ horas_json|json_script:"horas-data" }}
+<script>
+  // Drill-down dia → hora (#88), mesmo contrato do gráfico de Tendências (#77):
+  // o ISO local do slot vem do `customdata` do ponto, nunca do rótulo visível.
+  var HORA_URL = "{% url 'dashboards:atendimento_lista' %}";
+  var HORA_QUERY = "{{ hora_drill_query|escapejs }}";
+
+  function bindHorasDrilldown() {
+    var el = document.getElementById("horas-chart");
+    if (!el || !el.on) return;
+    el.on("plotly_click", function (ev) {
+      var pts = ev.points || [];
+      var slot = null;
+      for (var i = 0; i < pts.length && !slot; i++) {
+        var cd = pts[i].customdata;
+        if (cd) slot = Array.isArray(cd) ? cd[0] : cd;
+      }
+      if (!slot) return;
+      window.location.href = HORA_URL + "?h=" + encodeURIComponent(slot) + "&" + HORA_QUERY;
+    });
+    el.querySelectorAll(".nsewdrag").forEach(function (d) {
+      d.style.cursor = "pointer";
+    });
+  }
+
+  var horasPlot = renderChart("horas-chart", "horas-data");
+  if (horasPlot && horasPlot.then) {
+    horasPlot.then(bindHorasDrilldown);
+  }
+</script>
+{% endif %}
 {% endblock %}
