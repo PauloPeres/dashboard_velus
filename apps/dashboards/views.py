@@ -1331,22 +1331,49 @@ def os_dashboard(request: HttpRequest) -> HttpResponse:
 @login_required
 @never_cache
 def atendimento(request: HttpRequest) -> HttpResponse:
-    """Triagem de atendimentos Opa! Suite por departamento (issue #48)."""
+    """Triagem de atendimentos Opa! Suite por departamento (issue #48).
+
+    Período em DIAS (#89): a página saiu do grupo de presets mensais e passou a
+    usar o mesmo componente das telas de atendimento (Hoje/Ontem/7d/…/12m +
+    personalizado) — "só o dia de hoje" era impossível com `?months=N`. A URL
+    antiga `?months=N` continua valendo: `get_period` a converte em `Nm`.
+
+    Os gráficos de departamento e de motivos são drill-downs (#89): o clique cai
+    em `atendimento_lista` com o MESMO período e o identificador da barra, e a
+    contagem bate porque as duas pontas usam `atendimento_lista_queryset`.
+    """
     org_or_redirect = _require_org(request)
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    period = _get_period(request)
 
     departamento_id: int | None = None
     raw_dep = request.GET.get("departamento", "")
     if raw_dep.isdigit():
         departamento_id = int(raw_dep)
 
+    # O form de período personalizado tem que devolver o mesmo recorte (#86).
+    set_period_extra_params(request, {"departamento": departamento_id})
+
     data = compute_atendimento_triagem(
-        org, months=months, departamento_id=departamento_id
+        org, start=period.start, end=period.end, departamento_id=departamento_id
     )
-    deflection = compute_bot_deflection_trend(org, months=months)
+    deflection = compute_bot_deflection_trend(
+        org, start=period.start, end=period.end
+    )
+
+    # Querystring que o drill-down leva pra lista: período + `foco` (esta página
+    # não tem recorte de foco, então é sempre "todos" — mas explícito, porque o
+    # default da lista pode mudar) + a origem, pro botão "voltar" trazer de volta
+    # a esta tela com o mesmo período.
+    drill_query = f"{period.query}&foco=todos&origem=atendimento"
+    # No gráfico de motivos o departamento não vem da barra: quando a página está
+    # filtrada, ele tem que viajar junto, senão a lista abriria mais gente do que
+    # a barra contou.
+    motivo_drill_query = drill_query
+    if departamento_id is not None:
+        motivo_drill_query += f"&departamento={departamento_id}"
 
     return render(
         request,
@@ -1354,11 +1381,13 @@ def atendimento(request: HttpRequest) -> HttpResponse:
         {
             **data,
             **deflection,
+            "drill_query": drill_query,
+            "motivo_drill_query": motivo_drill_query,
             "volume_chart_json": charts.atendimento_volume_by_departamento(
                 data["by_departamento"]
             ),
             "status_chart_json": charts.atendimento_status_pie(data["status_dist"]),
-            "trend_chart_json": charts.atendimento_monthly_trend(data["trend"]),
+            "trend_chart_json": charts.atendimento_volume_trend(data["trend"]),
             "motivos_chart_json": charts.atendimento_top_motivos(data["top_motivos"]),
             "deflection_chart_json": charts.bot_deflection_trend(
                 deflection["deflection_trend"]

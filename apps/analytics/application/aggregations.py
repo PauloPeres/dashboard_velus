@@ -4921,32 +4921,71 @@ _ATENDIMENTO_STATUS_LABELS = {
 }
 
 
+# Cortes da granularidade da série temporal da triagem (#89) — ver
+# `triagem_trend_granularity`.
+_TRIAGEM_TREND_DIA_MAX_DIAS = 31
+_TRIAGEM_TREND_SEMANA_MAX_DIAS = 120
+_TRIAGEM_TREND_LABELS = {
+    "day": "dia a dia",
+    "week": "semana a semana",
+    "month": "mês a mês",
+}
+
+
+def triagem_trend_granularity(start: datetime, end: datetime) -> str:
+    """Granularidade da série temporal da triagem, derivada do tamanho da janela.
+
+    Regra (#89), pensada pra manter o gráfico entre ~10 e ~40 pontos em qualquer
+    preset do componente de período:
+
+    - até 31 dias  → **dia**    (Hoje, Ontem, 7d, 14d, 30d, 1 mês)
+    - até 120 dias → **semana** (3 meses; semana começa na segunda)
+    - acima disso  → **mês**    (6m, 12m, 24m)
+
+    Sem a regra, "Hoje" renderizaria um único ponto mensal e "12 meses" viraria
+    365 pontos diários ilegíveis.
+    """
+    span_days = (end.date() - start.date()).days + 1
+    if span_days <= _TRIAGEM_TREND_DIA_MAX_DIAS:
+        return "day"
+    if span_days <= _TRIAGEM_TREND_SEMANA_MAX_DIAS:
+        return "week"
+    return "month"
+
+
 @allow_cross_tenant(reason="aggregation read-only; org passada explicitamente")
 def compute_atendimento_triagem(
     organization: Organization,
     *,
-    months: int = 3,
+    start: datetime,
+    end: datetime,
     departamento_id: int | None = None,
 ) -> dict[str, Any]:
     """Triagem de atendimentos Opa! Suite por departamento (read-only, issue #48).
 
-    Janela = últimos `months` meses por `opened_at`. Filtro opcional por
+    Janela `[start, end]` por `opened_at`, com `end` **inclusivo** (é o último
+    instante do dia que o componente de período devolve). Filtro opcional por
     departamento. Retorna KPIs (volume, TMA, nota média, % ligados a cliente),
-    distribuição por status, top motivos, série mensal e o recorte por
+    distribuição por status, top motivos, série temporal e o recorte por
     departamento — tudo pronto pro template/charts.
+
+    Paridade com a lista (#89): a base sai de `atendimento_lista_queryset`, o
+    MESMO helper de recorte que a lista genérica (#87) usa, com `foco="todos"`.
+    Assim a altura da barra de um departamento/motivo é exatamente o total que a
+    lista mostra quando o usuário clica nela — não há dois caminhos de filtro.
     """
-    from apps.atendimento.infrastructure.models import Atendimento, Departamento
+    from apps.atendimento.infrastructure.models import Departamento
 
-    now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    # `atendimento_lista_queryset` trabalha com fim EXCLUSIVO; o período do
+    # componente (#86) termina no último instante do dia, daí o microssegundo —
+    # exatamente o que `_lista_recorte` faz do outro lado.
+    qs = atendimento_lista_queryset(
+        organization,
+        start=start,
+        end=end + timedelta(microseconds=1),
+        foco="todos",
+        departamento_id=departamento_id,
     )
-
-    qs = Atendimento.objects.filter(
-        organization=organization, opened_at__gte=window_start
-    )
-    if departamento_id is not None:
-        qs = qs.filter(departamento_id=departamento_id)
 
     # --- KPIs globais ---
     total = qs.count()
@@ -5016,33 +5055,41 @@ def compute_atendimento_triagem(
         )
 
     # --- Top motivos (JSONField list[str] desnormalizado em Python) ---
+    # `set(...)` por atendimento porque a lista filtra com `motivos__has_key`,
+    # que é presença: um motivo repetido no mesmo registro conta 1 dos dois
+    # lados. Sem isso a barra ficaria maior que o total da lista (#89).
     motivo_counter: Counter[str] = Counter()
     for motivos in qs.values_list("motivos", flat=True):
         if motivos:
-            motivo_counter.update(m for m in motivos if m)
+            motivo_counter.update({m for m in motivos if m})
     top_motivos = [
         {"motivo": m, "count": c} for m, c in motivo_counter.most_common(12)
     ]
 
-    # --- Tendência mensal (volume por mês de abertura) ---
+    # --- Série temporal (volume por bucket de abertura) ---
+    trend_granularity = triagem_trend_granularity(start, end)
     trend_qs = (
-        qs.annotate(m=TruncMonth("opened_at"))
-        .values("m")
+        qs.annotate(d=TruncDate("opened_at"))
+        .values("d")
         .annotate(count=Count("id"))
-        .order_by("m")
     )
-    trend_map = {r["m"].strftime("%Y-%m"): r["count"] for r in trend_qs if r["m"]}
+    by_bucket: Counter[date_cls] = Counter()
+    for r in trend_qs:
+        if r["d"]:
+            by_bucket[_bucket_start(r["d"], trend_granularity)] += r["count"]
+
     trend = []
-    for i in range(months - 1, -1, -1):
-        m_first = _first_of_month_n_ago(now.date(), i)
-        key = m_first.strftime("%Y-%m")
+    cur = _bucket_start(start.date(), trend_granularity)
+    last = end.date()
+    while cur <= last:
         trend.append(
             {
-                "month": key,
-                "label": m_first.strftime("%b/%y"),
-                "count": trend_map.get(key, 0),
+                "bucket": cur.isoformat(),
+                "label": _bucket_label(cur, trend_granularity),
+                "count": by_bucket.get(cur, 0),
             }
         )
+        cur = _next_bucket(cur, trend_granularity)
 
     # --- Lista de departamentos pro filtro ---
     departamentos = list(
@@ -5068,6 +5115,8 @@ def compute_atendimento_triagem(
         "by_departamento": by_departamento,
         "top_motivos": top_motivos,
         "trend": trend,
+        "trend_granularity": trend_granularity,
+        "trend_granularity_label": _TRIAGEM_TREND_LABELS[trend_granularity],
         "departamentos": departamentos,
         "selected_departamento_id": departamento_id,
         "selected_departamento_nome": selected_nome,
@@ -5078,21 +5127,25 @@ _TENDENCIA_GRANULARIDADES = ("week", "month")
 
 
 def _bucket_start(d: date_cls, granularity: str) -> date_cls:
-    """Início do bucket (segunda-feira p/ semana, dia 1 p/ mês) de uma data."""
+    """Início do bucket (o próprio dia, a segunda-feira ou o dia 1) de uma data."""
     if granularity == "month":
         return d.replace(day=1)
+    if granularity == "day":
+        return d
     return d - timedelta(days=d.weekday())  # segunda da semana
 
 
 def _next_bucket(d: date_cls, granularity: str) -> date_cls:
-    """Início do bucket seguinte (avança 1 semana ou 1 mês)."""
+    """Início do bucket seguinte (avança 1 dia, 1 semana ou 1 mês)."""
     if granularity == "month":
         return (d.replace(day=1) + relativedelta(months=1))
+    if granularity == "day":
+        return d + timedelta(days=1)
     return d + timedelta(days=7)
 
 
 def _bucket_label(d: date_cls, granularity: str) -> str:
-    """Rótulo do eixo: 'dd/mm' (semana começando na segunda) ou 'mmm/yy' (mês)."""
+    """Rótulo do eixo: 'mmm/yy' no mês, 'dd/mm' no dia e na semana (a segunda)."""
     if granularity == "month":
         return d.strftime("%b/%y")
     return d.strftime("%d/%m")
@@ -6267,7 +6320,11 @@ def compute_atendimento_conversao(
 
 @allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
 def compute_bot_deflection_trend(
-    organization: Organization, *, months: int = 3
+    organization: Organization,
+    *,
+    months: int = 3,
+    start: datetime | None = None,
+    end: datetime | None = None,
 ) -> dict[str, Any]:
     """Série diária: atendimentos resolvidos pelo bot (deflexão) vs encaminhados
     ao humano.
@@ -6283,16 +6340,26 @@ def compute_bot_deflection_trend(
     diária a partir do primeiro dia COM dado na janela — o nome do atendente só
     passou a ser capturado recentemente, então não há histórico confiável antes
     disso (por isso a série "começa de agora", sem backfill).
+
+    Janela (#89): `start`/`end` explícitos (o período da página, `end` inclusivo)
+    têm precedência — o card de deflexão precisa falar do MESMO período do resto
+    da tela. Sem eles cai no atalho antigo de "últimos N meses".
     """
     from apps.atendimento.infrastructure.models import Atendimento
 
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    if start is not None and end is not None:
+        window_start, window_end = start, end
+    else:
+        window_start = (now - relativedelta(months=months)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        window_end = now
     rows = (
         Atendimento.objects.filter(
-            organization=organization, opened_at__gte=window_start
+            organization=organization,
+            opened_at__gte=window_start,
+            opened_at__lte=window_end,
         )
         .annotate(d=TruncDate("opened_at"))
         .values("d", "atendente_nome")
@@ -6317,8 +6384,8 @@ def compute_bot_deflection_trend(
     trend: list[dict[str, Any]] = []
     if by_day:
         cur = min(by_day)
-        end = now.date()
-        while cur <= end:
+        last_day = timezone.localtime(window_end, _ATENDIMENTO_TZ).date()
+        while cur <= last_day:
             bot, human = by_day.get(cur, [0, 0])
             day_total = bot + human
             trend.append(
