@@ -54,12 +54,35 @@ _ROUTE_TO_KEY.update({
     ("dashboards", "atendimento_detail"): "conversas_ruins",
     ("dashboards", "atendimento_hora"): "atendimento_tendencias",
     # Lista genérica de atendimentos (#87) — mesma chave da tela da hora, que
-    # ela absorveu.
+    # ela absorveu. Ver `_ROUTE_EXTRA_KEYS`: o acesso a ela não é exclusivo dessa
+    # aba.
     ("dashboards", "atendimento_lista"): "atendimento_tendencias",
     # CRUD de eventos de rede (#78) mora na página de Tendências.
     ("dashboards", "evento_rede_novo"): "atendimento_tendencias",
     ("dashboards", "evento_rede_editar"): "atendimento_tendencias",
 })
+
+# Rotas que mais de uma aba pode abrir: basta ter QUALQUER uma das chaves.
+#
+# Existe por causa da lista genérica de atendimentos (#87/#89). Ela é o destino
+# dos drill-downs de DUAS abas — Tendências e Atendimento —, e a chave única
+# barrava quem só tinha "Atendimento": clicar numa barra de "Volume por
+# departamento" caía em negação de acesso.
+#
+# Descartadas as outras saídas:
+# - aba própria pra lista: ela não é uma aba (não entra no nav, não é um recorte
+#   de dados diferente) e obrigaria a mexer em todo grupo de acesso já criado;
+# - derivar a chave do `?origem=` da querystring: o parâmetro é do usuário, então
+#   qualquer um driblaria o RBAC trocando `origem=tendencias` por
+#   `origem=atendimento`. Autorização não pode sair de input do cliente.
+#
+# Conceder às duas abas é seguro porque a lista não mostra nada além do que as
+# duas telas de origem já mostram: os mesmos atendimentos da mesma org, só que
+# linha a linha.
+_ROUTE_EXTRA_KEYS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("dashboards", "atendimento_lista"): ("atendimento",),
+    ("dashboards", "atendimento_hora"): ("atendimento",),
+}
 
 
 # Rotas do namespace dashboards restritas ao OWNER (gestão de acesso).
@@ -71,6 +94,19 @@ def route_to_key(namespace: str | None, url_name: str | None) -> str | None:
     if not url_name:
         return None
     return _ROUTE_TO_KEY.get((namespace or "", url_name))
+
+
+def route_access_keys(namespace: str | None, url_name: str | None) -> tuple[str, ...]:
+    """Chaves que dão acesso à rota — ter QUALQUER uma basta (#89).
+
+    Separado de `route_to_key` de propósito: a linhagem de dados (#67) e o nav
+    querem a aba *canônica* da rota (uma só), enquanto o enforcement quer todas
+    as que autorizam. Vazio = rota fora do catálogo (não protegida).
+    """
+    key = route_to_key(namespace, url_name)
+    if key is None:
+        return ()
+    return (key, *_ROUTE_EXTRA_KEYS.get((namespace or "", url_name or ""), ()))
 
 
 def page_url(key: str) -> str | None:

@@ -17,7 +17,7 @@ from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect
 from django.urls import reverse
 
-from .pages import OWNER_ONLY, PAGE_KEYS, page_url, route_to_key
+from .pages import OWNER_ONLY, PAGE_KEYS, page_url, route_access_keys
 from .period import apply_period_cookie
 
 
@@ -70,12 +70,12 @@ class PageAccessMiddleware:
         if match.namespace == "dashboards" and match.url_name in OWNER_ONLY:
             return self._deny(membership)
 
-        key = route_to_key(match.namespace, match.url_name)
-        if key is None:
+        keys = route_access_keys(match.namespace, match.url_name)
+        if not keys:
             return None  # rota fora do catálogo — não é aba protegida (ex.: home)
 
         allowed = membership.allowed_page_keys()
-        if "*" in allowed or key in allowed:
+        if "*" in allowed or any(k in allowed for k in keys):
             return None
         return self._deny(membership)
 

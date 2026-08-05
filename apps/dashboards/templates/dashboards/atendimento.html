@@ -119,6 +119,9 @@
     </div>
     <p class="text-xs text-gray-400 mb-3">Atendimentos abertos por departamento no período</p>
     <div id="at-volume-chart" style="height:340px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+    <p class="text-xs text-gray-400 mt-2">
+      <strong class="text-gray-500">Clique numa barra pra ver os atendimentos daquele departamento.</strong>
+    </p>
   </div>
 
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
@@ -134,9 +137,9 @@
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-1">
-      <h2 class="text-sm font-semibold text-gray-700">Tendência mensal de atendimentos</h2>
+      <h2 class="text-sm font-semibold text-gray-700">Tendência de atendimentos</h2>
     </div>
-    <p class="text-xs text-gray-400 mb-3">Volume de atendimentos abertos mês a mês</p>
+    <p class="text-xs text-gray-400 mb-3">Volume de atendimentos abertos {{ trend_granularity_label }} (granularidade escolhida pelo tamanho do período)</p>
     <div id="at-trend-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
   </div>
 
@@ -146,6 +149,9 @@
     </div>
     <p class="text-xs text-gray-400 mb-3">Top 12 motivos classificados nos atendimentos do período</p>
     <div id="at-motivos-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+    <p class="text-xs text-gray-400 mt-2">
+      <strong class="text-gray-500">Clique numa barra pra ver os atendimentos com aquele motivo.</strong>
+    </p>
   </div>
 </div>
 
@@ -238,10 +244,54 @@
     }
     window.location.href = url.toString();
   }
-  renderChart("at-volume-chart", "at-volume-data");
+
+  // Drill-down (#89): clicar numa barra abre a lista genérica (#87) daquele
+  // recorte, levando o período vigente. O identificador (id do departamento /
+  // motivo exato) vem do `customdata` do ponto — NUNCA do rótulo do eixo, que é
+  // só exibição e pode ter acento, truncar ou repetir.
+  var LISTA_URL = "{% url 'dashboards:atendimento_lista' %}";
+  var DEP_QUERY = "{{ drill_query|escapejs }}";
+  var MOTIVO_QUERY = "{{ motivo_drill_query|escapejs }}";
+
+  function pontoCustomdata(ev) {
+    var pts = ev.points || [];
+    for (var i = 0; i < pts.length; i++) {
+      var cd = pts[i].customdata;
+      var v = Array.isArray(cd) ? cd[0] : cd;
+      if (v) return v;
+    }
+    return null;
+  }
+
+  function bindDrilldown(id, param, query) {
+    var el = document.getElementById(id);
+    if (!el || !el.on) return;
+    el.on("plotly_click", function (ev) {
+      var valor = pontoCustomdata(ev);
+      if (!valor) return;  // "Sem departamento" não tem id pra filtrar
+      window.location.href =
+        LISTA_URL + "?" + param + "=" + encodeURIComponent(valor) + "&" + query;
+    });
+    // Cursor de "clicável" sobre a área do plot (o padrão do Plotly é crosshair).
+    el.querySelectorAll(".nsewdrag").forEach(function (d) {
+      d.style.cursor = "pointer";
+    });
+  }
+
+  var volumePlot = renderChart("at-volume-chart", "at-volume-data");
+  if (volumePlot && volumePlot.then) {
+    volumePlot.then(function () {
+      bindDrilldown("at-volume-chart", "departamento", DEP_QUERY);
+    });
+  }
   renderChart("at-status-chart", "at-status-data");
   renderChart("at-trend-chart", "at-trend-data");
-  renderChart("at-motivos-chart", "at-motivos-data");
+  var motivosPlot = renderChart("at-motivos-chart", "at-motivos-data");
+  if (motivosPlot && motivosPlot.then) {
+    motivosPlot.then(function () {
+      bindDrilldown("at-motivos-chart", "motivo", MOTIVO_QUERY);
+    });
+  }
   renderChart("at-deflection-chart", "at-deflection-data");
 </script>
 {% endblock %}

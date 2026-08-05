@@ -1695,15 +1695,26 @@ def churn_risk_signal_bar(distribution: list[dict[str, Any]]) -> str:
 # Atendimento (Opa! Suite) — triagem por departamento (issue #48)
 # =============================================================================
 def atendimento_volume_by_departamento(rows: list[dict[str, Any]]) -> str:
-    """Barras horizontais — volume de atendimentos por departamento."""
+    """Barras horizontais — volume de atendimentos por departamento.
+
+    Clicável (#89): o **id** do departamento viaja no `customdata`, nunca o
+    rótulo do eixo — nome tem acento, muda no Opa! Suite e pode repetir. A barra
+    "Sem departamento" leva `customdata` vazio: não há id pra filtrar, então o
+    JS simplesmente não navega.
+    """
     ordered = sorted(rows, key=lambda r: r["total"])
     labels = [r["nome"] for r in ordered]
     values = [r["total"] for r in ordered]
+    dep_ids = [
+        "" if r.get("departamento_id") is None else str(r["departamento_id"])
+        for r in ordered
+    ]
     fig = go.Figure(
         data=[
             go.Bar(
                 x=values, y=labels, orientation="h",
                 marker_color="#6366f1",
+                customdata=dep_ids,
                 hovertemplate="<b>%{y}</b><br>%{x} atendimentos<extra></extra>",
             )
         ],
@@ -1738,8 +1749,12 @@ def atendimento_status_pie(data: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
-def atendimento_monthly_trend(series: list[dict[str, Any]]) -> str:
-    """Linha — atendimentos abertos por mês."""
+def atendimento_volume_trend(series: list[dict[str, Any]]) -> str:
+    """Linha — atendimentos abertos por bucket da série.
+
+    O bucket deixou de ser sempre o mês (#89): a granularidade vem da janela
+    (`triagem_trend_granularity`) e chega aqui já rotulada em `label`.
+    """
     labels = [s["label"] for s in series]
     values = [s["count"] for s in series]
     fig = go.Figure(
@@ -1793,7 +1808,12 @@ def bot_deflection_trend(series: list[dict[str, Any]]) -> str:
 
 
 def atendimento_top_motivos(rows: list[dict[str, Any]]) -> str:
-    """Barras horizontais — motivos mais frequentes de atendimento."""
+    """Barras horizontais — motivos mais frequentes de atendimento.
+
+    Clicável (#89): o valor exato do motivo (a chave do JSONField `motivos`, que
+    é o que a lista filtra com `has_key`) viaja no `customdata`. O rótulo do eixo
+    é apenas exibição — o Plotly pode truncá-lo e ele não é identificador.
+    """
     ordered = sorted(rows, key=lambda r: r["count"])
     labels = [r["motivo"] for r in ordered]
     values = [r["count"] for r in ordered]
@@ -1802,6 +1822,7 @@ def atendimento_top_motivos(rows: list[dict[str, Any]]) -> str:
             go.Bar(
                 x=values, y=labels, orientation="h",
                 marker_color="#06b6d4",
+                customdata=labels,
                 hovertemplate="<b>%{y}</b><br>%{x} atendimentos<extra></extra>",
             )
         ],
