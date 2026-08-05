@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     DJANGO_TIME_ZONE: str = "America/Sao_Paulo"
     DJANGO_LANGUAGE_CODE: str = "pt-br"
 
+    # Duração da sessão em dias (janela deslizante — ver base.py). Exposto como
+    # env var pra ajustar sem redeploy de código.
+    SESSION_COOKIE_AGE_DAYS: int = Field(default=3, ge=1)
+
     # -------------------------------------------------------------------------
     # Database — DATABASE_URL no formato postgres://user:pass@host:port/db
     # -------------------------------------------------------------------------

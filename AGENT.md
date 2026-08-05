@@ -253,9 +253,12 @@ def sync_capability(self, organization_id: int, capability: str, mode: Literal["
   SESSION_COOKIE_SECURE = True
   SESSION_COOKIE_HTTPONLY = True
   SESSION_COOKIE_SAMESITE = 'Lax'
-  SESSION_COOKIE_AGE = 60 * 60 * 24  # 1 dia
-  SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+  SESSION_COOKIE_AGE = 60 * 60 * 24 * env.SESSION_COOKIE_AGE_DAYS  # 3 dias (default)
+  SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+  SESSION_SAVE_EVERY_REQUEST = True  # janela deslizante
   ```
+  Sessão longa é risco aceitável num dashboard read-only; o ajuste fino sai por
+  env var (`SESSION_COOKIE_AGE_DAYS`), sem redeploy de código.
 - **Rotação de sessão** em todo login bem-sucedido (`request.session.cycle_key()`).
 - **`django-axes`** pra rate-limit de tentativas de login (5 tentativas / 15 min / IP).
 
