@@ -53,6 +53,9 @@ _ROUTE_TO_KEY.update({
     ("dashboards", "customer_detail"): "customers",
     ("dashboards", "atendimento_detail"): "conversas_ruins",
     ("dashboards", "atendimento_hora"): "atendimento_tendencias",
+    # Lista genérica de atendimentos (#87) — mesma chave da tela da hora, que
+    # ela absorveu.
+    ("dashboards", "atendimento_lista"): "atendimento_tendencias",
     # CRUD de eventos de rede (#78) mora na página de Tendências.
     ("dashboards", "evento_rede_novo"): "atendimento_tendencias",
     ("dashboards", "evento_rede_editar"): "atendimento_tendencias",

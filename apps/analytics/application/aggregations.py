@@ -13,6 +13,7 @@ import calendar
 import math
 import statistics
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import date as date_cls
 from datetime import datetime, time, timedelta
 from decimal import Decimal
@@ -5689,32 +5690,44 @@ def compute_atendimento_eventos_rede(
     return eventos
 
 
-@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
-def compute_atendimento_hora(
+def _atendimento_categorias(
+    motivos: list[str] | None, tags: list[str] | None
+) -> list[str]:
+    """Motivos + tags do atendimento, sem repetir e preservando a ordem."""
+    categorias: list[str] = []
+    for c in list(motivos or []) + list(tags or []):
+        if c and c not in categorias:
+            categorias.append(c)
+    return categorias
+
+
+def atendimento_lista_queryset(
     organization: Organization,
     *,
-    hour_start: datetime,
-    foco: str = "suporte",
+    start: datetime,
+    end: datetime,
+    foco: str = "todos",
     departamento_id: int | None = None,
-) -> dict[str, Any]:
-    """Atendimentos abertos dentro de uma hora do gráfico horário (#76).
+    motivo: str | None = None,
+    tag: str | None = None,
+) -> QuerySet[Any]:
+    """Queryset do recorte da lista de atendimentos (#87) — fonte única.
 
-    Janela `[hour_start, hour_start + 1h)` no fuso `_ATENDIMENTO_TZ` — mesma
-    truncagem do gráfico, então um atendimento aberto exatamente em `hour_start`
-    entra e um aberto em `hour_start + 1h` não.
+    Janela `[start, end)` (fim EXCLUSIVO), pra a hora do gráfico continuar
+    fechando exatamente como o `TruncHour` (um atendimento aberto em
+    `start + 1h` já é da hora seguinte). Quem quer um fim inclusivo (o período
+    do componente #86, cujo `end` é o último instante do dia) passa
+    `end + 1µs`.
 
-    O recorte de `foco`/`departamento` é o mesmo do gráfico
-    (`atendimento_foco_queryset`), pra `total` bater com o ponto clicado.
+    `foco`/`departamento` saem de `atendimento_foco_queryset` — o MESMO helper
+    do gráfico horário —, então `count()` daqui bate exatamente com a barra/ponto
+    que originou o clique. `motivo`/`tag` recortam os JSONField de categorias,
+    como os gráficos de Tendências.
     """
-    from apps.atendimento.infrastructure.models import Atendimento, Departamento
+    from apps.atendimento.infrastructure.models import Atendimento
 
     if foco not in _HORARIO_FOCOS:
-        foco = "suporte"
-
-    start = timezone.localtime(hour_start, _ATENDIMENTO_TZ).replace(
-        minute=0, second=0, microsecond=0
-    )
-    end = start + timedelta(hours=1)
+        foco = "todos"
 
     qs = Atendimento.objects.filter(
         organization=organization,
@@ -5722,33 +5735,124 @@ def compute_atendimento_hora(
         opened_at__lt=end,
     )
     qs = atendimento_foco_queryset(qs, foco, departamento_id)
+    if motivo:
+        qs = qs.filter(motivos__has_key=motivo)
+    if tag:
+        qs = qs.filter(tags__has_key=tag)
+    return qs
 
-    rows: list[dict[str, Any]] = []
-    for at in (
-        qs.select_related("departamento", "customer").order_by("opened_at", "id")
-    ):
-        opened_local = timezone.localtime(at.opened_at, _ATENDIMENTO_TZ)
-        # Categorias = motivos + tags, sem repetir e preservando a ordem.
-        categorias: list[str] = []
-        for c in list(at.motivos or []) + list(at.tags or []):
-            if c and c not in categorias:
-                categorias.append(c)
-        rows.append(
-            {
-                "atendimento_id": at.id,
-                "customer_id": at.customer_id,
-                "customer_name": at.customer_name or "—",
-                "customer_document": at.customer_document,
-                "opened_at": opened_local,
-                "opened_at_str": opened_local.strftime("%d/%m %H:%M"),
-                "atendente_nome": at.atendente_nome or "—",
-                "departamento_nome": at.departamento.nome if at.departamento else "",
-                "categorias": categorias,
-                "protocol": at.protocol,
-                "status_label": at.get_status_display(),
-                "canal": at.canal or "—",
-            }
-        )
+
+def _atendimento_lista_row(at: Any) -> dict[str, Any]:
+    """Linha da tabela/CSV a partir de um `Atendimento` carregado."""
+    opened_local = timezone.localtime(at.opened_at, _ATENDIMENTO_TZ)
+    return {
+        "atendimento_id": at.id,
+        "customer_id": at.customer_id,
+        "customer_name": at.customer_name or "—",
+        "customer_document": at.customer_document,
+        "opened_at": opened_local,
+        "opened_at_str": opened_local.strftime("%d/%m %H:%M"),
+        "atendente_nome": at.atendente_nome or "—",
+        "departamento_nome": at.departamento.nome if at.departamento else "",
+        "categorias": _atendimento_categorias(at.motivos, at.tags),
+        "protocol": at.protocol,
+        "status_label": at.get_status_display(),
+        "canal": at.canal or "—",
+    }
+
+
+def atendimento_lista_ordered(qs: QuerySet[Any]) -> QuerySet[Any]:
+    """Ordenação estável da lista + `select_related` do que a linha lê.
+
+    Só `departamento` entra no join: o cliente é usado apenas pelo `customer_id`
+    (já na própria linha) pra montar o link, então puxar a tabela de clientes
+    seria join à toa num recorte de 12 meses.
+    """
+    return qs.select_related("departamento").order_by("opened_at", "id")
+
+
+def iter_atendimento_lista_rows(qs: QuerySet[Any]) -> Iterator[dict[str, Any]]:
+    """Linhas de TODO o recorte (usado pelo CSV) — sem materializar a lista."""
+    for at in atendimento_lista_ordered(qs).iterator(chunk_size=1000):
+        yield _atendimento_lista_row(at)
+
+
+def _iter_resumo_rows(qs: QuerySet[Any]) -> Iterator[dict[str, Any]]:
+    """Projeção mínima que o resumo lê, direto do banco (sem instanciar model).
+
+    O resumo é do recorte INTEIRO (não da página exibida), então essa varredura
+    carrega só as 5 colunas necessárias.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento
+
+    labels = dict(Atendimento.Status.choices)
+    values = qs.values_list("motivos", "tags", "atendente_nome", "status", "canal")
+    for motivos, tags, atendente, status, canal in values.iterator(chunk_size=2000):
+        yield {
+            "categorias": _atendimento_categorias(motivos, tags),
+            "atendente_nome": atendente or "—",
+            "status_label": str(labels.get(status, status)),
+            "canal": canal or "—",
+        }
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_lista(
+    organization: Organization,
+    *,
+    start: datetime,
+    end: datetime,
+    foco: str = "todos",
+    departamento_id: int | None = None,
+    motivo: str | None = None,
+    tag: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> dict[str, Any]:
+    """Lista paginada de atendimentos de um recorte qualquer (#87).
+
+    Serve os três recortes da página: uma hora (`?h=`), um dia (`?d=`) e
+    período + departamento/motivo/tag. `total` é sempre o total REAL do recorte
+    (`count()` no banco), independente da página exibida — o teto de 500 linhas
+    da tela da hora antiga truncava em silêncio.
+
+    `per_page=None` devolve o recorte inteiro numa página só (é o que a lista de
+    uma hora faz, onde o volume é sempre pequeno).
+    """
+    from apps.atendimento.infrastructure.models import Departamento
+
+    if foco not in _HORARIO_FOCOS:
+        foco = "todos"
+
+    qs = atendimento_lista_queryset(
+        organization,
+        start=start,
+        end=end,
+        foco=foco,
+        departamento_id=departamento_id,
+        motivo=motivo,
+        tag=tag,
+    )
+    total = qs.count()
+
+    ordered = atendimento_lista_ordered(qs)
+    if per_page is None or per_page <= 0:
+        page, per_page_out, num_pages = 1, None, 1
+        page_qs = ordered
+        offset = 0
+    else:
+        per_page_out = per_page
+        num_pages = max(1, math.ceil(total / per_page))
+        page = max(1, min(page, num_pages))
+        offset = (page - 1) * per_page
+        page_qs = ordered[offset : offset + per_page]
+
+    rows = [_atendimento_lista_row(at) for at in page_qs]
+    # Numa página só, o resumo sai das próprias linhas (sem segunda consulta);
+    # paginado, ele varre o recorte inteiro — é resumo DO RECORTE, não da página.
+    resumo = atendimento_hora_resumo(
+        rows if per_page_out is None else _iter_resumo_rows(qs)
+    )
 
     departamento_nome = None
     if departamento_id is not None:
@@ -5759,19 +5863,68 @@ def compute_atendimento_hora(
         )
 
     return {
-        "hour_start": start,
-        "hour_end": end,
-        "hour_label": (
-            f"{start.strftime('%H:%M')} e {end.strftime('%H:%M')} "
-            f"de {start.strftime('%d/%m/%Y')}"
-        ),
+        "start": start,
+        "end": end,
         "foco": foco,
         "departamento_id": departamento_id,
         "departamento_nome": departamento_nome,
-        "total": len(rows),
+        "motivo": motivo,
+        "tag": tag,
+        "total": total,
         "rows": rows,
-        "resumo": atendimento_hora_resumo(rows),
+        "resumo": resumo,
+        "page": page,
+        "per_page": per_page_out,
+        "num_pages": num_pages,
+        "has_prev": page > 1,
+        "has_next": page < num_pages,
+        "page_first": offset + 1 if rows else 0,
+        "page_last": offset + len(rows),
     }
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_hora(
+    organization: Organization,
+    *,
+    hour_start: datetime,
+    foco: str = "suporte",
+    departamento_id: int | None = None,
+) -> dict[str, Any]:
+    """Atendimentos abertos dentro de uma hora do gráfico horário (#76).
+
+    Wrapper fino de `compute_atendimento_lista` (#87): janela
+    `[hour_start, hour_start + 1h)` no fuso `_ATENDIMENTO_TZ` — mesma truncagem
+    do gráfico, então um atendimento aberto exatamente em `hour_start` entra e um
+    aberto em `hour_start + 1h` não. Mantida porque a hora tem contexto próprio
+    (rótulo, `hour_start`/`hour_end` pra navegação e baseline).
+    """
+    if foco not in _HORARIO_FOCOS:
+        foco = "suporte"
+
+    start = timezone.localtime(hour_start, _ATENDIMENTO_TZ).replace(
+        minute=0, second=0, microsecond=0
+    )
+    end = start + timedelta(hours=1)
+
+    data = compute_atendimento_lista(
+        organization,
+        start=start,
+        end=end,
+        foco=foco,
+        departamento_id=departamento_id,
+    )
+    data.update(
+        {
+            "hour_start": start,
+            "hour_end": end,
+            "hour_label": (
+                f"{start.strftime('%H:%M')} e {end.strftime('%H:%M')} "
+                f"de {start.strftime('%d/%m/%Y')}"
+            ),
+        }
+    )
+    return data
 
 
 _HORA_TOP_CATEGORIAS = 5
@@ -5794,21 +5947,28 @@ def _dist(
     ]
 
 
-def atendimento_hora_resumo(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Resumo da hora (#77) a partir das MESMAS linhas exibidas na lista.
+def atendimento_hora_resumo(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Resumo do recorte (#77/#87) a partir das MESMAS linhas da lista.
 
-    Sem segunda fonte de verdade: recebe `rows` de `compute_atendimento_hora` e
-    só conta. Categorias = motivos + tags já deduplicados por atendimento (um
-    atendimento conta no máximo uma vez por categoria); os percentuais são sobre
-    o total de atendimentos da hora, então somam mais de 100% quando um
-    atendimento tem várias categorias.
+    Sem segunda fonte de verdade: recebe as linhas do recorte e só conta.
+    Categorias = motivos + tags já deduplicados por atendimento (um atendimento
+    conta no máximo uma vez por categoria); os percentuais são sobre o total de
+    atendimentos do recorte, então somam mais de 100% quando um atendimento tem
+    várias categorias.
+
+    Aceita qualquer iterável (não só `list`): num recorte grande, `#87` passa um
+    gerador do banco pra o resumo cobrir o recorte inteiro sem materializar
+    dezenas de milhares de linhas na memória.
     """
-    total = len(rows)
+    total = 0
     categorias: Counter[str] = Counter()
     atendentes: Counter[str] = Counter()
     status: Counter[str] = Counter()
     canais: Counter[str] = Counter()
     for r in rows:
+        total += 1
         categorias.update(r["categorias"])
         atendentes[r["atendente_nome"]] += 1
         status[r["status_label"]] += 1

@@ -7,7 +7,8 @@ e via context_processor exposto em `current_organization`.
 from __future__ import annotations
 
 import csv
-from datetime import datetime, timedelta
+from collections.abc import Iterable
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from dateutil.relativedelta import relativedelta
@@ -22,19 +23,21 @@ from django.http import (
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import urlencode
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
 from apps.analytics.application.aggregations import (
     atendimento_hora_esperado,
+    atendimento_lista_queryset,
     compute_aging_distribution,
     compute_arpu_by_plan,
     compute_at_risk_contracts,
     compute_atendimento_conversao,
     compute_atendimento_detail,
     compute_atendimento_eventos_rede,
-    compute_atendimento_hora,
     compute_atendimento_horario,
+    compute_atendimento_lista,
     compute_atendimento_tendencias,
     compute_atendimento_triagem,
     compute_bad_conversations,
@@ -85,6 +88,7 @@ from apps.analytics.application.aggregations import (
     compute_support_sla,
     compute_top_delinquent_invoices,
     compute_top_risk_customers,
+    iter_atendimento_lista_rows,
     search_customers,
 )
 from apps.analytics.application.cto_snapshots import compute_cto_history
@@ -1497,12 +1501,36 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
     )
 
 
-# Teto de linhas exibidas na lista de uma hora (#76) — o CSV leva tudo.
-_HORA_LISTA_LIMITE = 500
-_HORA_CSV_HEADER = (
+# ---------------------------------------------------------------------------
+# Lista de atendimentos (#87) — hora (?h), dia (?d) ou período + recorte
+# ---------------------------------------------------------------------------
+# Uma página só pros três recortes: antes existia apenas a lista de UMA hora
+# (#76), com teto de 500 linhas que truncava em silêncio. Aqui o total é sempre
+# o real (count no banco) e a tabela é paginada.
+# Formato do `?h=` (ISO local, sem fuso) — o mesmo do `customdata` do gráfico.
+_LISTA_HORA_FMT = "%Y-%m-%dT%H:%M"
+_LISTA_PER_PAGE = 100
+_LISTA_FOCOS = ("todos", "suporte", "rede", "comercial")
+_LISTA_FOCO_LABELS = {
+    "todos": "Todos",
+    "suporte": "Suporte",
+    "rede": "Rede",
+    "comercial": "Comercial",
+}
+_LISTA_CSV_HEADER = (
     "Cliente", "Documento", "Horário", "Atendente", "Departamento",
     "Categorias", "Protocolo", "Status",
 )
+# Páginas de onde o drill-down pode vir — whitelist de NOMES de rota, nunca URL
+# crua vinda da querystring (evita open redirect no link de "voltar").
+_LISTA_ORIGENS = {
+    "tendencias": "dashboards:atendimento_tendencias",
+    "atendimento": "dashboards:atendimento",
+}
+_LISTA_ORIGEM_LABELS = {
+    "tendencias": "Tendências de Atendimento",
+    "atendimento": "Atendimento",
+}
 
 
 def _parse_hora(raw: str) -> datetime | None:
@@ -1518,16 +1546,25 @@ def _parse_hora(raw: str) -> datetime | None:
     )
 
 
-def _hora_csv_response(data: dict[str, Any]) -> HttpResponse:
-    """CSV pt-BR da lista da hora: separador `;` + BOM UTF-8 (abre no Excel)."""
-    hour = data["hour_start"]
-    filename = f"atendimentos_{hour.strftime('%Y-%m-%d_%Hh')}.csv"
+def _parse_dia(raw: str) -> datetime | None:
+    """`?d=2026-08-03` → primeiro instante do dia em America/Sao_Paulo."""
+    try:
+        parsed = date.fromisoformat(raw)
+    except ValueError:
+        return None
+    return datetime.combine(parsed, time.min, tzinfo=_PERIOD_TZ)
+
+
+def _lista_csv_response(
+    rows: Iterable[dict[str, Any]], filename: str
+) -> HttpResponse:
+    """CSV pt-BR do recorte INTEIRO: separador `;` + BOM UTF-8 (abre no Excel)."""
     response = HttpResponse(content_type="text/csv; charset=utf-8")
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
     response.write("﻿")  # BOM — sem ele o Excel pt-BR erra os acentos
     writer = csv.writer(response, delimiter=";", lineterminator="\r\n")
-    writer.writerow(_HORA_CSV_HEADER)
-    for r in data["rows"]:
+    writer.writerow(_LISTA_CSV_HEADER)
+    for r in rows:
         writer.writerow([
             r["customer_name"],
             r["customer_document"],
@@ -1541,17 +1578,128 @@ def _hora_csv_response(data: dict[str, Any]) -> HttpResponse:
     return response
 
 
+def _lista_filtros(request: HttpRequest) -> dict[str, Any]:
+    """Recorte pedido na querystring, já validado (`foco`, dep., motivo, tag)."""
+    foco = request.GET.get("foco", "todos")
+    if foco not in _LISTA_FOCOS:
+        foco = "todos"
+    raw_dep = request.GET.get("departamento", "")
+    origem = request.GET.get("origem", "tendencias")
+    return {
+        "foco": foco,
+        "departamento_id": int(raw_dep) if raw_dep.isdigit() else None,
+        "motivo": request.GET.get("motivo", "").strip() or None,
+        "tag": request.GET.get("tag", "").strip() or None,
+        "origem": origem if origem in _LISTA_ORIGENS else "tendencias",
+    }
+
+
+def _lista_filtro_query(filtros: dict[str, Any]) -> str:
+    """Querystring do recorte (sem período nem paginação)."""
+    params: list[tuple[str, str]] = [("foco", filtros["foco"])]
+    if filtros["departamento_id"] is not None:
+        params.append(("departamento", str(filtros["departamento_id"])))
+    if filtros["motivo"]:
+        params.append(("motivo", filtros["motivo"]))
+    if filtros["tag"]:
+        params.append(("tag", filtros["tag"]))
+    if filtros["origem"] != "tendencias":
+        params.append(("origem", filtros["origem"]))
+    return urlencode(params)
+
+
+def _lista_recorte(
+    request: HttpRequest, period: Period
+) -> tuple[str, datetime, datetime] | None:
+    """Janela `[start, end)` do recorte pedido, ou None se `?h=`/`?d=` é inválido.
+
+    Precedência: `?h=` (uma hora) > `?d=` (um dia) > período do componente (#86).
+    O fim é sempre EXCLUSIVO — o período do componente termina no último instante
+    do dia, daí o microssegundo somado.
+    """
+    raw_h = request.GET.get("h", "").strip()
+    if raw_h:
+        hour = _parse_hora(raw_h)
+        return None if hour is None else ("hora", hour, hour + timedelta(hours=1))
+
+    raw_d = request.GET.get("d", "").strip()
+    if raw_d:
+        dia = _parse_dia(raw_d)
+        return None if dia is None else ("dia", dia, dia + timedelta(days=1))
+
+    return ("periodo", period.start, period.end + timedelta(microseconds=1))
+
+
+def _lista_csv_filename(kind: str, start: datetime, end: datetime) -> str:
+    if kind == "hora":
+        return f"atendimentos_{start.strftime('%Y-%m-%d_%Hh')}.csv"
+    if kind == "dia":
+        return f"atendimentos_{start.strftime('%Y-%m-%d')}.csv"
+    ultimo = (end - timedelta(microseconds=1)).date()
+    return f"atendimentos_{start.date().isoformat()}_{ultimo.isoformat()}.csv"
+
+
+def _lista_base_query(
+    kind: str, start: datetime, period: Period, filtro_query: str
+) -> str:
+    """Querystring completa da visão, menos `page`/`format`.
+
+    Base dos links de paginação e do export. Em hora/dia o período viaja junto:
+    é o que o link de voltar reproduz na tela de origem.
+    """
+    if kind == "hora":
+        return f"h={start.strftime(_LISTA_HORA_FMT)}&{filtro_query}&{period.query}"
+    if kind == "dia":
+        return f"d={start.date().isoformat()}&{filtro_query}&{period.query}"
+    return f"{period.query}&{filtro_query}"
+
+
+def _lista_hora_contexto(
+    org: Any, start: datetime, filtros: dict[str, Any], nav_query: str
+) -> dict[str, Any]:
+    """Extras do recorte de uma hora: baseline do slot + navegação hora a hora."""
+    prev_hour = start - timedelta(hours=1)
+    next_hour = start + timedelta(hours=1)
+    return {
+        "esperado": atendimento_hora_esperado(
+            org,
+            hour_start=start,
+            foco=filtros["foco"],
+            departamento_id=filtros["departamento_id"],
+        ),
+        "prev_query": f"h={prev_hour.strftime(_LISTA_HORA_FMT)}&{nav_query}",
+        "next_query": f"h={next_hour.strftime(_LISTA_HORA_FMT)}&{nav_query}",
+        "prev_label": prev_hour.strftime("%d/%m %Hh"),
+        "next_label": next_hour.strftime("%d/%m %Hh"),
+        "next_is_future": next_hour > timezone.localtime(timezone.now(), _PERIOD_TZ),
+    }
+
+
+def _lista_recorte_label(kind: str, start: datetime, end: datetime) -> str:
+    """Complemento do título ("N atendimentos …")."""
+    if kind == "hora":
+        return (
+            f"entre {start.strftime('%H:%M')} e {end.strftime('%H:%M')} "
+            f"de {start.strftime('%d/%m/%Y')}"
+        )
+    if kind == "dia":
+        return f"em {start.strftime('%d/%m/%Y')}"
+    return "no período"
+
+
 @login_required
 @never_cache
-def atendimento_hora(request: HttpRequest) -> HttpResponse:
-    """Atendimentos de uma hora do gráfico horário (#76) — resumo + lista + CSV.
+def atendimento_lista(request: HttpRequest) -> HttpResponse:
+    """Lista de atendimentos de um recorte — hora, dia ou período (#87).
 
-    `?h=` é a hora (ISO local) e `?foco=`/`?departamento=` repetem o recorte do
-    gráfico. O período da página de Tendências (#75) viaja junto só pra o link
-    de volta reproduzir a mesma janela.
+    Destino único dos drill-downs de atendimento: `?h=` (uma hora do gráfico
+    horário), `?d=` (o dia inteiro) ou o período do componente (#86) combinado
+    com `foco`/`departamento`/`motivo`/`tag`. A contagem sai do MESMO helper de
+    recorte do gráfico (`atendimento_foco_queryset`), então o total bate com a
+    barra/ponto clicado.
 
-    O resumo (#77) sai do mesmo queryset da lista (`data["resumo"]`); só o
-    "esperado" vem do baseline sazonal, por `atendimento_hora_esperado`.
+    Paginação de 100 linhas com total real; o CSV (`?format=csv`) exporta o
+    recorte inteiro, não a página visível.
     """
     org_or_redirect = _require_org(request)
     if not hasattr(org_or_redirect, "slug"):
@@ -1559,67 +1707,92 @@ def atendimento_hora(request: HttpRequest) -> HttpResponse:
     org = org_or_redirect
 
     period = _get_period(request)
-    foco = request.GET.get("foco", "suporte")
-    if foco not in ("todos", "suporte", "rede", "comercial"):
-        foco = "suporte"
-
-    departamento_id: int | None = None
-    raw_dep = request.GET.get("departamento", "")
-    if raw_dep.isdigit():
-        departamento_id = int(raw_dep)
-
-    hour_start = _parse_hora(request.GET.get("h", "").strip())
-    if hour_start is None:
-        # Hora ausente/inválida não tem lista: volta pra Tendências preservando
-        # período e recorte.
-        back = reverse("dashboards:atendimento_tendencias")
-        query = f"{period.query}&foco={foco}"
-        if departamento_id is not None:
-            query += f"&departamento={departamento_id}"
-        return HttpResponseRedirect(f"{back}?{query}")
-
-    data = compute_atendimento_hora(
-        org, hour_start=hour_start, foco=foco, departamento_id=departamento_id
+    filtros = _lista_filtros(request)
+    filtro_query = _lista_filtro_query(filtros)
+    # O form de período personalizado precisa devolver o mesmo recorte (#86).
+    set_period_extra_params(
+        request,
+        {
+            "foco": filtros["foco"],
+            "departamento": filtros["departamento_id"],
+            "motivo": filtros["motivo"],
+            "tag": filtros["tag"],
+            "origem": filtros["origem"],
+        },
     )
+
+    voltar_url = reverse(_LISTA_ORIGENS[filtros["origem"]])
+    voltar_query = f"{period.query}&{filtro_query}"
+
+    recorte = _lista_recorte(request, period)
+    if recorte is None:
+        # `?h=`/`?d=` inválidos não têm lista: volta pra origem com o recorte.
+        return HttpResponseRedirect(f"{voltar_url}?{voltar_query}")
+    kind, start, end = recorte
+
+    recorte_kwargs = {
+        "start": start,
+        "end": end,
+        "foco": filtros["foco"],
+        "departamento_id": filtros["departamento_id"],
+        "motivo": filtros["motivo"],
+        "tag": filtros["tag"],
+    }
 
     if request.GET.get("format") == "csv":
-        return _hora_csv_response(data)
+        qs = atendimento_lista_queryset(org, **recorte_kwargs)
+        return _lista_csv_response(
+            iter_atendimento_lista_rows(qs), _lista_csv_filename(kind, start, end)
+        )
 
-    query = f"{period.query}&foco={foco}"
-    if departamento_id is not None:
-        query += f"&departamento={departamento_id}"
-    hora_query = f"h={hour_start.strftime('%Y-%m-%dT%H:%M')}&{query}"
-    csv_query = f"{hora_query}&format=csv"
-    prev_hour = hour_start - timedelta(hours=1)
-    next_hour = hour_start + timedelta(hours=1)
-
-    # "Esperado" do baseline pro slot: vem do próprio gráfico horário, mas com a
-    # janela de exibição reduzida a esta hora (ver `atendimento_hora_esperado`).
-    esperado = atendimento_hora_esperado(
-        org, hour_start=hour_start, foco=foco, departamento_id=departamento_id
+    raw_page = request.GET.get("page", "1")
+    page = int(raw_page) if raw_page.isdigit() and raw_page != "0" else 1
+    data = compute_atendimento_lista(
+        org, **recorte_kwargs, page=page, per_page=_LISTA_PER_PAGE
     )
 
-    return render(
-        request,
-        "dashboards/atendimento_hora.html",
-        {
-            **data,
-            "esperado": esperado,
-            "hora_query": hora_query,
-            "prev_query": f"h={prev_hour.strftime('%Y-%m-%dT%H:%M')}&{query}",
-            "next_query": f"h={next_hour.strftime('%Y-%m-%dT%H:%M')}&{query}",
-            "prev_label": prev_hour.strftime("%d/%m %Hh"),
-            "next_label": next_hour.strftime("%d/%m %Hh"),
-            "next_is_future": next_hour > timezone.localtime(timezone.now(), _PERIOD_TZ),
-            "rows": data["rows"][:_HORA_LISTA_LIMITE],
-            "shown": min(data["total"], _HORA_LISTA_LIMITE),
-            "limite": _HORA_LISTA_LIMITE,
-            "truncated": data["total"] > _HORA_LISTA_LIMITE,
-            "period": period,
-            "period_label": period.label,
-            "voltar_query": query,
-            "csv_query": csv_query,
-        },
+    base_query = _lista_base_query(kind, start, period, filtro_query)
+    contexto: dict[str, Any] = {
+        **data,
+        "lista_kind": kind,
+        "recorte_label": _lista_recorte_label(kind, start, end),
+        "foco_label": _LISTA_FOCO_LABELS[filtros["foco"]],
+        "mostrar_periodo": kind == "periodo",
+        "per_page": _LISTA_PER_PAGE,
+        "base_query": base_query,
+        "csv_query": f"{base_query}&format=csv",
+        "voltar_query": voltar_query,
+        "voltar_url": voltar_url,
+        "voltar_label": _LISTA_ORIGEM_LABELS[filtros["origem"]],
+    }
+
+    if kind == "hora":
+        # A hora mantém o contexto que a tela de #76/#77 tinha.
+        contexto.update(
+            _lista_hora_contexto(
+                org, start, filtros, f"{filtro_query}&{period.query}"
+            )
+        )
+
+    return render(request, "dashboards/atendimento_lista.html", contexto)
+
+
+@login_required
+@never_cache
+def atendimento_hora(request: HttpRequest) -> HttpResponse:
+    """Rota antiga da lista de uma hora (#76) — 302 pra `atendimento_lista`.
+
+    A tela virou um dos recortes da lista genérica (#87), que já entende `?h=`.
+    Um alias que renderizasse aqui duplicaria template e contexto; o redirect
+    canoniza a URL e mantém funcionando o que já foi compartilhado/bookmarkado.
+    O `foco` default da rota antiga era "suporte" (o da nova é "todos"), então
+    ele é explicitado no redirect pra a hora continuar idêntica.
+    """
+    params = request.GET.copy()
+    if params.get("foco") not in _LISTA_FOCOS:
+        params["foco"] = "suporte"
+    return HttpResponseRedirect(
+        f"{reverse('dashboards:atendimento_lista')}?{params.urlencode()}"
     )
 
 

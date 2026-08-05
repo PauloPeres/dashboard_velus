@@ -35,6 +35,12 @@ urlpatterns = [
         name="atendimento_tendencias",
     ),
     path(
+        "operations/atendimento-lista/",
+        views.atendimento_lista,
+        name="atendimento_lista",
+    ),
+    # Rota antiga da lista de uma hora (#76): 302 pra `atendimento_lista?h=`.
+    path(
         "operations/atendimento-hora/",
         views.atendimento_hora,
         name="atendimento_hora",
