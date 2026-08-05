@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlparse
 
+from ._email import build_email_settings
 from ._env import env
 
 # =============================================================================
@@ -47,6 +48,7 @@ THIRD_PARTY_APPS = [
     "axes",
     "simple_history",
     "django_structlog",
+    "anymail",  # backend de e-mail via API HTTP (Mailgun)
 ]
 
 LOCAL_APPS: list[str] = [
@@ -265,10 +267,27 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 # =============================================================================
-# Email
+# Email (#95) — Mailgun via API HTTP (anymail) quando configurado
 # =============================================================================
-EMAIL_BACKEND = env.EMAIL_BACKEND
-DEFAULT_FROM_EMAIL = env.DEFAULT_FROM_EMAIL
+# Flag derivada (mesmo idioma de QA_LLM_ENABLED): só liga o transporte real com
+# chave E domínio remetente. Sem isso, mantém o backend de fallback — console em
+# dev, locmem em teste (settings/test.py sobrescreve). Ver config/settings/_email.py.
+_email_settings = build_email_settings(
+    api_key=env.MAILGUN_API_KEY.get_secret_value(),
+    sender_domain=env.MAILGUN_SENDER_DOMAIN,
+    api_url=env.MAILGUN_API_URL,
+    fallback_backend=env.EMAIL_BACKEND,
+    default_from_email=env.DEFAULT_FROM_EMAIL,
+)
+EMAIL_ENABLED: bool = _email_settings["EMAIL_ENABLED"]
+EMAIL_BACKEND: str = _email_settings["EMAIL_BACKEND"]
+ANYMAIL: dict = _email_settings["ANYMAIL"]
+DEFAULT_FROM_EMAIL: str = _email_settings["DEFAULT_FROM_EMAIL"]
+SERVER_EMAIL: str = _email_settings["SERVER_EMAIL"]
+
+# Link de reset/convite montado fora de um request (task Celery) usa este
+# protocolo — sem isso o allauth monta http://. Produção sobrescreve pra https.
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https" if EMAIL_ENABLED else "http"
 
 # =============================================================================
 # Celery

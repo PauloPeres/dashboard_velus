@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .base import *  # noqa: F403
-from .base import INSTALLED_APPS, MIDDLEWARE
+from .base import EMAIL_ENABLED, INSTALLED_APPS, MIDDLEWARE
 
 DEBUG = True
 
@@ -24,9 +24,11 @@ SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False
 
 # -----------------------------------------------------------------------------
-# Email — print no console
+# Email — print no console, a menos que o Mailgun esteja configurado no .env
+# (permite validar o envio real com `manage.py send_test_email` sem subir prod).
 # -----------------------------------------------------------------------------
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+if not EMAIL_ENABLED:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
 # -----------------------------------------------------------------------------
 # allauth — relaxar verificação de email em dev

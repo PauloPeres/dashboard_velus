@@ -28,9 +28,11 @@ CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
 
 # -----------------------------------------------------------------------------
-# Email — não enviar
+# Email — nunca envia de verdade, mesmo com MAILGUN_API_KEY no ambiente.
 # -----------------------------------------------------------------------------
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+EMAIL_ENABLED = False
+ANYMAIL: dict = {}
 
 # -----------------------------------------------------------------------------
 # allauth — não bloquear teste

@@ -269,6 +269,14 @@ def sync_capability(self, organization_id: int, capability: str, mode: Literal["
 - **Token IXC**: campo `Organization.ixc_credentials` criptografado com **Fernet**. Key de criptografia em K8s Secret **separado** do Postgres password. Descriptografia só em memória do worker, no momento da chamada.
 - **Nunca** logar credenciais. Nunca passar credenciais em URL.
 - Rotação de Fernet key documentada em runbook.
+- **E-mail (Mailgun, #95)**: `MAILGUN_API_KEY` (Secret), `MAILGUN_SENDER_DOMAIN`
+  (`seujaime.com`, verificado) e `MAILGUN_API_URL` (US por default). O envio real
+  é **flag derivada** — `EMAIL_ENABLED = bool(chave and domínio)`; sem as duas, o
+  backend continua console (dev) / locmem (teste) e nada quebra. Produção sem
+  e-mail configurado **loga ERROR no boot** (não derruba o pod). Validar com
+  `python manage.py send_test_email destino@dominio` — o output diz qual backend
+  está ativo. Erro de envio é logado com o motivo do provedor via
+  `apps.shared.email.email_error_details` (que redige a chave antes de logar).
 
 ### 3.3 Isolamento entre tenants
 
