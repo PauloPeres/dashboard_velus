@@ -18,6 +18,24 @@ from django.shortcuts import redirect
 from django.urls import reverse
 
 from .pages import OWNER_ONLY, PAGE_KEYS, page_url, route_to_key
+from .period import apply_period_cookie
+
+
+class PeriodCookieMiddleware:
+    """Persiste o período escolhido na URL no cookie `velus_periodo` (#86).
+
+    Fica no middleware (e não em cada view) porque ~20 views resolvem período e
+    todas devolvem `render(...)` direto — embrulhar cada retorno seria ruído.
+    `get_period` marca o request; aqui só carimbamos a resposta.
+    """
+
+    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
+        self.get_response = get_response
+
+    def __call__(self, request: HttpRequest) -> HttpResponse:
+        response = self.get_response(request)
+        apply_period_cookie(request, response)
+        return response
 
 
 class PageAccessMiddleware:

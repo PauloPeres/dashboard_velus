@@ -376,6 +376,26 @@ pyproject.toml
 - Sem `<style>` inline; sem `<script>` inline (CSP).
 - Tailwind: classes utilitárias direto no template; componentes reutilizáveis viram `{% include %}` ou template tags.
 
+#### Filtro de período (componente único, #86)
+
+Toda página com recorte temporal usa `apps/dashboards/period.py` — **não** leia
+`?months=`/`?de=` na mão:
+
+```python
+period = get_period(request)                        # granularidade em dias (30d default)
+months = get_period(request, granularity="month").months  # série mensal (12m default)
+set_period_extra_params(request, {"foco": foco})    # o que o form personalizado propaga
+```
+
+- Precedência: URL (`?de=&ate=` > `?periodo=` > legado `?months=`/`?hd=`) > cookie
+  `velus_periodo` > default da página. Cookie inválido é ignorado em silêncio.
+- A view não passa nada de período no contexto: o context processor
+  `dashboards.context_processors.period_context` lê o que `get_period` deixou no
+  request, e `base.html` desenha a barra (`_period_filter.html`) sozinha.
+  Página que quer a barra em outro lugar esvazia `{% block period_bar %}` e
+  inclui o partial onde quiser; o badge é `_period_badge.html`.
+- `setPeriodo()`/`setParam()` são helpers compartilhados do `base.html`.
+
 ### 4.8 Testes
 
 - **`pytest-django`**, não `TestCase`.

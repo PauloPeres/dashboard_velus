@@ -4,7 +4,8 @@
 {% block title %}Atendimentos de {{ hour_start|date:"d/m H:i" }} · Velus{% endblock %}
 
 {# Página é de uma hora específica (?h=) — o seletor global de período não vale. #}
-{% block period_selector %}{% endblock %}
+{# Drill-down: o período só viaja pro link de volta — sem barra de filtro (#86). #}
+{% block period_bar %}{% endblock %}
 
 {% block content %}
 <!-- Cabeçalho -->
