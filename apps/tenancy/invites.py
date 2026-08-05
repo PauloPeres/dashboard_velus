@@ -15,6 +15,8 @@ import structlog
 from django.db import transaction
 from django.http import HttpRequest
 
+from apps.shared.email import email_error_details
+
 from .models import (
     AccessGroup,
     Organization,
@@ -34,7 +36,14 @@ class InviteResult:
 
 
 def _send_set_password_email(email: str, request: HttpRequest | None) -> bool:
-    """Dispara o e-mail de definir/redefinir senha via allauth. Retorna se enviou."""
+    """Dispara o e-mail de definir/redefinir senha via allauth. Retorna se enviou.
+
+    Nunca propaga a exceção — o provisionamento da conta (já commitado) não pode
+    cair por causa do e-mail. Mas o motivo da falha é **logado com o erro do
+    provedor** (#95): antes o convite falhava em silêncio e a única pista era
+    `email_sent=False`, que não diz se foi chave inválida, domínio não verificado
+    ou destinatário recusado.
+    """
     try:
         from allauth.account.forms import ResetPasswordForm
 
@@ -43,8 +52,13 @@ def _send_set_password_email(email: str, request: HttpRequest | None) -> bool:
             form.save(request)
             return True
         _logger.warning("invite_reset_email_invalid", email=email, errors=form.errors)
-    except Exception:
-        _logger.exception("invite_reset_email_failed", email=email)
+    except Exception as exc:
+        _logger.exception(
+            "invite_reset_email_failed",
+            email=email,
+            error_type=type(exc).__name__,
+            **email_error_details(exc),
+        )
     return False
 
 

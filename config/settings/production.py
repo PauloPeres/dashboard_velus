@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .base import *  # noqa: F403
-from .base import ALLOWED_HOSTS, env
+from .base import ALLOWED_HOSTS, EMAIL_BACKEND, EMAIL_ENABLED, env
 
 # =============================================================================
 # Falhas de segurança configuráveis — bloqueia subir sem o necessário
@@ -23,6 +23,29 @@ if env.FERNET_KEY.get_secret_value() == "change-me-generate-with-fernet":
     raise RuntimeError("FERNET_KEY precisa ser gerada para produção.")
 
 DEBUG = False
+
+# =============================================================================
+# Email (#95) — alerta alto, sem derrubar o boot
+# =============================================================================
+# Decisão: e-mail faltando NÃO faz `raise`. O dashboard é read-only e continua
+# útil sem e-mail; derrubar o Deployment inteiro (crashloop) porque o Secret do
+# Mailgun ainda não foi injetado troca um problema silencioso por indisponibi-
+# lidade total — inclusive no próprio deploy desta mudança. O que não pode
+# continuar é o silêncio: loga em ERROR no boot (logging JSON → agregador) e o
+# `manage.py send_test_email` mostra o backend ativo na hora de validar.
+if not EMAIL_ENABLED:
+    import logging
+
+    logging.getLogger("config.settings").error(
+        "EMAIL NAO CONFIGURADO EM PRODUCAO: MAILGUN_API_KEY/MAILGUN_SENDER_DOMAIN "
+        "ausentes — convites, reset de senha e digest de churn vao para o stdout "
+        "do pod (backend=%s) e NAO serao entregues.",
+        EMAIL_BACKEND,
+    )
+
+# Links de reset/convite montados fora de request (task Celery) precisam de
+# https — sem isso o allauth monta http:// e o link sai inseguro.
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
 
 # =============================================================================
 # HTTPS / HSTS — assume TLS no ingress, proxy passa X-Forwarded-Proto

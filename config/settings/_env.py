@@ -105,8 +105,17 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     # Email
     # -------------------------------------------------------------------------
+    # EMAIL_BACKEND é só o FALLBACK — vale quando o Mailgun não está configurado
+    # (dev local, CI). Com MAILGUN_API_KEY + MAILGUN_SENDER_DOMAIN presentes, o
+    # base.py troca pelo backend do anymail (ver _email.build_email_settings).
     EMAIL_BACKEND: str = "django.core.mail.backends.console.EmailBackend"
     DEFAULT_FROM_EMAIL: str = "Velus Dashboard <noreply@velus.local>"
+
+    # Mailgun (API HTTP via django-anymail) — chave em K8s Secret. Vazio = envio
+    # desligado, comportamento antigo (console/locmem) preservado.
+    MAILGUN_API_KEY: SecretStr = SecretStr("")
+    MAILGUN_SENDER_DOMAIN: str = ""  # ex.: seujaime.com (domínio verificado)
+    MAILGUN_API_URL: str = "https://api.mailgun.net/v3"  # EU: api.eu.mailgun.net/v3
 
     # -------------------------------------------------------------------------
     # Logging
