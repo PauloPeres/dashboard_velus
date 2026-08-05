@@ -6,10 +6,11 @@ e o fato de que logout continua invalidando a sessão na hora.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from django.conf import settings
 from django.contrib.sessions.models import Session
-from django.test import Client
 from django.urls import reverse
 
 from apps.tenancy.models import User
@@ -70,11 +71,11 @@ class TestSessionAgeEnvVar:
 
 
 @pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
 class TestLogoutInvalidaSessao:
     """Sessão mais longa não pode enfraquecer o logout."""
 
-    def test_logout_apaga_sessao_do_banco(self, user_a: User) -> None:
-        client = Client()
+    def test_logout_apaga_sessao_do_banco(self, client: Any, user_a: User) -> None:
         client.force_login(user_a)
         session_key = client.session.session_key
         assert session_key is not None
