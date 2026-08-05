@@ -38,6 +38,7 @@ from apps.analytics.application.aggregations import (
     compute_atendimento_eventos_rede,
     compute_atendimento_horario,
     compute_atendimento_lista,
+    compute_atendimento_lista_por_hora,
     compute_atendimento_tendencias,
     compute_atendimento_triagem,
     compute_bad_conversations,
@@ -1657,9 +1658,16 @@ def _lista_base_query(
 def _lista_hora_contexto(
     org: Any, start: datetime, filtros: dict[str, Any], nav_query: str
 ) -> dict[str, Any]:
-    """Extras do recorte de uma hora: baseline do slot + navegação hora a hora."""
+    """Extras do recorte de uma hora: baseline do slot + navegação hora a hora.
+
+    `dia_query` (#88) é o "Ver o dia todo": mesmo recorte (foco/departamento/
+    motivo/tag) e mesmo período de origem, trocando `?h=` por `?d=`. A hora de
+    origem viaja em `origem_h` pra a tela do dia saber pra onde é o caminho de
+    volta.
+    """
     prev_hour = start - timedelta(hours=1)
     next_hour = start + timedelta(hours=1)
+    slot = start.strftime(_LISTA_HORA_FMT)
     return {
         "esperado": atendimento_hora_esperado(
             org,
@@ -1672,7 +1680,56 @@ def _lista_hora_contexto(
         "prev_label": prev_hour.strftime("%d/%m %Hh"),
         "next_label": next_hour.strftime("%d/%m %Hh"),
         "next_is_future": next_hour > timezone.localtime(timezone.now(), _PERIOD_TZ),
+        "dia_query": f"d={start.date().isoformat()}&{nav_query}&origem_h={slot}",
+        "dia_label": start.strftime("%d/%m/%Y"),
     }
+
+
+def _lista_origem_hora(
+    request: HttpRequest, start: datetime, end: datetime
+) -> datetime | None:
+    """Hora de origem do drill-down (`?origem_h=`), quando ela é DESTE dia.
+
+    Só serve pro caminho de volta do recorte de dia; uma hora de outro dia (ou
+    inválida) é ignorada em silêncio — o breadcrumb some, o resto continua.
+    """
+    raw = request.GET.get("origem_h", "").strip()
+    if not raw:
+        return None
+    hora = _parse_hora(raw)
+    if hora is None or not (start <= hora < end):
+        return None
+    return hora
+
+
+def _lista_dia_contexto(
+    start: datetime, nav_query: str, origem_hora: datetime | None
+) -> dict[str, Any]:
+    """Extras do recorte de um dia (#88): navegação dia a dia + volta pra hora.
+
+    Reaproveita as chaves `prev_*`/`next_*` da navegação de hora — o bloco do
+    template é o mesmo, só muda o passo. `next_is_future` compara DATAS no fuso
+    de São Paulo: o dia corrente é parcial e continua navegável, o seguinte não
+    existe ainda.
+    """
+    prev_dia = start - timedelta(days=1)
+    next_dia = start + timedelta(days=1)
+    hoje = timezone.localtime(timezone.now(), _PERIOD_TZ).date()
+    ctx: dict[str, Any] = {
+        "prev_query": f"d={prev_dia.date().isoformat()}&{nav_query}",
+        "next_query": f"d={next_dia.date().isoformat()}&{nav_query}",
+        "prev_label": prev_dia.strftime("%d/%m"),
+        "next_label": next_dia.strftime("%d/%m"),
+        "next_is_future": next_dia.date() > hoje,
+        "dia_label": start.strftime("%d/%m/%Y"),
+        "hora_origem_query": None,
+        "hora_origem_label": "",
+    }
+    if origem_hora is not None:
+        slot = origem_hora.strftime(_LISTA_HORA_FMT)
+        ctx["hora_origem_query"] = f"h={slot}&{nav_query}"
+        ctx["hora_origem_label"] = origem_hora.strftime("%Hh")
+    return ctx
 
 
 def _lista_recorte_label(kind: str, start: datetime, end: datetime) -> str:
@@ -1752,6 +1809,12 @@ def atendimento_lista(request: HttpRequest) -> HttpResponse:
     )
 
     base_query = _lista_base_query(kind, start, period, filtro_query)
+    nav_query = f"{filtro_query}&{period.query}"
+    origem_hora = _lista_origem_hora(request, start, end) if kind == "dia" else None
+    if origem_hora is not None:
+        # Paginar/exportar o dia não pode perder o caminho de volta pra hora.
+        base_query += f"&origem_h={origem_hora.strftime(_LISTA_HORA_FMT)}"
+
     contexto: dict[str, Any] = {
         **data,
         "lista_kind": kind,
@@ -1768,11 +1831,14 @@ def atendimento_lista(request: HttpRequest) -> HttpResponse:
 
     if kind == "hora":
         # A hora mantém o contexto que a tela de #76/#77 tinha.
-        contexto.update(
-            _lista_hora_contexto(
-                org, start, filtros, f"{filtro_query}&{period.query}"
-            )
-        )
+        contexto.update(_lista_hora_contexto(org, start, filtros, nav_query))
+    elif kind == "dia":
+        # Dia (#88): navegação dia a dia + mini-gráfico por hora que fecha o
+        # ciclo dia ↔ hora (uma agregação por hora sobre o MESMO recorte).
+        contexto.update(_lista_dia_contexto(start, nav_query, origem_hora))
+        slots = compute_atendimento_lista_por_hora(org, **recorte_kwargs)
+        contexto["horas_json"] = charts.atendimento_dia_por_hora(slots)
+        contexto["hora_drill_query"] = nav_query
 
     return render(request, "dashboards/atendimento_lista.html", contexto)
 
