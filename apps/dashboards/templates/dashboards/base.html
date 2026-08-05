@@ -273,12 +273,6 @@
                 </p>
             </div>
             {% endif %}
-            {% comment %}
-            Barra de período (#86). Renderiza sozinha nas páginas que resolveram
-            um período; quem quer colocá-la em outro lugar (Tendências) esvazia
-            o bloco e inclui o partial no seu lugar.
-            {% endcomment %}
-            {% block period_bar %}{% if period_presets and period_show_bar %}{% include "dashboards/_period_filter.html" %}{% endif %}{% endblock %}
             {% block content %}{% endblock %}
         </main>
     </div>

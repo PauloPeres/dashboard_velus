@@ -130,7 +130,7 @@ def _get_months(request: HttpRequest) -> int:
     barra de período no topo do conteúdo, e não mais do `<select>` da sidebar.
     URLs antigas `?months=N` seguem funcionando (viram `periodo=Nm`).
     """
-    return get_period(request, granularity="month", show_label=True).months
+    return get_period(request, granularity="month").months
 
 
 def _get_period(request: HttpRequest) -> Period:
@@ -699,11 +699,9 @@ def dre_detalhe(request: HttpRequest) -> HttpResponse:
 
     # --- Dados ---
     # dre_detalhe tem seu próprio seletor from/to; o global ?months é fallback.
-    # Por isso resolve o período mas NÃO desenha a barra (#86) — dois controles
-    # temporais na mesma tela se contradiriam.
-    months = get_period(
-        request, granularity="month", show_label=True, show_bar=False
-    ).months
+    # Resolve o período, mas o template NÃO inclui `_period_header.html` (#86):
+    # dois controles temporais na mesma tela se contradiriam.
+    months = _get_months(request)
     data = compute_dre_by_account(
         org,
         from_ym=from_ym or None,

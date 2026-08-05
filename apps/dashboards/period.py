@@ -322,17 +322,14 @@ def get_period(
     presets: tuple[tuple[str, str], ...] | None = None,
     default_key: str | None = None,
     allow_custom: bool | None = None,
-    show_label: bool = False,
-    show_bar: bool = True,
 ) -> Period:
     """Resolve o período da página e prepara contexto de template + cookie.
 
     `granularity="month"` é pra páginas de série mensal: só presets em meses,
     sem período personalizado, default de 12 meses.
 
-    `show_bar=False` resolve o período sem desenhar a barra — pra página que já
-    tem controle temporal próprio (DRE detalhado) e só usa o valor como
-    fallback.
+    Onde o badge e a barra aparecem é decisão do template (`_period_header.html`
+    logo abaixo do título) — a view só resolve o período.
     """
     is_month = granularity == "month"
     if presets is None:
@@ -360,8 +357,6 @@ def get_period(
     request.velus_period = period  # type: ignore[attr-defined]
     request.velus_period_presets = presets  # type: ignore[attr-defined]
     request.velus_period_allow_custom = allow_custom  # type: ignore[attr-defined]
-    request.velus_period_show_label = show_label  # type: ignore[attr-defined]
-    request.velus_period_show_bar = show_bar  # type: ignore[attr-defined]
     return period
 
 
@@ -396,8 +391,6 @@ def period_context(request: HttpRequest) -> dict[str, Any]:
         "period_ate": period.end_date.isoformat(),
         "period_extra_params": getattr(request, "velus_period_extra_params", {}),
         "period_allow_custom": getattr(request, "velus_period_allow_custom", True),
-        "period_show_label": getattr(request, "velus_period_show_label", False),
-        "period_show_bar": getattr(request, "velus_period_show_bar", True),
     }
 
 

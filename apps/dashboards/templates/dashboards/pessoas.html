@@ -9,6 +9,8 @@
     Despesas pagas com prestadores PJ, sócios e mão de obra terceirizada no período selecionado.
 </p>
 
+{% include "dashboards/_period_header.html" %}
+
 <!-- KPI Cards -->
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
     {% include "dashboards/_kpi_card.html" with label="Total Gasto" value=grand_total_str %}

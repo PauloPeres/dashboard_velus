@@ -15,6 +15,8 @@
   {% endif %}
 </div>
 
+{% include "dashboards/_period_header.html" %}
+
 <!-- Alerta: contratos em risco -->
 {% if at_risk_summary.count > 0 %}
 <div class="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-6 flex items-start gap-3">

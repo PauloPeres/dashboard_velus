@@ -28,10 +28,6 @@ via `period_extra_params` — nada de hidden input hardcoded por template.
       <button type="submit" class="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">Aplicar</button>
     </form>
     {% endif %}
-
-    {% if period_show_label %}
-    <span class="ml-auto text-xs text-gray-500">{{ period_label }}</span>
-    {% endif %}
   </div>
   {% if period_warning %}
   <p class="mt-2 text-xs text-amber-600">{{ period_warning }}</p>

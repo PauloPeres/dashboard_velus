@@ -31,6 +31,17 @@ from apps.tenancy.models import Organization, User
 _SP = ZoneInfo("America/Sao_Paulo")
 TENDENCIAS = "/operations/atendimento-tendencias/"
 
+# Trecho do ícone do badge — só existe em `_period_badge.html`.
+_BADGE_MARK = "M8 7V3m8 4V3M3 11h18"
+
+# Páginas migradas pro componente (#86): as 18 de série mensal + Tendências.
+_PAGINAS_MIGRADAS = [
+    "executive", "revenue", "cashflow", "forecast", "dre", "burn", "financial",
+    "contracts", "pessoas", "churn", "operations", "os_dashboard",
+    "atendimento", "atendimento_conversao", "conversas_ruins", "qa_supervisor",
+    "tecnicos", "sales", "atendimento_tendencias",
+]
+
 
 def _today() -> date:
     return timezone.localtime(timezone.now(), _SP).date()
@@ -280,6 +291,55 @@ class TestNaView:
         assert resp.status_code == 200
         # A função existe no base.html; o que não pode é botão de preset.
         assert b'onclick="setPeriodo(' not in resp.content
+
+    @pytest.mark.parametrize("nome", _PAGINAS_MIGRADAS)
+    def test_badge_abaixo_do_titulo_em_toda_pagina_migrada(
+        self, client: Any, user_a: User, organization_a: Organization, nome: str
+    ) -> None:
+        """O badge é o ponto da #86 — tem que estar em todas, não só Tendências.
+
+        Ordem exigida: `<h1>` (e subtítulo) → badge → barra de período.
+        """
+        client.force_login(user_a)
+        resp = client.get(reverse(f"dashboards:{nome}"))
+        assert resp.status_code == 200
+        html = resp.content.decode()
+
+        assert html.count(_BADGE_MARK) == 1, "badge ausente ou duplicado"
+        assert resp.context["period_label"] in html
+
+        i_h1 = html.index("<h1")
+        i_badge = html.index(_BADGE_MARK)
+        i_barra = html.index('onclick="setPeriodo(')
+        assert i_h1 < i_badge < i_barra
+
+    def test_badge_das_paginas_mensais_diz_o_intervalo(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(f"{reverse('dashboards:dre')}?periodo=3m")
+        label = resp.context["period_label"]
+        assert label.startswith("3 meses (")
+        assert "–" in label  # "3 meses (Jun/2026 – Ago/2026)"
+        assert label in resp.content.decode()
+
+    def test_pagina_com_controle_temporal_proprio_nao_ganha_badge(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        """DRE Detalhado tem seletor de competência próprio (ver #86 no PR)."""
+        client.force_login(user_a)
+        resp = client.get(reverse("dashboards:dre_detalhe"))
+        assert resp.status_code == 200
+        assert _BADGE_MARK not in resp.content.decode()
+
+    def test_rotulo_cinza_da_barra_saiu(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        """Com o badge presente, o rótulo dentro da barra era redundante."""
+        client.force_login(user_a)
+        resp = client.get(reverse("dashboards:executive"))
+        # O rótulo aparece uma vez só — no badge, e não também dentro da barra.
+        assert resp.content.decode().count(resp.context["period_label"]) == 1
 
     def test_months_legado_continua_abrindo_pagina_mensal(
         self, client: Any, user_a: User, organization_a: Organization

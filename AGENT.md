@@ -391,9 +391,10 @@ set_period_extra_params(request, {"foco": foco})    # o que o form personalizado
   `velus_periodo` > default da página. Cookie inválido é ignorado em silêncio.
 - A view não passa nada de período no contexto: o context processor
   `dashboards.context_processors.period_context` lê o que `get_period` deixou no
-  request, e `base.html` desenha a barra (`_period_filter.html`) sozinha.
-  Página que quer a barra em outro lugar esvazia `{% block period_bar %}` e
-  inclui o partial onde quiser; o badge é `_period_badge.html`.
+  request. O template inclui **`_period_header.html` logo abaixo do
+  título/subtítulo** — badge (`_period_badge.html`) e depois barra
+  (`_period_filter.html`). Ordem obrigatória: `<h1>` → subtítulo → badge → barra
+  → conteúdo.
 - `setPeriodo()`/`setParam()` são helpers compartilhados do `base.html`.
 
 ### 4.8 Testes

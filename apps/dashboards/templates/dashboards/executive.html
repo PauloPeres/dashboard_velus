@@ -20,6 +20,8 @@
   {% endif %}
 </div>
 
+{% include "dashboards/_period_header.html" %}
+
 <!-- Alerta crítico: inadimplência 90+ dias -->
 {% if aging_alert %}
 <div class="bg-red-50 border border-red-200 rounded-xl p-4 mb-6 flex items-start gap-3">

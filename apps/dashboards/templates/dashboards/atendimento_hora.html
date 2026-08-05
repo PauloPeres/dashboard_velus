@@ -3,10 +3,7 @@
 
 {% block title %}Atendimentos de {{ hour_start|date:"d/m H:i" }} · Velus{% endblock %}
 
-{# Página é de uma hora específica (?h=) — o seletor global de período não vale. #}
-{# Drill-down: o período só viaja pro link de volta — sem barra de filtro (#86). #}
-{% block period_bar %}{% endblock %}
-
+{# Drill-down de uma hora (?h=) — sem badge nem barra: o período só viaja daqui pro link de volta. #}
 {% block content %}
 <!-- Cabeçalho -->
 <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-6">
