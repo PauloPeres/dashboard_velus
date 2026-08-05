@@ -291,7 +291,7 @@
   // Drill-down (#77): clique num ponto do gráfico horário abre a lista daquela
   // hora, levando o recorte da tela (foco/departamento) e o período (#75).
   // O ISO local do slot viaja no `customdata` do ponto — `x` é só rótulo.
-  var HORA_URL = "{% url 'dashboards:atendimento_hora' %}";
+  var HORA_URL = "{% url 'dashboards:atendimento_lista' %}";
   var HORA_QUERY = "{{ period_query|escapejs }}&foco={{ horario.foco|escapejs }}{% if selected_departamento_id %}&departamento={{ selected_departamento_id }}{% endif %}";
 
   function bindHorarioDrilldown() {

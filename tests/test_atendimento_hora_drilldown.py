@@ -29,7 +29,7 @@ from apps.shared.context import set_current_organization
 from apps.tenancy.models import Organization, User
 
 _SP = ZoneInfo("America/Sao_Paulo")
-URL = "/operations/atendimento-hora/"
+URL = "/operations/atendimento-lista/"  # a tela da hora virou recorte da lista (#87)
 TENDENCIAS_URL = "/operations/atendimento-tendencias/"
 
 
@@ -274,8 +274,8 @@ class TestViewDrilldown:
         html = resp.content.decode()
         anterior = _h_param(h - timedelta(hours=1))
         seguinte = _h_param(h + timedelta(hours=1))
-        assert f"h={anterior}&amp;periodo=7d&amp;foco=rede" in html
-        assert f"h={seguinte}&amp;periodo=7d&amp;foco=rede" in html
+        assert f"h={anterior}&amp;foco=rede&amp;periodo=7d" in html
+        assert f"h={seguinte}&amp;foco=rede&amp;periodo=7d" in html
         # Volta pras Tendências mantém período e foco.
         assert f'href="{TENDENCIAS_URL}?periodo=7d&amp;foco=rede"' in html
 

@@ -79,6 +79,7 @@ _DEFAULT: list[dict[str, str]] = [{"source": _IXC, "detail": "Dados do ERP IXC v
 # sem o marcador de vencimento (IXC) da página de tendências.
 _ROUTE_LINEAGE: dict[tuple[str, str], list[dict[str, str]]] = {
     ("dashboards", "atendimento_hora"): [{"source": _OPA, "detail": _D_OPA}],
+    ("dashboards", "atendimento_lista"): [{"source": _OPA, "detail": _D_OPA}],
 }
 
 

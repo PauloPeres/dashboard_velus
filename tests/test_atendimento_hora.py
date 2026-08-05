@@ -1,14 +1,15 @@
 """Testes da lista de atendimentos de uma hora do gráfico horário (#76).
 
 Cobre `compute_atendimento_hora` (bordas da hora, recorte de foco, isolamento
-por organização, coerência com o ponto do gráfico) e a view `atendimento_hora`
-(render, RBAC herdado da aba de tendências, `?h=` inválido e export CSV).
+por organização, coerência com o ponto do gráfico) e o redirect da rota antiga
+`atendimento_hora` pra a lista genérica (#87).
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -230,8 +231,37 @@ class TestComputeAtendimentoHora:
 
 @pytest.mark.django_db
 @pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
-class TestAtendimentoHoraView:
-    def test_lista_renderiza(
+class TestAtendimentoHoraRedirect:
+    """A rota antiga virou 302 pra `atendimento_lista?h=` (#87).
+
+    A tela em si (render, RBAC dos links, CSV, paginação) é testada em
+    `test_atendimento_lista.py` — aqui só o contrato da URL antiga, que já foi
+    compartilhada e não pode quebrar.
+    """
+
+    def test_redireciona_preservando_a_querystring(
+        self, client: Any, user_a: User
+    ) -> None:
+        client.force_login(user_a)
+        h = _hour()
+        resp = client.get(f"{URL}?h={_h_param(h)}&foco=rede&departamento=7&periodo=7d")
+
+        assert resp.status_code == 302
+        assert resp.url.startswith("/operations/atendimento-lista/?")
+        assert f"h={quote(_h_param(h), safe='')}" in resp.url
+        assert "foco=rede" in resp.url
+        assert "departamento=7" in resp.url
+        assert "periodo=7d" in resp.url
+
+    def test_foco_default_da_rota_antiga_e_explicitado(
+        self, client: Any, user_a: User
+    ) -> None:
+        """A lista nova assume `todos`; a hora antiga assumia `suporte`."""
+        client.force_login(user_a)
+        resp = client.get(f"{URL}?h={_h_param(_hour())}")
+        assert "foco=suporte" in resp.url
+
+    def test_chega_na_lista_e_renderiza(
         self, client: Any, user_a: User, organization_a: Organization
     ) -> None:
         set_current_organization(organization_a)
@@ -242,60 +272,29 @@ class TestAtendimentoHoraView:
             protocol="2026080312345", tags=["Sem Conexão"],
         )
         client.force_login(user_a)
-        resp = client.get(f"{URL}?h={_h_param(h)}&foco=todos")
+        resp = client.get(f"{URL}?h={_h_param(h)}&foco=todos", follow=True)
+
         assert resp.status_code == 200
+        assert resp.redirect_chain[-1][0].startswith("/operations/atendimento-lista/")
         html = resp.content.decode()
         assert "Fulano de Tal" in html
-        assert "Ana" in html
-        assert "2026080312345" in html
         assert "1 atendimento entre" in html
-        assert "Exportar CSV" in html
 
-    def test_h_invalido_redireciona_para_tendencias(
-        self, client: Any, user_a: User
-    ) -> None:
-        client.force_login(user_a)
-        resp = client.get(f"{URL}?h=nao-e-data&periodo=7d&foco=rede")
-        assert resp.status_code == 302
-        assert resp.url.startswith("/operations/atendimento-tendencias/?")
-        assert "periodo=7d" in resp.url
-        assert "foco=rede" in resp.url
-
-    def test_h_ausente_redireciona(self, client: Any, user_a: User) -> None:
-        client.force_login(user_a)
-        resp = client.get(URL)
-        assert resp.status_code == 302
-        assert resp.url.startswith("/operations/atendimento-tendencias/?")
-
-    def test_propaga_periodo_no_link_de_volta(
+    def test_csv_sobrevive_ao_redirect(
         self, client: Any, user_a: User, organization_a: Organization
     ) -> None:
-        client.force_login(user_a)
-        h = _hour()
-        resp = client.get(f"{URL}?h={_h_param(h)}&de=2026-01-01&ate=2026-01-31")
-        assert resp.status_code == 200
-        assert "de=2026-01-01&amp;ate=2026-01-31" in resp.content.decode()
-
-    def test_isolamento_cross_tenant_na_view(
-        self,
-        client: Any,
-        user_a: User,
-        user_b: User,
-        organization_a: Organization,
-        organization_b: Organization,
-    ) -> None:
-        h = _hour()
         set_current_organization(organization_a)
-        _at(organization_a, external_id="a1", opened_at=h, customer_name="Cliente ACME")
-        set_current_organization(organization_b)
-        _at(organization_b, external_id="b1", opened_at=h, customer_name="Cliente Brava")
+        h = _hour()
+        _at(organization_a, external_id="a1", opened_at=h, customer_name="Cliente Ação")
+        client.force_login(user_a)
+        resp = client.get(
+            f"{URL}?h={_h_param(h)}&foco=todos&format=csv", follow=True
+        )
+        assert resp.status_code == 200
+        assert resp["Content-Type"].startswith("text/csv")
+        assert "Cliente Ação" in resp.content.decode("utf-8-sig")
 
-        client.force_login(user_b)
-        html = client.get(f"{URL}?h={_h_param(h)}&foco=todos").content.decode()
-        assert "Cliente Brava" in html
-        assert "Cliente ACME" not in html
-
-    def test_sem_acesso_a_aba_de_tendencias(
+    def test_rbac_continua_valendo_na_rota_antiga(
         self, client: Any, organization_a: Organization
     ) -> None:
         user = _membro_do_grupo(
@@ -305,123 +304,4 @@ class TestAtendimentoHoraView:
         resp = client.get(f"{URL}?h={_h_param(_hour())}")
         assert resp.status_code in (302, 403)
         if resp.status_code == 302:
-            assert not resp.url.startswith(URL)
-
-    def test_acesso_herdado_da_aba_de_tendencias(
-        self, client: Any, organization_a: Organization
-    ) -> None:
-        user = _membro_do_grupo(
-            organization_a, email="com-acesso@acme.test",
-            pages=["atendimento_tendencias"],
-        )
-        client.force_login(user)
-        assert client.get(f"{URL}?h={_h_param(_hour())}").status_code == 200
-
-
-@pytest.mark.django_db
-@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
-class TestAtendimentoHoraLinksPorRbac:
-    """Links da tabela apontam pra abas de OUTRAS chaves (customers /
-    conversas_ruins) — só renderizam pra quem tem acesso a elas."""
-
-    def _seed(self, org: Organization) -> datetime:
-        set_current_organization(org)
-        h = _hour()
-        customer = Customer.objects.create(
-            organization=org, source_type="IXC", external_id="ixc-1",
-            document="12345678901", name="Fulano de Tal",
-            status=Customer.Status.ACTIVE.value,
-        )
-        _at(
-            org, external_id="a1", opened_at=h, customer=customer,
-            customer_name="Fulano de Tal", protocol="P1",
-        )
-        return h
-
-    def test_grupo_so_com_tendencias_nao_ve_links(
-        self, client: Any, organization_a: Organization
-    ) -> None:
-        h = self._seed(organization_a)
-        user = _membro_do_grupo(
-            organization_a, email="restrito@acme.test",
-            pages=["atendimento_tendencias"],
-        )
-        client.force_login(user)
-        resp = client.get(f"{URL}?h={_h_param(h)}&foco=todos")
-        assert resp.status_code == 200
-        html = resp.content.decode()
-        assert "/customers/" not in html
-        assert "/operations/conversas-ruins/" not in html
-        # Texto continua visível, só não é link.
-        assert "Fulano de Tal" in html
-        assert "P1" in html
-
-    def test_acesso_total_ve_links(
-        self, client: Any, user_a: User, organization_a: Organization
-    ) -> None:
-        h = self._seed(organization_a)
-        client.force_login(user_a)
-        html = client.get(f"{URL}?h={_h_param(h)}&foco=todos").content.decode()
-        assert 'href="/customers/' in html
-        assert 'href="/operations/conversas-ruins/' in html
-
-
-@pytest.mark.django_db
-@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
-class TestAtendimentoHoraCsv:
-    def test_csv_header_linhas_e_bom(
-        self, client: Any, user_a: User, organization_a: Organization
-    ) -> None:
-        set_current_organization(organization_a)
-        h = _hour()
-        sup = _departamento(organization_a, external_id="dsup", nome="Suporte")
-        _at(
-            organization_a, external_id="a1", opened_at=h, departamento=sup,
-            customer_name="Cliente Ação", customer_document="12345678901",
-            atendente_nome="José", protocol="P1", motivos=["Lentidão"],
-            tags=["Quedas"],
-        )
-        _at(
-            organization_a, external_id="a2", opened_at=h + timedelta(minutes=30),
-            departamento=sup, customer_name="Outro Cliente", protocol="P2",
-        )
-        client.force_login(user_a)
-        resp = client.get(f"{URL}?h={_h_param(h)}&foco=suporte&format=csv")
-
-        assert resp.status_code == 200
-        assert resp["Content-Type"].startswith("text/csv")
-        filename = f"atendimentos_{h.strftime('%Y-%m-%d_%Hh')}.csv"
-        assert resp["Content-Disposition"] == f'attachment; filename="{filename}"'
-
-        raw = resp.content
-        assert raw.startswith(b"\xef\xbb\xbf")  # BOM UTF-8
-        text = raw.decode("utf-8-sig")
-        linhas = [ln for ln in text.split("\r\n") if ln]
-        assert linhas[0] == (
-            "Cliente;Documento;Horário;Atendente;Departamento;"
-            "Categorias;Protocolo;Status"
-        )
-        assert len(linhas) == 3  # header + 2 atendimentos
-        assert linhas[1].startswith("Cliente Ação;12345678901;")
-        assert "Lentidão, Quedas" in linhas[1]
-        assert ";Suporte;" in linhas[1]
-        assert linhas[1].endswith(";P1;Finalizado")
-
-    def test_csv_respeita_o_foco(
-        self, client: Any, user_a: User, organization_a: Organization
-    ) -> None:
-        set_current_organization(organization_a)
-        h = _hour()
-        sup = _departamento(organization_a, external_id="dsup", nome="Suporte")
-        com = _departamento(organization_a, external_id="dcom", nome="Comercial")
-        _at(organization_a, external_id="s1", opened_at=h, departamento=sup,
-            customer_name="Do Suporte")
-        _at(organization_a, external_id="c1", opened_at=h, departamento=com,
-            customer_name="Do Comercial")
-
-        client.force_login(user_a)
-        text = client.get(
-            f"{URL}?h={_h_param(h)}&foco=comercial&format=csv"
-        ).content.decode("utf-8-sig")
-        assert "Do Comercial" in text
-        assert "Do Suporte" not in text
+            assert not resp.url.startswith("/operations/atendimento-lista/")
