@@ -7,8 +7,9 @@ persistidas — sem tocar a rede pois não há OrganizationDataSource OPA no tes
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from django.utils import timezone
@@ -22,6 +23,8 @@ from apps.atendimento.infrastructure.models import (
 from apps.customers.infrastructure.models import Contract, Customer
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import Organization, User
+
+_SP = ZoneInfo("America/Sao_Paulo")
 
 
 def _customer(org: Organization, *, document: str, name: str) -> Customer:
@@ -299,3 +302,140 @@ class TestAtendimentoDetailView:
         resp = client.get(f"/operations/conversas-ruins/{at.id}/")
         assert resp.status_code == 200
         assert b"Sem mensagens" in resp.content
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestPeriodoEmDias:
+    """Filtro de período em dias na página (#97).
+
+    A página é de atendimento, então usa o mesmo componente de Tendências
+    (Hoje/Ontem/personalizado + cookie) — e não os meses fechados que ela
+    herdava do `<select>` antigo.
+    """
+
+    URL = "/operations/conversas-ruins/"
+
+    def test_barra_tem_presets_em_dias_e_personalizado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(self.URL)
+        assert resp.status_code == 200
+        html = resp.content.decode()
+        assert "setPeriodo('1d')" in html
+        assert "setPeriodo('ontem')" in html
+        assert 'name="de"' in html
+        assert 'name="ate"' in html
+        # Sem aviso de "esta página trabalha em meses fechados".
+        assert resp.context["period"].key == "30d"
+        assert resp.context["period_warning"] is None
+
+    def test_ontem_corta_a_janela(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        sup = _departamento(organization_a, external_id="dep-p1", nome="Suporte")
+        hoje_cli = _customer(organization_a, document="81111111111", name="Cliente Hoje")
+        ontem_cli = _customer(
+            organization_a, document="82222222222", name="Cliente Ontem"
+        )
+        _atendimento(
+            organization_a, external_id="p-hoje", departamento=sup, customer=hoje_cli,
+            document="81111111111", rating=1, opened_offset_days=0,
+            resolution_hours=1, atendente_nome="Alice",
+        )
+        _atendimento(
+            organization_a, external_id="p-ontem", departamento=sup,
+            customer=ontem_cli, document="82222222222", rating=1,
+            opened_offset_days=1, resolution_hours=1, atendente_nome="Alice",
+        )
+
+        client.force_login(user_a)
+        resp = client.get(f"{self.URL}?periodo=ontem")
+        assert resp.context["period"].key == "ontem"
+        assert b"Cliente Ontem" in resp.content
+        assert b"Cliente Hoje" not in resp.content
+
+        resp = client.get(f"{self.URL}?periodo=1d")
+        assert b"Cliente Hoje" in resp.content
+        assert b"Cliente Ontem" not in resp.content
+
+    def test_periodo_personalizado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        sup = _departamento(organization_a, external_id="dep-p2", nome="Suporte")
+        antigo = _customer(organization_a, document="83333333333", name="Cliente Antigo")
+        _atendimento(
+            organization_a, external_id="p-antigo", departamento=sup, customer=antigo,
+            document="83333333333", rating=1, opened_offset_days=20,
+            resolution_hours=1, atendente_nome="Alice",
+        )
+        hoje = timezone.localtime(timezone.now(), _SP).date()
+        de = hoje - timedelta(days=25)
+        ate = hoje - timedelta(days=15)
+
+        client.force_login(user_a)
+        resp = client.get(f"{self.URL}?de={de.isoformat()}&ate={ate.isoformat()}")
+        assert resp.context["period"].is_custom is True
+        assert b"Cliente Antigo" in resp.content
+
+        # Janela que não cobre o atendimento → some.
+        resp = client.get(
+            f"{self.URL}?de={(hoje - timedelta(days=3)).isoformat()}"
+            f"&ate={hoje.isoformat()}"
+        )
+        assert b"Cliente Antigo" not in resp.content
+
+    def test_cookie_atravessa_a_navegacao(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        client.get(f"{self.URL}?periodo=7d")
+        resp = client.get(self.URL)
+        assert resp.context["period"].key == "7d"
+
+    def test_departamento_propagado_no_form_do_personalizado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        sup = _departamento(organization_a, external_id="dep-p3", nome="Suporte")
+        client.force_login(user_a)
+        resp = client.get(f"{self.URL}?departamento={sup.id}")
+        assert f'name="departamento" value="{sup.id}"' in resp.content.decode()
+
+    def test_reabertura_enxerga_contato_anterior_a_janela(
+        self, organization_a: Organization
+    ) -> None:
+        """Janela curta não pode apagar o sinal de reabertura.
+
+        O 1º contato do cliente é de dias atrás — fora do período exibido. Sem
+        o recuo de `_REABERTURA_JANELA_DIAS` na busca de contatos, "Hoje" nunca
+        acusaria reabertura.
+        """
+        from apps.analytics.application.aggregations import compute_bad_conversations
+
+        sup = _departamento(organization_a, external_id="dep-p4", nome="Suporte")
+        cli = _customer(organization_a, document="84444444444", name="Cliente Volta")
+        _atendimento(
+            organization_a, external_id="p-r1", departamento=sup, customer=cli,
+            document="84444444444", atendente_nome="Alice", opened_offset_days=3,
+            resolution_hours=1,
+        )
+        segundo = _atendimento(
+            organization_a, external_id="p-r2", departamento=sup, customer=cli,
+            document="84444444444", atendente_nome="Alice", opened_offset_days=0,
+            resolution_hours=1,
+        )
+
+        hoje = timezone.localtime(timezone.now(), _SP).date()
+        data = compute_bad_conversations(
+            organization_a,
+            start=datetime.combine(hoje, time.min, tzinfo=_SP),
+            end=timezone.now(),
+        )
+        codes = {
+            s["code"]
+            for r in data["rows"]
+            if r["atendimento_id"] == segundo.id
+            for s in r["signals"]
+        }
+        assert "reabertura" in codes

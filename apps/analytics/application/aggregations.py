@@ -6449,6 +6449,9 @@ _BAD_SIGNAL_LABELS = {
 }
 _BAD_TMA_THRESHOLD_H = 72.0  # 3 dias
 _REABERTURA_JANELA_DIAS = 7
+# Janela padrão quando a chamada não passa start/end (mesmo default do filtro
+# de período das páginas em dias — ver `apps.dashboards.period.DEFAULT_DAY_KEY`).
+_BAD_DEFAULT_WINDOW_DAYS = 30
 
 
 def _strip_accents(text: str) -> str:
@@ -6467,7 +6470,8 @@ def _is_triagem(dep_nome: str | None) -> bool:
 def compute_bad_conversations(
     organization: Organization,
     *,
-    months: int = 3,
+    start: datetime | None = None,
+    end: datetime | None = None,
     departamento_id: int | None = None,
     limit: int = 100,
 ) -> dict[str, Any]:
@@ -6480,6 +6484,10 @@ def compute_bad_conversations(
     conversa ruim** — só o desfecho qualifica, então o bot é excluído da
     reabertura e do TMA. Cruza com MRR + risco de churn (FK por documento) e
     prioriza por **MRR × score** — quem dói mais perder sobe ao topo.
+
+    A janela é `start`/`end` (datetimes aware, ambos inclusivos) — o período
+    resolvido pelo filtro em dias das páginas de atendimento (#97). Sem eles,
+    os últimos `_BAD_DEFAULT_WINDOW_DAYS` dias.
     """
     import bisect
     from collections import defaultdict
@@ -6488,9 +6496,16 @@ def compute_bad_conversations(
     from apps.customers.infrastructure.models import Contract
 
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    window_end = end or now
+    window_start = start or (
+        (now - timedelta(days=_BAD_DEFAULT_WINDOW_DAYS)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
     )
+    # A reabertura precisa enxergar ANTES da janela exibida: com "Hoje"/"Ontem"
+    # o contato anterior do cliente cai fora do período, e sem esse recuo o
+    # sinal simplesmente nunca dispararia nas janelas curtas.
+    contacts_start = window_start - timedelta(days=_REABERTURA_JANELA_DIAS)
 
     # Reabertura (FCR falho): cliente voltou pro MESMO departamento, atendido por
     # HUMANO, dentro de _REABERTURA_JANELA_DIAS. Exclui Triagem (menu do bot) e
@@ -6501,7 +6516,9 @@ def compute_bad_conversations(
     human_contacts: dict[tuple[str, int], list[Any]] = defaultdict(list)
     for c in (
         Atendimento.objects.filter(
-            organization=organization, opened_at__gte=window_start
+            organization=organization,
+            opened_at__gte=contacts_start,
+            opened_at__lte=window_end,
         )
         .exclude(customer_document="")
         .exclude(opened_at__isnull=True)
@@ -6544,11 +6561,14 @@ def compute_bad_conversations(
         QAReview.objects.filter(
             organization=organization,
             atendimento__opened_at__gte=window_start,
+            atendimento__opened_at__lte=window_end,
         ).values_list("atendimento_id", "resolveu")
     )
 
     base = Atendimento.objects.filter(
-        organization=organization, opened_at__gte=window_start
+        organization=organization,
+        opened_at__gte=window_start,
+        opened_at__lte=window_end,
     )
     if departamento_id is not None:
         base = base.filter(departamento_id=departamento_id)
