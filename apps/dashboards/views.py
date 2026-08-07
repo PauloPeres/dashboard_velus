@@ -2065,15 +2065,24 @@ def conversas_ruins(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#97): a página é de atendimento, então segue os mesmos
+    # presets de Tendências (Hoje, Ontem, …) e o personalizado — não os meses
+    # fechados das páginas de série mensal.
+    period = _get_period(request)
 
     departamento_id: int | None = None
     raw_dep = request.GET.get("departamento", "")
     if raw_dep.isdigit():
         departamento_id = int(raw_dep)
 
+    # Recorte da página que o form de período personalizado precisa preservar.
+    set_period_extra_params(request, {"departamento": departamento_id})
+
     data = compute_bad_conversations(
-        org, months=months, departamento_id=departamento_id
+        org,
+        start=period.start,
+        end=period.end,
+        departamento_id=departamento_id,
     )
     for r in data["rows"]:
         r["mrr_str"] = _fmt_brl(r["mrr"])
