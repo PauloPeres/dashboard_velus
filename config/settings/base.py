@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlparse
 
+from ._email import build_email_settings
 from ._env import env
 
 # =============================================================================
@@ -47,6 +48,7 @@ THIRD_PARTY_APPS = [
     "axes",
     "simple_history",
     "django_structlog",
+    "anymail",  # backend de e-mail via API HTTP (Mailgun)
 ]
 
 LOCAL_APPS: list[str] = [
@@ -86,6 +88,8 @@ MIDDLEWARE = [
     "django_structlog.middlewares.RequestMiddleware",
     "allauth.account.middleware.AccountMiddleware",
     "apps.shared.middleware.TenantMiddleware",  # injeta organization no contextvar
+    "apps.dashboards.middleware.PageAccessMiddleware",  # RBAC por grupo (#65)
+    "apps.dashboards.middleware.PeriodCookieMiddleware",  # persiste ?periodo= (#86)
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "csp.middleware.CSPMiddleware",
@@ -111,6 +115,8 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "apps.shared.context_processors.tenant",
                 "apps.dashboards.context_processors.period_context",
+                "apps.dashboards.context_processors.page_access",
+                "apps.dashboards.context_processors.data_lineage",
             ],
         },
     },
@@ -225,8 +231,14 @@ AUTH_PASSWORD_VALIDATORS = [
 # =============================================================================
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_AGE = 60 * 60 * 24  # 1 dia
-SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+# Janela deslizante: a sessão vale N dias (default 3) e `SAVE_EVERY_REQUEST`
+# renova a expiração a cada request. Quem usa o dashboard todo dia nunca é
+# deslogado; quem some por mais de N dias precisa logar de novo. Antes era
+# 1 dia + expirar ao fechar o navegador, o que forçava login diário sem ganho
+# real de segurança num dashboard read-only de estratégia.
+SESSION_COOKIE_AGE = 60 * 60 * 24 * env.SESSION_COOKIE_AGE_DAYS
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+SESSION_SAVE_EVERY_REQUEST = True
 
 CSRF_COOKIE_HTTPONLY = False  # precisa ser False pra HTMX ler do cookie
 CSRF_COOKIE_SAMESITE = "Lax"
@@ -255,10 +267,27 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 # =============================================================================
-# Email
+# Email (#95) — Mailgun via API HTTP (anymail) quando configurado
 # =============================================================================
-EMAIL_BACKEND = env.EMAIL_BACKEND
-DEFAULT_FROM_EMAIL = env.DEFAULT_FROM_EMAIL
+# Flag derivada (mesmo idioma de QA_LLM_ENABLED): só liga o transporte real com
+# chave E domínio remetente. Sem isso, mantém o backend de fallback — console em
+# dev, locmem em teste (settings/test.py sobrescreve). Ver config/settings/_email.py.
+_email_settings = build_email_settings(
+    api_key=env.MAILGUN_API_KEY.get_secret_value(),
+    sender_domain=env.MAILGUN_SENDER_DOMAIN,
+    api_url=env.MAILGUN_API_URL,
+    fallback_backend=env.EMAIL_BACKEND,
+    default_from_email=env.DEFAULT_FROM_EMAIL,
+)
+EMAIL_ENABLED: bool = _email_settings["EMAIL_ENABLED"]
+EMAIL_BACKEND: str = _email_settings["EMAIL_BACKEND"]
+ANYMAIL: dict = _email_settings["ANYMAIL"]
+DEFAULT_FROM_EMAIL: str = _email_settings["DEFAULT_FROM_EMAIL"]
+SERVER_EMAIL: str = _email_settings["SERVER_EMAIL"]
+
+# Link de reset/convite montado fora de um request (task Celery) usa este
+# protocolo — sem isso o allauth monta http://. Produção sobrescreve pra https.
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https" if EMAIL_ENABLED else "http"
 
 # =============================================================================
 # Celery

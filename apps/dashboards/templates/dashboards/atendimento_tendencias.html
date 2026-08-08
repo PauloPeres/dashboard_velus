@@ -1,0 +1,328 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Tendências de Atendimento · Velus{% endblock %}
+
+{% block content %}
+<!-- Cabeçalho -->
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Tendências de Atendimento</h1>
+    <p class="text-xs text-gray-400 mt-0.5">Evolução dos motivos e das tags dos atendimentos ao longo do tempo — pra comparar mix e detectar mudanças</p>
+    {% include "dashboards/_period_badge.html" %}
+  </div>
+  <!-- Filtro de departamento -->
+  <div class="relative">
+    <select
+      onchange="setParam('departamento', this.value)"
+      class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 pr-8
+             appearance-none cursor-pointer text-gray-700
+             focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400
+             hover:border-gray-300 transition-colors"
+    >
+      <option value="" {% if not selected_departamento_id %}selected{% endif %}>Todos os departamentos</option>
+      {% for d in departamentos %}
+      <option value="{{ d.id }}" {% if d.id == selected_departamento_id %}selected{% endif %}>{{ d.nome }}</option>
+      {% endfor %}
+    </select>
+    <span class="pointer-events-none absolute right-2.5 inset-y-0 flex items-center">
+      <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </span>
+  </div>
+</div>
+
+{% include "dashboards/_period_filter.html" %}
+
+<!-- Barra de contexto: granularidade + filtro ativo + resumo -->
+<div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+  <!-- Toggle semana / mês -->
+  <div class="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
+    <button onclick="setParam('g', 'week')"
+      class="px-3 py-1.5 text-sm rounded-md transition-colors
+             {% if granularity == 'week' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">
+      Semanal
+    </button>
+    <button onclick="setParam('g', 'month')"
+      class="px-3 py-1.5 text-sm rounded-md transition-colors
+             {% if granularity == 'month' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">
+      Mensal
+    </button>
+  </div>
+
+  <div class="flex flex-wrap items-center gap-2 text-xs">
+    {% if selected_departamento_nome %}
+    <span class="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
+      Departamento: <strong>{{ selected_departamento_nome }}</strong>
+    </span>
+    {% endif %}
+    <span class="text-gray-400">{{ total|intcomma }} atendimentos no período · {{ n_motivos_distintos }} motivos · {{ n_tags_distintas }} tags distintas</span>
+  </div>
+</div>
+
+<!-- Gráfico horário sazonal (desvios de volume) -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Volume de atendimentos hora a hora vs esperado</h2>
+    <div class="flex flex-wrap items-center gap-2">
+      <!-- Foco -->
+      <div class="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
+        <button onclick="setParam('foco','rede')" class="px-2.5 py-1 text-xs rounded-md {% if horario.foco == 'rede' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Rede</button>
+        <button onclick="setParam('foco','suporte')" class="px-2.5 py-1 text-xs rounded-md {% if horario.foco == 'suporte' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Suporte</button>
+        <button onclick="setParam('foco','comercial')" class="px-2.5 py-1 text-xs rounded-md {% if horario.foco == 'comercial' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Comercial</button>
+        <button onclick="setParam('foco','todos')" class="px-2.5 py-1 text-xs rounded-md {% if horario.foco == 'todos' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Todos</button>
+      </div>
+    </div>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">
+    Foco <strong>{% if horario.foco == 'rede' %}Rede{% elif horario.foco == 'suporte' %}Suporte{% elif horario.foco == 'comercial' %}Comercial{% else %}Todos{% endif %}</strong>{% if horario.foco == 'rede' %} (motivos/tags de conexão: Sem Conexão, Quedas, Rompimento, LOS…){% elif horario.foco == 'suporte' %} (departamento Suporte){% elif horario.foco == 'comercial' %} (departamento Comercial){% endif %}. Linha azul = atendimentos abertos por hora. Faixa cinza = esperado pra aquele dia-da-semana × hora (últimas {{ horario.baseline_weeks }} semanas).
+    {% if horario.detect == 'drop' %}<span class="text-amber-600">Triângulos laranja</span> = <strong>quedas</strong> anormais (hora que normalmente tem movimento caiu pra ~1/3 do normal → menos oportunidade comercial).{% else %}Pontos vermelhos = <strong>só picos</strong> bem acima do normal (alerta conservador; queda não conta). Um pico no foco Rede é sinal forte de problema estrutural.{% endif %}
+    <span class="text-amber-600">Faixa âmbar</span> = dias de vencimento pesado (baseline próprio de cobrança).
+    <strong class="text-gray-500">Clique em um ponto pra ver os atendimentos daquela hora.</strong>
+  </p>
+  <div class="flex flex-wrap gap-4 mb-3 text-xs">
+    {% if horario.detect == 'drop' %}
+    <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 bg-amber-500" style="clip-path:polygon(50% 100%,0 0,100% 0)"></span>{{ horario.n_anomalias }} hora{{ horario.n_anomalias|pluralize }} com queda anormal</span>
+    {% else %}
+    <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>{{ horario.n_anomalias }} hora{{ horario.n_anomalias|pluralize }} com pico anômalo</span>
+    {% endif %}
+    <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm bg-amber-200"></span>{{ horario.n_billing_days }} dia{{ horario.n_billing_days|pluralize }} de cobrança</span>
+    <span class="text-gray-400">{{ horario.total_janela|intcomma }} atendimentos · {{ period_label }}</span>
+  </div>
+  <div id="horario-chart" style="height:360px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+
+  <!-- Eventos de rede registrados a mão (#78) -->
+  <div class="mt-5 pt-4 border-t border-gray-100">
+    <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+      <h3 class="text-sm font-semibold text-gray-700">Eventos no período</h3>
+      <span class="text-xs text-gray-400">
+        Rompimento, manutenção, queda de link ou atualização registrados à mão — aparecem como faixa (com fim) ou linha tracejada (pontual) sobre o gráfico.
+      </span>
+    </div>
+
+    {% if evento_erro %}
+    <p class="text-xs text-red-600 mb-2">Não consegui salvar: confira título, início e fim (o fim não pode ser antes do início).</p>
+    {% endif %}
+
+    {% if eventos_rede %}
+    <ul class="divide-y divide-gray-100 text-sm mb-3">
+      {% for e in eventos_rede %}
+      <li class="py-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full" style="background-color: {{ e.cor }}"></span>
+          <span class="font-medium text-gray-800">{{ e.titulo }}</span>
+          <span class="text-xs text-gray-500">{{ e.tipo_label }}</span>
+          <span class="text-xs text-gray-400">
+            {{ e.started_at_str }}{% if e.ended_at_str %} → {{ e.ended_at_str }}{% else %} · pontual{% endif %}
+          </span>
+          {% if pode_editar_eventos %}
+          <span class="ml-auto flex items-center gap-2">
+            <a href="#evento-{{ e.id }}" class="text-xs text-blue-600 hover:underline">editar</a>
+            <form method="post" action="{% url 'dashboards:evento_rede_editar' e.id %}"
+                  onsubmit="return confirm('Excluir o evento &quot;{{ e.titulo|escapejs }}&quot;? Ele deixa de aparecer sobre o gráfico.');">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="delete">
+              <input type="hidden" name="q" value="{{ evento_voltar_query }}">
+              <button type="submit" class="text-xs text-red-600 hover:underline">excluir</button>
+            </form>
+          </span>
+          {% endif %}
+        </div>
+        {% if e.descricao %}<p class="text-xs text-gray-500 mt-1">{{ e.descricao }}</p>{% endif %}
+        {% if pode_editar_eventos %}
+        <details id="evento-{{ e.id }}" class="mt-2">
+          <summary class="text-xs text-gray-500 cursor-pointer">Editar este evento</summary>
+          <form method="post" action="{% url 'dashboards:evento_rede_editar' e.id %}" class="mt-2 grid gap-2 sm:grid-cols-5 items-end">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="update">
+            <input type="hidden" name="q" value="{{ evento_voltar_query }}">
+            <label class="text-xs text-gray-500 sm:col-span-1">Tipo
+              <select name="tipo" class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+                {% for value, label in evento_tipos %}
+                <option value="{{ value }}" {% if value == e.tipo %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="text-xs text-gray-500 sm:col-span-2">Título
+              <input type="text" name="titulo" value="{{ e.titulo }}" required maxlength="255"
+                     class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+            </label>
+            <label class="text-xs text-gray-500">Início
+              <input type="datetime-local" name="started_at" value="{{ e.started_at_input }}" required
+                     class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+            </label>
+            <label class="text-xs text-gray-500">Fim (opcional)
+              <input type="datetime-local" name="ended_at" value="{{ e.ended_at_input }}"
+                     class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+            </label>
+            <label class="text-xs text-gray-500 sm:col-span-4">Descrição
+              <input type="text" name="descricao" value="{{ e.descricao }}"
+                     class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+            </label>
+            <button type="submit" class="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">Salvar</button>
+          </form>
+        </details>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-xs text-gray-400 mb-3">Nenhum evento de rede registrado nesta janela.</p>
+    {% endif %}
+
+    {% if pode_editar_eventos %}
+    <details>
+      <summary class="text-sm text-blue-600 cursor-pointer font-medium">Registrar evento</summary>
+      <form method="post" action="{% url 'dashboards:evento_rede_novo' %}" class="mt-3 grid gap-2 sm:grid-cols-5 items-end">
+        {% csrf_token %}
+        <input type="hidden" name="q" value="{{ evento_voltar_query }}">
+        <label class="text-xs text-gray-500">Tipo
+          <select name="tipo" class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+            {% for value, label in evento_tipos %}
+            <option value="{{ value }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="text-xs text-gray-500 sm:col-span-2">Título
+          <input type="text" name="titulo" required maxlength="255" placeholder="Rompimento troncal bairro X"
+                 class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+        </label>
+        <label class="text-xs text-gray-500">Início
+          <input type="datetime-local" name="started_at" value="{{ evento_default_inicio }}" required
+                 class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+        </label>
+        <label class="text-xs text-gray-500">Fim (opcional)
+          <input type="datetime-local" name="ended_at"
+                 class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+        </label>
+        <label class="text-xs text-gray-500 sm:col-span-4">Descrição
+          <input type="text" name="descricao" placeholder="O que aconteceu, o que foi feito…"
+                 class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+        </label>
+        <button type="submit" class="text-xs px-3 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">Salvar evento</button>
+      </form>
+    </details>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Gráfico 1: Motivos ao longo do tempo -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Motivos de atendimento ao longo do tempo</h2>
+    <span class="text-xs text-gray-400">{{ n_motivos_distintos }} motivos{% if n_motivos_distintos > top_n %} · top {{ top_n }} + “Outros”{% endif %} · por {% if granularity == 'month' %}mês{% else %}semana{% endif %} · {{ period_label }}</span>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">Motivos configurados na Opa!, contados por {% if granularity == 'month' %}mês{% else %}semana{% endif %} de abertura. Um atendimento pode ter mais de um motivo.</p>
+  <div id="motivos-trend-chart" style="height:380px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+
+  <!-- Destacar um motivo específico -->
+  <div class="mt-4 pt-4 border-t border-gray-100 flex flex-wrap items-center gap-2">
+    <label class="text-xs text-gray-500">Destacar um motivo:</label>
+    <div class="relative">
+      <select onchange="setParam('motivo', this.value)"
+        class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-1.5 pr-8 appearance-none cursor-pointer text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <option value="">— nenhum —</option>
+        {% for m in motivos_all %}
+        <option value="{{ m }}" {% if m == focus_motivo %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+      <span class="pointer-events-none absolute right-2.5 inset-y-0 flex items-center">
+        <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+      </span>
+    </div>
+    {% if focus_motivo %}
+    <button onclick="setParam('motivo', '')" class="text-xs text-blue-600 hover:underline">limpar</button>
+    {% endif %}
+  </div>
+  {% if motivo_focus %}
+  <div class="mt-3">
+    <p class="text-xs text-gray-500 mb-2">Motivo <strong>{{ motivo_focus.name }}</strong> ao longo do tempo — {{ motivo_focus.total|intcomma }} no período.</p>
+    <div id="motivo-focus-chart" style="height:280px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Gráfico 2: Tags ao longo do tempo -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Tags de atendimento ao longo do tempo</h2>
+    <span class="text-xs text-gray-400">{{ n_tags_distintas }} tags{% if n_tags_distintas > top_n %} · top {{ top_n }} + “Outros”{% endif %} · por {% if granularity == 'month' %}mês{% else %}semana{% endif %} · {{ period_label }}</span>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">Tags configuradas na Opa!, contadas por {% if granularity == 'month' %}mês{% else %}semana{% endif %} de abertura. Um atendimento pode ter várias tags — cada uma é contada. {{ atendimentos_com_tag|intcomma }} atendimentos com ao menos uma tag.</p>
+  <div id="tags-trend-chart" style="height:380px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+
+  <!-- Destacar uma tag específica -->
+  <div class="mt-4 pt-4 border-t border-gray-100 flex flex-wrap items-center gap-2">
+    <label class="text-xs text-gray-500">Destacar uma tag:</label>
+    <div class="relative">
+      <select onchange="setParam('tag', this.value)"
+        class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-1.5 pr-8 appearance-none cursor-pointer text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <option value="">— nenhuma —</option>
+        {% for t in tags_all %}
+        <option value="{{ t }}" {% if t == focus_tag %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+      <span class="pointer-events-none absolute right-2.5 inset-y-0 flex items-center">
+        <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+      </span>
+    </div>
+    {% if focus_tag %}
+    <button onclick="setParam('tag', '')" class="text-xs text-blue-600 hover:underline">limpar</button>
+    {% endif %}
+  </div>
+  {% if tag_focus %}
+  <div class="mt-3">
+    <p class="text-xs text-gray-500 mb-2">Tag <strong>{{ tag_focus.name }}</strong> ao longo do tempo — {{ tag_focus.total|intcomma }} no período.</p>
+    <div id="tag-focus-chart" style="height:280px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ horario_json|json_script:"horario-data" }}
+{{ motivos_trend_json|json_script:"motivos-trend-data" }}
+{{ tags_trend_json|json_script:"tags-trend-data" }}
+{% if motivo_focus_json %}{{ motivo_focus_json|json_script:"motivo-focus-data" }}{% endif %}
+{% if tag_focus_json %}{{ tag_focus_json|json_script:"tag-focus-data" }}{% endif %}
+<script>
+  // setParam/setPeriodo são helpers compartilhados do base.html (#86).
+  // Drill-down (#77): clique num ponto do gráfico horário abre a lista daquela
+  // hora, levando o recorte da tela (foco/departamento) e o período (#75).
+  // O ISO local do slot viaja no `customdata` do ponto — `x` é só rótulo.
+  var HORA_URL = "{% url 'dashboards:atendimento_lista' %}";
+  var HORA_QUERY = "{{ period_query|escapejs }}&foco={{ horario.foco|escapejs }}{% if selected_departamento_id %}&departamento={{ selected_departamento_id }}{% endif %}";
+
+  function bindHorarioDrilldown() {
+    var el = document.getElementById("horario-chart");
+    if (!el || !el.on) return;
+    el.on("plotly_click", function (ev) {
+      // Com "x unified" o evento traz um ponto de CADA trace daquele x (banda e
+      // "Esperado" incluídos, e esses não têm customdata) — procura o primeiro
+      // ponto que tenha, em vez de assumir o índice 0.
+      var pts = ev.points || [];
+      var slot = null;
+      for (var i = 0; i < pts.length && !slot; i++) {
+        var cd = pts[i].customdata;
+        if (cd) slot = Array.isArray(cd) ? cd[0] : cd;
+      }
+      if (!slot) return;
+      window.location.href = HORA_URL + "?h=" + encodeURIComponent(slot) + "&" + HORA_QUERY;
+    });
+    // Cursor de "clicável" sobre a área do plot (o padrão do Plotly é crosshair).
+    el.querySelectorAll(".nsewdrag").forEach(function (d) {
+      d.style.cursor = "pointer";
+    });
+  }
+
+  var horarioPlot = renderChart("horario-chart", "horario-data");
+  if (horarioPlot && horarioPlot.then) {
+    horarioPlot.then(bindHorarioDrilldown);
+  }
+  renderChart("motivos-trend-chart", "motivos-trend-data");
+  renderChart("tags-trend-chart", "tags-trend-data");
+  {% if motivo_focus_json %}renderChart("motivo-focus-chart", "motivo-focus-data");{% endif %}
+  {% if tag_focus_json %}renderChart("tag-focus-chart", "tag-focus-data");{% endif %}
+</script>
+{% endblock %}

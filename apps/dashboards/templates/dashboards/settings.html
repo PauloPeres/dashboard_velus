@@ -49,5 +49,86 @@
       </button>
     </form>
   </div>
+
+  {% if is_owner %}
+  <!-- ── Owner: convidar usuários e acesso ── -->
+  <div class="flex items-center justify-between bg-white rounded-xl shadow-sm border border-gray-200 p-4 mt-6">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-700">Grupos de acesso</h2>
+      <p class="text-xs text-gray-400">Crie grupos de abas e atribua pessoas — sem precisar do /admin.</p>
+    </div>
+    <a href="{% url 'dashboards:access_management' %}" class="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 whitespace-nowrap">Gerenciar grupos</a>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mt-6">
+    <h2 class="text-sm font-semibold text-gray-700 mb-1">Convidar usuário</h2>
+    <p class="text-xs text-gray-400 mb-4">
+      Cria o acesso da pessoa e envia um e-mail pra ela definir a senha (ela também pode entrar com o Google, se o e-mail bater). Escolha o grupo de acesso que define quais abas ela verá.
+    </p>
+
+    {% if invite_msg %}
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+      <p class="text-sm text-blue-800">{{ invite_msg }}</p>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{% url 'dashboards:settings' %}" class="flex flex-wrap items-end gap-3 mb-2">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="invite">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">E-mail</label>
+        <input type="email" name="email" required placeholder="pessoa@empresa.com"
+               class="text-sm border border-gray-200 rounded-lg px-3 py-2 w-64 focus:outline-none focus:ring-2 focus:ring-blue-400">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Papel</label>
+        <select name="role" class="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400">
+          {% for value, label in roles %}<option value="{{ value }}" {% if value == 'MEMBER' %}selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Grupo de acesso</label>
+        <select name="access_group" class="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400">
+          <option value="">Sem grupo (acesso total)</option>
+          {% for g in access_groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors">Convidar</button>
+    </form>
+    {% if not access_groups %}
+    <p class="text-xs text-amber-600">Você ainda não criou grupos de acesso. Crie em <code>/admin</code> (Grupos de acesso) pra restringir as abas; sem grupo, a pessoa vê tudo.</p>
+    {% endif %}
+  </div>
+
+  <!-- Membros atuais -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mt-6">
+    <div class="p-6 pb-0">
+      <h2 class="text-sm font-semibold text-gray-700">Pessoas com acesso</h2>
+      <p class="text-xs text-gray-400 mt-0.5">Papel e grupo de acesso de cada usuário. Ajustes finos de grupo via /admin (por ora).</p>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-sm mt-4">
+        <thead class="bg-gray-50 border-t border-gray-200">
+          <tr>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">E-mail</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Papel</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Grupo</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ativo</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+          {% for m in members %}
+          <tr class="hover:bg-gray-50">
+            <td class="px-6 py-2.5 text-gray-900">{{ m.user.email }}</td>
+            <td class="px-6 py-2.5 text-gray-600">{{ m.get_role_display }}</td>
+            <td class="px-6 py-2.5 text-gray-600">{% if m.is_owner %}<span class="text-gray-400">— (tudo)</span>{% elif m.access_group %}{{ m.access_group.name }}{% else %}<span class="text-gray-400">Sem grupo (tudo)</span>{% endif %}</td>
+            <td class="px-6 py-2.5">{% if m.is_active %}<span class="text-emerald-600">sim</span>{% else %}<span class="text-gray-400">não</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
 </div>
 {% endblock %}

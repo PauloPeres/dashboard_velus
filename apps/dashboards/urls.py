@@ -10,6 +10,7 @@ app_name = "dashboards"
 
 urlpatterns = [
     path("", views.home, name="home"),
+    path("no-access/", views.no_access, name="no_access"),
     path("executive/", views.executive, name="executive"),
     path("revenue/", views.revenue, name="revenue"),
     path("contracts/", views.contracts, name="contracts"),
@@ -28,6 +29,37 @@ urlpatterns = [
     path("operations/os/", views.os_dashboard, name="os_dashboard"),
     path("operations/tecnicos/", views.tecnicos, name="tecnicos"),
     path("operations/atendimento/", views.atendimento, name="atendimento"),
+    path(
+        "operations/atendimento-tendencias/",
+        views.atendimento_tendencias,
+        name="atendimento_tendencias",
+    ),
+    path(
+        "operations/atendimento-lista/",
+        views.atendimento_lista,
+        name="atendimento_lista",
+    ),
+    # Rota antiga da lista de uma hora (#76): 302 pra `atendimento_lista?h=`.
+    path(
+        "operations/atendimento-hora/",
+        views.atendimento_hora,
+        name="atendimento_hora",
+    ),
+    path(
+        "operations/eventos-rede/novo/",
+        views.evento_rede_novo,
+        name="evento_rede_novo",
+    ),
+    path(
+        "operations/eventos-rede/<int:evento_id>/",
+        views.evento_rede_editar,
+        name="evento_rede_editar",
+    ),
+    path(
+        "operations/atendimento-conversao/",
+        views.atendimento_conversao,
+        name="atendimento_conversao",
+    ),
     path("operations/conversas-ruins/", views.conversas_ruins, name="conversas_ruins"),
     path("operations/qa/", views.qa_supervisor, name="qa_supervisor"),
     path(
@@ -40,4 +72,5 @@ urlpatterns = [
     path("customers/", views.customers, name="customers"),
     path("customers/<int:customer_id>/", views.customer_detail, name="customer_detail"),
     path("settings/", views.settings_view, name="settings"),
+    path("settings/acesso/", views.access_management, name="access_management"),
 ]

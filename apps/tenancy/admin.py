@@ -10,8 +10,15 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from simple_history.admin import SimpleHistoryAdmin
 
-from .forms import DataSourceCredentialsForm
-from .models import Organization, OrganizationDataSource, OrganizationMembership, User
+from .forms import AccessGroupForm, DataSourceCredentialsForm
+from .models import (
+    AccessGroup,
+    Organization,
+    OrganizationDataSource,
+    OrganizationInvite,
+    OrganizationMembership,
+    User,
+)
 
 
 @admin.register(Organization)
@@ -61,12 +68,40 @@ class UserAdmin(DjangoUserAdmin):
     )
 
 
+@admin.register(AccessGroup)
+class AccessGroupAdmin(SimpleHistoryAdmin):
+    """Grupo de permissões: nome + abas liberadas (checkboxes)."""
+
+    form = AccessGroupForm
+    list_display = ("name", "organization", "n_abas", "updated_at")
+    list_filter = ("organization",)
+    search_fields = ("name", "organization__slug")
+    autocomplete_fields = ("organization",)
+
+    @admin.display(description="Abas")
+    def n_abas(self, obj: AccessGroup) -> int:
+        return len(obj.allowed_pages or [])
+
+
 @admin.register(OrganizationMembership)
 class OrganizationMembershipAdmin(SimpleHistoryAdmin):
-    list_display = ("user", "organization", "role", "is_active", "invited_at", "accepted_at")
-    list_filter = ("role", "is_active", "organization")
+    list_display = (
+        "user", "organization", "role", "access_group", "is_active",
+        "invited_at", "accepted_at",
+    )
+    list_filter = ("role", "is_active", "organization", "access_group")
+    list_editable = ("access_group",)
     search_fields = ("user__email", "organization__slug")
-    autocomplete_fields = ("user", "organization")
+    autocomplete_fields = ("user", "organization", "access_group")
+
+
+@admin.register(OrganizationInvite)
+class OrganizationInviteAdmin(admin.ModelAdmin):
+    list_display = ("email", "organization", "role", "access_group", "invited_by", "created_at")
+    list_filter = ("organization", "role")
+    search_fields = ("email", "organization__slug")
+    autocomplete_fields = ("organization", "access_group", "invited_by", "user")
+    readonly_fields = ("created_at",)
 
 
 @admin.register(OrganizationDataSource)

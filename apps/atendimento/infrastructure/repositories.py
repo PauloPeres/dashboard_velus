@@ -13,14 +13,16 @@ from django.db import transaction
 from apps.atendimento.domain.dto import (
     AtendimentoDTO,
     DepartamentoDTO,
+    EtiquetaDTO,
     MensagemDTO,
+    MotivoDTO,
 )
 from apps.customers.domain.services import normalize_document
 from apps.customers.infrastructure.models import Customer
 from apps.integrations.shared.enums import SourceType
 from apps.tenancy.models import Organization
 
-from .models import Atendimento, Departamento, Mensagem
+from .models import Atendimento, Departamento, Etiqueta, Mensagem, Motivo
 
 
 class DepartamentoRepository:
@@ -42,6 +44,57 @@ class DepartamentoRepository:
             "raw_extras": dto.raw_extras,
         }
         return Departamento.objects.update_or_create(
+            organization=self.organization,
+            source_type=source_type.value,
+            external_id=dto.external_id,
+            defaults=defaults,
+        )
+
+
+class EtiquetaRepository:
+    """Persistencia idempotente de Etiqueta (catalogo de tags) a partir de DTOs."""
+
+    def __init__(self, organization: Organization) -> None:
+        self.organization = organization
+
+    @transaction.atomic
+    def upsert_from_dto(
+        self,
+        dto: EtiquetaDTO,
+        *,
+        source_type: SourceType,
+    ) -> tuple[Etiqueta, bool]:
+        defaults: dict[str, Any] = {
+            "nome": dto.nome or "",
+            "cor": dto.cor or "",
+            "raw_extras": dto.raw_extras,
+        }
+        return Etiqueta.objects.update_or_create(
+            organization=self.organization,
+            source_type=source_type.value,
+            external_id=dto.external_id,
+            defaults=defaults,
+        )
+
+
+class MotivoRepository:
+    """Persistencia idempotente de Motivo (catalogo de motivos) a partir de DTOs."""
+
+    def __init__(self, organization: Organization) -> None:
+        self.organization = organization
+
+    @transaction.atomic
+    def upsert_from_dto(
+        self,
+        dto: MotivoDTO,
+        *,
+        source_type: SourceType,
+    ) -> tuple[Motivo, bool]:
+        defaults: dict[str, Any] = {
+            "nome": dto.nome or "",
+            "raw_extras": dto.raw_extras,
+        }
+        return Motivo.objects.update_or_create(
             organization=self.organization,
             source_type=source_type.value,
             external_id=dto.external_id,
@@ -101,6 +154,7 @@ class AtendimentoRepository:
             "canal": dto.canal or "",
             "protocol": dto.protocol or "",
             "motivos": list(dto.motivos or []),
+            "tags": list(dto.tags or []),
             "rating": dto.rating,
             "opened_at": dto.opened_at,
             "closed_at": dto.closed_at,

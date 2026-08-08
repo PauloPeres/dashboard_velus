@@ -94,6 +94,34 @@ class OpaUsuarioSchema(_OpaBase):
         return _to_str(v)
 
 
+class OpaEtiquetaSchema(_OpaBase):
+    """Registro de `etiqueta` (tag configurada de atendimento) — mapa id opaco -> nome."""
+
+    id: str = Field(validation_alias=AliasChoices("_id", "id"))
+    nome: str = Field(default="")
+    cor: str = Field(default="")
+
+    @field_validator("id", "nome", "cor", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+
+class OpaMotivoSchema(_OpaBase):
+    """Registro do catalogo `atendimento/motivo` — mapa id opaco -> nome.
+
+    O nome vem no campo `motivo` (nao `nome`). Ex.: `{_id, motivo, departamentos}`.
+    """
+
+    id: str = Field(validation_alias=AliasChoices("_id", "id"))
+    nome: str = Field(default="", validation_alias=AliasChoices("motivo", "nome", "descricao"))
+
+    @field_validator("id", "nome", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+
 class OpaAtendimentoSchema(_OpaBase):
     """Registro de `atendimento` (conversa/chamado omnichannel).
 
@@ -153,14 +181,48 @@ class OpaAtendimentoSchema(_OpaBase):
         return _id_of(self.setor)
 
     @property
-    def motivos_names(self) -> list[str]:
+    def motivo_ids(self) -> list[str]:
+        """Ids opacos (idMotivo) dos motivos aplicados no atendimento.
+
+        `motivos` vem como lista de dicts `{idMotivo, idAtendente, idDepartamento,
+        data}` — a identidade do motivo e o `idMotivo` (aponta pro catalogo
+        `atendimento/motivo`), NAO um nome inline. Dedup preservando ordem.
+        Aceita tambem string crua (id) por robustez.
+        """
         out: list[str] = []
+        seen: set[str] = set()
         for m in self.motivos:
             if isinstance(m, dict):
-                out.append(_to_str(m.get("nome") or m.get("descricao") or m.get("_id")))
+                mid = _to_str(m.get("idMotivo") or m.get("id_motivo"))
             else:
-                out.append(_to_str(m))
-        return [x for x in out if x]
+                mid = _to_str(m)
+            if mid and mid not in seen:
+                seen.add(mid)
+                out.append(mid)
+        return out
+
+    @property
+    def tag_ids(self) -> list[str]:
+        """Ids opacos (id_tag) das etiquetas aplicadas no atendimento.
+
+        `tags` vem como lista de dicts `{_id, data, id_tag, id_atendente}` — o
+        `_id` identifica a APLICACAO da tag (unico por evento); a identidade da
+        etiqueta em si e o `id_tag` (aponta pro catalogo de etiquetas). Fica em
+        `model_extra` (nao e campo declarado). Dedup preservando ordem.
+        """
+        raw = (self.model_extra or {}).get("tags")
+        if not isinstance(raw, list):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for t in raw:
+            if not isinstance(t, dict):
+                continue
+            tid = _to_str(t.get("id_tag"))
+            if tid and tid not in seen:
+                seen.add(tid)
+                out.append(tid)
+        return out
 
     @property
     def rating(self) -> int | None:

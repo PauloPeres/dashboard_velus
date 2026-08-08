@@ -1695,15 +1695,26 @@ def churn_risk_signal_bar(distribution: list[dict[str, Any]]) -> str:
 # Atendimento (Opa! Suite) — triagem por departamento (issue #48)
 # =============================================================================
 def atendimento_volume_by_departamento(rows: list[dict[str, Any]]) -> str:
-    """Barras horizontais — volume de atendimentos por departamento."""
+    """Barras horizontais — volume de atendimentos por departamento.
+
+    Clicável (#89): o **id** do departamento viaja no `customdata`, nunca o
+    rótulo do eixo — nome tem acento, muda no Opa! Suite e pode repetir. A barra
+    "Sem departamento" leva `customdata` vazio: não há id pra filtrar, então o
+    JS simplesmente não navega.
+    """
     ordered = sorted(rows, key=lambda r: r["total"])
     labels = [r["nome"] for r in ordered]
     values = [r["total"] for r in ordered]
+    dep_ids = [
+        "" if r.get("departamento_id") is None else str(r["departamento_id"])
+        for r in ordered
+    ]
     fig = go.Figure(
         data=[
             go.Bar(
                 x=values, y=labels, orientation="h",
                 marker_color="#6366f1",
+                customdata=dep_ids,
                 hovertemplate="<b>%{y}</b><br>%{x} atendimentos<extra></extra>",
             )
         ],
@@ -1738,8 +1749,12 @@ def atendimento_status_pie(data: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
-def atendimento_monthly_trend(series: list[dict[str, Any]]) -> str:
-    """Linha — atendimentos abertos por mês."""
+def atendimento_volume_trend(series: list[dict[str, Any]]) -> str:
+    """Linha — atendimentos abertos por bucket da série.
+
+    O bucket deixou de ser sempre o mês (#89): a granularidade vem da janela
+    (`triagem_trend_granularity`) e chega aqui já rotulada em `label`.
+    """
     labels = [s["label"] for s in series]
     values = [s["count"] for s in series]
     fig = go.Figure(
@@ -1793,7 +1808,12 @@ def bot_deflection_trend(series: list[dict[str, Any]]) -> str:
 
 
 def atendimento_top_motivos(rows: list[dict[str, Any]]) -> str:
-    """Barras horizontais — motivos mais frequentes de atendimento."""
+    """Barras horizontais — motivos mais frequentes de atendimento.
+
+    Clicável (#89): o valor exato do motivo (a chave do JSONField `motivos`, que
+    é o que a lista filtra com `has_key`) viaja no `customdata`. O rótulo do eixo
+    é apenas exibição — o Plotly pode truncá-lo e ele não é identificador.
+    """
     ordered = sorted(rows, key=lambda r: r["count"])
     labels = [r["motivo"] for r in ordered]
     values = [r["count"] for r in ordered]
@@ -1802,10 +1822,322 @@ def atendimento_top_motivos(rows: list[dict[str, Any]]) -> str:
             go.Bar(
                 x=values, y=labels, orientation="h",
                 marker_color="#06b6d4",
+                customdata=labels,
                 hovertemplate="<b>%{y}</b><br>%{x} atendimentos<extra></extra>",
             )
         ],
         layout={**_LAYOUT_BASE, "xaxis": {"title": "Atendimentos"}},
+    )
+    return _to_json(fig)
+
+
+_TREND_PALETTE = [
+    "#6366f1", "#06b6d4", "#10b981", "#f59e0b", "#ef4444",
+    "#8b5cf6", "#ec4899", "#0ea5e9", "#f97316", "#84cc16",
+    "#14b8a6", "#a855f7", "#eab308", "#3b82f6", "#f43f5e",
+    "#22c55e", "#d946ef", "#fb923c", "#2dd4bf", "#818cf8",
+    "#65a30d", "#0891b2", "#db2777", "#ca8a04", "#4f46e5",
+    "#059669", "#e11d48", "#7c3aed", "#0d9488", "#c026d3",
+]
+
+
+def atendimento_categoria_trend(
+    buckets: list[str],
+    series: list[dict[str, Any]],
+    *,
+    unidade: str = "atendimentos",
+    bucket_totals: list[int] | None = None,
+) -> str:
+    """Barras empilhadas — evolução de categorias (motivos/tags) ao longo do tempo.
+
+    Cada categoria é uma série empilhada por bucket (semana/mês); "Outros" (fora
+    do top-N) sai em cinza. Hover por segmento mostra só a categoria sob o mouse
+    + o Total do bucket (quando `bucket_totals` é passado, via customdata).
+    """
+    traces = []
+    color_i = 0
+    for s in series:
+        is_outros = s.get("is_outros")
+        if is_outros:
+            color = "#9ca3af"
+        else:
+            color = _TREND_PALETTE[color_i % len(_TREND_PALETTE)]
+            color_i += 1
+        trace_kwargs: dict[str, Any] = {
+            "name": s["name"],
+            "x": buckets,
+            "y": s["values"],
+            "marker_color": color,
+        }
+        if bucket_totals is not None:
+            trace_kwargs["customdata"] = bucket_totals
+            trace_kwargs["hovertemplate"] = (
+                "<b>%{fullData.name}</b>: %{y:,}<br>Total: %{customdata:,}"
+                "<extra></extra>"
+            )
+        else:
+            trace_kwargs["hovertemplate"] = (
+                "<b>%{fullData.name}</b><br>%{x}: %{y:,} " + unidade + "<extra></extra>"
+            )
+        traces.append(go.Bar(**trace_kwargs))
+    fig = go.Figure(
+        data=traces,
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "bargap": 0.15,
+            "showlegend": True,
+            "hovermode": "closest",
+            "margin": {"l": 50, "r": 20, "t": 10, "b": 40},
+            "legend": {"orientation": "h", "y": -0.18, "font": {"size": 11}},
+            "yaxis": {"title": unidade.capitalize(), "rangemode": "tozero"},
+        },
+    )
+    return _to_json(fig)
+
+
+def atendimento_dia_por_hora(slots: list[dict[str, Any]]) -> str:
+    """Barras por hora do dia (#88) — clique volta pro recorte daquela hora.
+
+    O ISO local do slot viaja no `customdata`, nunca no rótulo do eixo: o rótulo
+    é só "14h" e mudaria com a formatação, enquanto o `customdata` é o que a URL
+    `?h=` espera (mesmo contrato do gráfico horário de Tendências, #77).
+    """
+    labels = [s["label"] for s in slots]
+    values = [s["count"] for s in slots]
+    params = [s["param"] for s in slots]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=labels, y=values,
+                customdata=params,
+                marker_color="#6366f1",
+                hovertemplate="<b>%{x}</b><br>%{y:,} atendimentos<extra></extra>",
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "bargap": 0.2,
+            "margin": {"l": 40, "r": 16, "t": 10, "b": 36},
+            "xaxis": {"tickfont": {"size": 10}},
+            "yaxis": {"rangemode": "tozero"},
+        },
+    )
+    return _to_json(fig)
+
+
+def atendimento_conversao_bars(
+    rows: list[dict[str, Any]], *, field: str, color: str
+) -> str:
+    """Barras horizontais — taxa (%) de um desfecho por tag (churn/conversão)."""
+    ordered = sorted(rows, key=lambda r: r[field])
+    labels = [r["name"] for r in ordered]
+    values = [r[field] for r in ordered]
+    vols = [r["n"] for r in ordered]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=values, y=labels, orientation="h",
+                marker_color=color,
+                customdata=vols,
+                hovertemplate="<b>%{y}</b><br>%{x}% · %{customdata} atend.<extra></extra>",
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "margin": {"l": 10, "r": 20, "t": 10, "b": 40},
+            "xaxis": {"title": "%", "ticksuffix": "%"},
+            "yaxis": {"automargin": True},
+        },
+    )
+    return _to_json(fig)
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """`#rrggbb` + alpha -> `rgba(r,g,b,a)` (Plotly não aceita hex com alpha)."""
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _evento_rede_shapes(
+    labels: list[str], slots: list[str], eventos: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Shapes + anotações dos eventos de rede (#78) no eixo horário.
+
+    O eixo X do gráfico é **categórico**: cada ponto é o rótulo de exibição
+    ("%d/%m %Hh"), não um datetime — então uma shape só cai no lugar certo se
+    `x0`/`x1` forem exatamente rótulos existentes (é o que os marcadores de
+    vencimento já fazem). A ponte é o `slots` (#77): mesma lista, mesma ordem,
+    em ISO local. Cada evento chega com `slot_start`/`slot_end` já recortados na
+    janela e truncados na hora; aqui é só `slot -> índice -> label`.
+
+    Faixa (`rect`) quando o evento cobre horas diferentes; linha tracejada quando
+    é pontual — ou quando começa e termina dentro da MESMA hora, porque num eixo
+    categórico `x0 == x1` desenharia um retângulo de largura zero (invisível).
+    """
+    idx = {s: i for i, s in enumerate(slots)}
+    shapes: list[dict[str, Any]] = []
+    annotations: list[dict[str, Any]] = []
+    for ev in eventos:
+        i0 = idx.get(ev.get("slot_start", ""))
+        if i0 is None:
+            continue
+        i1 = idx.get(ev.get("slot_end", ""), i0)
+        cor = ev.get("cor") or "#7c3aed"
+        titulo = ev.get("titulo") or ev.get("tipo_label") or "Evento"
+        if not ev.get("pontual") and i1 > i0:
+            shapes.append(
+                {
+                    "type": "rect", "xref": "x", "yref": "paper",
+                    "x0": labels[i0], "x1": labels[i1], "y0": 0, "y1": 1,
+                    "fillcolor": _rgba(cor, 0.14),
+                    "line": {"color": _rgba(cor, 0.45), "width": 1},
+                    "layer": "below",
+                }
+            )
+        else:
+            shapes.append(
+                {
+                    "type": "line", "xref": "x", "yref": "paper",
+                    "x0": labels[i0], "x1": labels[i0], "y0": 0, "y1": 1,
+                    "line": {"color": cor, "width": 2, "dash": "dash"},
+                }
+            )
+        annotations.append(
+            {
+                "x": labels[i0], "xref": "x", "y": 1.0, "yref": "paper",
+                "text": titulo, "showarrow": False,
+                "xanchor": "left", "yanchor": "bottom",
+                "font": {"size": 10, "color": cor},
+                "hovertext": (
+                    f"{ev.get('tipo_label', '')} · {ev.get('started_at_str', '')}"
+                    + (f" → {ev['ended_at_str']}" if ev.get("ended_at_str") else "")
+                    + (f"<br>{ev['descricao']}" if ev.get("descricao") else "")
+                ),
+            }
+        )
+    return shapes, annotations
+
+
+def atendimento_horario_sazonal(
+    d: dict[str, Any], eventos: list[dict[str, Any]] | None = None
+) -> str:
+    """Linha horária — atendimentos abertos vs banda esperada (baseline sazonal).
+
+    Banda cinza = esperado (média ± k·desvio do slot dia-da-semana×hora);
+    linha azul = real; pontos vermelhos = anomalias (pico acima da banda);
+    linhas verticais tracejadas = dias com vencimento de fatura.
+
+    `eventos` (#78): eventos de rede registrados a mão que intersectam a janela,
+    já carregados pela view (a função de chart NÃO consulta o banco). Cada um
+    vira faixa vertical (com fim) ou linha tracejada (pontual), na cor do tipo.
+    """
+    labels = d["labels"]
+    # ISO local de cada slot — viaja como `customdata` nos traces clicáveis pra
+    # o handler saber qual hora abrir no drill-down (#77).
+    slots = d.get("slots") or labels
+    fig = go.Figure()
+    # Banda esperada (lower invisível + upper com fill até o lower).
+    fig.add_trace(
+        go.Scatter(
+            x=labels, y=d["lower"], mode="lines", line={"width": 0},
+            hoverinfo="skip", showlegend=False, name="min esperado",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=labels, y=d["upper"], mode="lines", line={"width": 0},
+            fill="tonexty", fillcolor="rgba(148,163,184,0.25)",
+            hoverinfo="skip", showlegend=True, name="Faixa esperada",
+        )
+    )
+    # Esperado (média do slot).
+    fig.add_trace(
+        go.Scatter(
+            x=labels, y=d["expected"], mode="lines", name="Esperado",
+            line={"color": "#94a3b8", "width": 1.5, "dash": "dot"},
+            hovertemplate="Esperado: %{y:.1f}<extra></extra>",
+        )
+    )
+    # Real.
+    fig.add_trace(
+        go.Scatter(
+            x=labels, y=d["actual"], mode="lines", name="Real",
+            line={"color": "#2563eb", "width": 2},
+            customdata=slots,
+            hovertemplate="<b>%{x}</b><br>Real: %{y}<extra></extra>",
+        )
+    )
+    # Anomalias: pico (vermelho) ou queda (laranja, foco comercial).
+    if d["anomaly_x"]:
+        is_drop = d.get("detect") == "drop"
+        fig.add_trace(
+            go.Scatter(
+                x=d["anomaly_x"], y=d["anomaly_y"], mode="markers",
+                name="Queda" if is_drop else "Anomalia",
+                marker={
+                    "color": "#f59e0b" if is_drop else "#ef4444",
+                    "size": 10,
+                    "symbol": "triangle-down" if is_drop else "circle",
+                },
+                customdata=d.get("anomaly_slots") or d["anomaly_x"],
+                hovertemplate="<b>%{x}</b><br>"
+                + ("Queda" if is_drop else "Anomalia")
+                + ": %{y}<extra></extra>",
+            )
+        )
+    # Span (1ª..última hora) de cada dia, a partir dos rótulos "%d/%m %Hh".
+    day_span: dict[str, tuple[str, str]] = {}
+    for lb in labels:
+        day = lb.split(" ", 1)[0]
+        first, _ = day_span.get(day, (lb, lb))
+        day_span[day] = (first, lb)
+
+    shapes = []
+    # Dias de cobrança: retângulo âmbar claro (baseline próprio ali).
+    billing_labels = set(d.get("billing_day_labels", []))
+    for day in billing_labels:
+        if day in day_span:
+            x0, x1 = day_span[day]
+            shapes.append(
+                {
+                    "type": "rect", "xref": "x", "yref": "paper",
+                    "x0": x0, "x1": x1, "y0": 0, "y1": 1,
+                    "fillcolor": "rgba(245,158,11,0.10)", "line": {"width": 0},
+                    "layer": "below",
+                }
+            )
+    # Vencimentos menores (não-cobrança): linha vertical fina só como marcador.
+    for v in d.get("vencimentos", []):
+        if v.get("billing") or v["date"] in billing_labels:
+            continue
+        prefix = v["date"] + " "
+        x_at = next((lb for lb in labels if lb.startswith(prefix)), None)
+        if x_at is not None:
+            shapes.append(
+                {
+                    "type": "line", "x0": x_at, "x1": x_at, "yref": "paper",
+                    "y0": 0, "y1": 1,
+                    "line": {"color": "rgba(245,158,11,0.4)", "width": 1, "dash": "dash"},
+                }
+            )
+    # Eventos de rede registrados a mão (#78) — faixa/linha + título no topo.
+    evento_shapes, evento_annotations = _evento_rede_shapes(
+        labels, slots, eventos or []
+    )
+    shapes.extend(evento_shapes)
+    fig.update_layout(
+        **{
+            **_LAYOUT_BASE,
+            "shapes": shapes,
+            "annotations": evento_annotations,
+            "hovermode": "x unified",
+            "margin": {"l": 50, "r": 20, "t": 24 if evento_annotations else 10, "b": 60},
+            "legend": {"orientation": "h", "y": -0.25, "font": {"size": 11}},
+            "xaxis": {"tickangle": -45, "nticks": 24},
+            "yaxis": {"title": "Atendimentos/hora", "rangemode": "tozero"},
+        }
     )
     return _to_json(fig)
 

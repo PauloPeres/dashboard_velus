@@ -253,9 +253,12 @@ def sync_capability(self, organization_id: int, capability: str, mode: Literal["
   SESSION_COOKIE_SECURE = True
   SESSION_COOKIE_HTTPONLY = True
   SESSION_COOKIE_SAMESITE = 'Lax'
-  SESSION_COOKIE_AGE = 60 * 60 * 24  # 1 dia
-  SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+  SESSION_COOKIE_AGE = 60 * 60 * 24 * env.SESSION_COOKIE_AGE_DAYS  # 3 dias (default)
+  SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+  SESSION_SAVE_EVERY_REQUEST = True  # janela deslizante
   ```
+  Sessão longa é risco aceitável num dashboard read-only; o ajuste fino sai por
+  env var (`SESSION_COOKIE_AGE_DAYS`), sem redeploy de código.
 - **Rotação de sessão** em todo login bem-sucedido (`request.session.cycle_key()`).
 - **`django-axes`** pra rate-limit de tentativas de login (5 tentativas / 15 min / IP).
 
@@ -266,6 +269,14 @@ def sync_capability(self, organization_id: int, capability: str, mode: Literal["
 - **Token IXC**: campo `Organization.ixc_credentials` criptografado com **Fernet**. Key de criptografia em K8s Secret **separado** do Postgres password. Descriptografia só em memória do worker, no momento da chamada.
 - **Nunca** logar credenciais. Nunca passar credenciais em URL.
 - Rotação de Fernet key documentada em runbook.
+- **E-mail (Mailgun, #95)**: `MAILGUN_API_KEY` (Secret), `MAILGUN_SENDER_DOMAIN`
+  (`seujaime.com`, verificado) e `MAILGUN_API_URL` (US por default). O envio real
+  é **flag derivada** — `EMAIL_ENABLED = bool(chave and domínio)`; sem as duas, o
+  backend continua console (dev) / locmem (teste) e nada quebra. Produção sem
+  e-mail configurado **loga ERROR no boot** (não derruba o pod). Validar com
+  `python manage.py send_test_email destino@dominio` — o output diz qual backend
+  está ativo. Erro de envio é logado com o motivo do provedor via
+  `apps.shared.email.email_error_details` (que redige a chave antes de logar).
 
 ### 3.3 Isolamento entre tenants
 
@@ -372,6 +383,27 @@ pyproject.toml
 - Plotly: gráfico renderizado server-side como JSON, embebido via `{{ chart_json|json_script:"chart-id" }}`.
 - Sem `<style>` inline; sem `<script>` inline (CSP).
 - Tailwind: classes utilitárias direto no template; componentes reutilizáveis viram `{% include %}` ou template tags.
+
+#### Filtro de período (componente único, #86)
+
+Toda página com recorte temporal usa `apps/dashboards/period.py` — **não** leia
+`?months=`/`?de=` na mão:
+
+```python
+period = get_period(request)                        # granularidade em dias (30d default)
+months = get_period(request, granularity="month").months  # série mensal (12m default)
+set_period_extra_params(request, {"foco": foco})    # o que o form personalizado propaga
+```
+
+- Precedência: URL (`?de=&ate=` > `?periodo=` > legado `?months=`/`?hd=`) > cookie
+  `velus_periodo` > default da página. Cookie inválido é ignorado em silêncio.
+- A view não passa nada de período no contexto: o context processor
+  `dashboards.context_processors.period_context` lê o que `get_period` deixou no
+  request. O template inclui **`_period_header.html` logo abaixo do
+  título/subtítulo** — badge (`_period_badge.html`) e depois barra
+  (`_period_filter.html`). Ordem obrigatória: `<h1>` → subtítulo → badge → barra
+  → conteúdo.
+- `setPeriodo()`/`setParam()` são helpers compartilhados do `base.html`.
 
 ### 4.8 Testes
 

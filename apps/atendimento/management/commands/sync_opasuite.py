@@ -133,6 +133,8 @@ class Command(BaseCommand):
                 f"\n✓ Opa! sync: {result.atendimentos} atendimentos "
                 f"({result.customers_linked} ligados a cliente), "
                 f"{result.departamentos} departamentos, "
+                f"{result.etiquetas} etiquetas, "
+                f"{result.motivos} motivos, "
                 f"{result.mensagens} mensagens"
             )
         )

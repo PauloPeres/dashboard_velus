@@ -19,11 +19,14 @@
 
     <div id="despesas-submenu"
          class="{% if not open %}hidden{% endif %} ml-1 pl-3 border-l-2 border-gray-100 space-y-0.5">
+        {% if allowed_all or 'cashflow' in allowed_pages %}
         <a href="{% url 'dashboards:cashflow' %}"
            class="block px-3 py-1.5 rounded-md text-xs
                   {% if u == 'cashflow' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
             Fluxo de Caixa
         </a>
+        {% endif %}
+        {% if allowed_all or 'dre' in allowed_pages %}
         <a href="{% url 'dashboards:dre' %}"
            class="block px-3 py-1.5 rounded-md text-xs
                   {% if u == 'dre' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
@@ -34,30 +37,41 @@
                   {% if u == 'dre_detalhe' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
             Fluxo de Caixa por Conta
         </a>
+        {% endif %}
+        {% if allowed_all or 'burn' in allowed_pages %}
         <a href="{% url 'dashboards:burn' %}"
            class="block px-3 py-1.5 rounded-md text-xs
                   {% if u == 'burn' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
             Burn Rate
         </a>
+        {% endif %}
+        {% if allowed_all or 'forecast' in allowed_pages %}
         <a href="{% url 'dashboards:forecast' %}"
            class="block px-3 py-1.5 rounded-md text-xs
                   {% if u == 'forecast' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
             Previsão 12m
         </a>
+        {% endif %}
+        {% if allowed_all or 'pessoas' in allowed_pages %}
         <a href="{% url 'dashboards:pessoas' %}"
            class="block px-3 py-1.5 rounded-md text-xs
                   {% if u == 'pessoas' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
             Pessoas &amp; Prestadores
         </a>
+        {% endif %}
+        {% if allowed_all or 'compromissos' in allowed_pages %}
         <a href="{% url 'dashboards:compromissos' %}"
            class="block px-3 py-1.5 rounded-md text-xs
                   {% if u == 'compromissos' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
             Compromissos Futuros
         </a>
+        {% endif %}
+        {% if allowed_all or 'descasamento' in allowed_pages %}
         <a href="{% url 'dashboards:descasamento' %}"
            class="block px-3 py-1.5 rounded-md text-xs
                   {% if u == 'descasamento' %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
             Descasamento de Caixa
         </a>
+        {% endif %}
     </div>
 </div>

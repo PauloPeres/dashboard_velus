@@ -7,6 +7,8 @@
 <h1 class="text-2xl font-bold mb-2">Burn Rate</h1>
 <p class="text-sm text-gray-500 mb-6">Média mensal de despesas pagas e tendência de custo operacional.</p>
 
+{% include "dashboards/_period_header.html" %}
+
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
     {% include "dashboards/_kpi_card.html" with label="Burn Rate (média 3m)" value=burn_rate_str subtitle="Média dos últimos 3 meses pagos" %}
     {% include "dashboards/_kpi_card.html" with label="Tendência" value=trend_pct_str subtitle="Variação últimos 3 meses" %}

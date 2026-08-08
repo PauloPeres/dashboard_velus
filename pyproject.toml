@@ -26,6 +26,7 @@ dependencies = [
     "django-simple-history>=3.7",            # audit log
     "cryptography>=44.0",                    # Fernet (criptografia de credenciais IXC)
     # HTTP & integrações
+    "django-anymail[mailgun]>=13.0",         # envio de e-mail via API HTTP do Mailgun
     "httpx>=0.28",                           # cliente HTTP moderno (HTTP/2, async)
     "tenacity>=9.0",                         # retry exponencial
     # Logging estruturado

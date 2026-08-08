@@ -7,6 +7,8 @@
 <h1 class="text-2xl font-bold mb-2">DRE Gerencial</h1>
 <p class="text-sm text-gray-500 mb-6">Demonstração de Resultado simplificada — últimos 12 meses.</p>
 
+{% include "dashboards/_period_header.html" %}
+
 <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
     {% include "dashboards/_kpi_card.html" with label="Receita (MRR + avulsas)" value=cur_receita_str %}
     {% include "dashboards/_kpi_card.html" with label="Recebida (realizada)" value=cur_recebida_str %}

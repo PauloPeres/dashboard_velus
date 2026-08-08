@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     DJANGO_TIME_ZONE: str = "America/Sao_Paulo"
     DJANGO_LANGUAGE_CODE: str = "pt-br"
 
+    # Duração da sessão em dias (janela deslizante — ver base.py). Exposto como
+    # env var pra ajustar sem redeploy de código.
+    SESSION_COOKIE_AGE_DAYS: int = Field(default=3, ge=1)
+
     # -------------------------------------------------------------------------
     # Database — DATABASE_URL no formato postgres://user:pass@host:port/db
     # -------------------------------------------------------------------------
@@ -101,8 +105,17 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     # Email
     # -------------------------------------------------------------------------
+    # EMAIL_BACKEND é só o FALLBACK — vale quando o Mailgun não está configurado
+    # (dev local, CI). Com MAILGUN_API_KEY + MAILGUN_SENDER_DOMAIN presentes, o
+    # base.py troca pelo backend do anymail (ver _email.build_email_settings).
     EMAIL_BACKEND: str = "django.core.mail.backends.console.EmailBackend"
     DEFAULT_FROM_EMAIL: str = "Velus Dashboard <noreply@velus.local>"
+
+    # Mailgun (API HTTP via django-anymail) — chave em K8s Secret. Vazio = envio
+    # desligado, comportamento antigo (console/locmem) preservado.
+    MAILGUN_API_KEY: SecretStr = SecretStr("")
+    MAILGUN_SENDER_DOMAIN: str = ""  # ex.: seujaime.com (domínio verificado)
+    MAILGUN_API_URL: str = "https://api.mailgun.net/v3"  # EU: api.eu.mailgun.net/v3
 
     # -------------------------------------------------------------------------
     # Logging

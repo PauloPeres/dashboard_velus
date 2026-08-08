@@ -13,7 +13,7 @@
   <!-- Filtro de departamento -->
   <div class="relative">
     <select
-      onchange="setDepartamento(this.value)"
+      onchange="setParam('departamento', this.value)"
       class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 pr-8
              appearance-none cursor-pointer text-gray-700
              focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400
@@ -31,6 +31,8 @@
     </span>
   </div>
 </div>
+
+{% include "dashboards/_period_header.html" %}
 
 <!-- KPI Cards -->
 <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
@@ -125,18 +127,4 @@
   </table>
   </div>
 </div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-  function setDepartamento(value) {
-    var url = new URL(window.location.href);
-    if (value) {
-      url.searchParams.set("departamento", value);
-    } else {
-      url.searchParams.delete("departamento");
-    }
-    window.location.href = url.toString();
-  }
-</script>
 {% endblock %}

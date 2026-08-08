@@ -112,6 +112,15 @@ class User(AbstractUser):
         )
         return membership.organization if membership else None
 
+    def get_active_membership(self) -> OrganizationMembership | None:
+        """Membership ativa (com role + grupo de acesso) da org ativa."""
+        return (
+            self.memberships
+            .filter(is_active=True, organization__is_active=True)
+            .select_related("organization", "access_group")
+            .first()
+        )
+
 
 # =============================================================================
 # OrganizationMembership — User ↔ Organization (com role)
@@ -141,6 +150,17 @@ class OrganizationMembership(models.Model):
     role = models.CharField(max_length=16, choices=Role.choices, default=Role.MEMBER)
     is_active = models.BooleanField(default=True)
 
+    # Grupo de acesso: define quais abas o usuário enxerga. OWNER ignora (vê
+    # tudo). Nulo = sem restrição (acesso total) — a restrição é opt-in ao
+    # colocar o usuário num grupo. Ver allowed_page_keys().
+    access_group = models.ForeignKey(
+        "tenancy.AccessGroup",
+        on_delete=models.SET_NULL,
+        related_name="memberships",
+        null=True,
+        blank=True,
+    )
+
     invited_at = models.DateTimeField(auto_now_add=True)
     accepted_at = models.DateTimeField(null=True, blank=True)
 
@@ -162,6 +182,120 @@ class OrganizationMembership(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user.email} @ {self.organization.slug} ({self.role})"
+
+    @property
+    def is_owner(self) -> bool:
+        return self.role == self.Role.OWNER
+
+    def allowed_page_keys(self) -> set[str]:
+        """Chaves de página que esta membership pode acessar.
+
+        - OWNER: todas (sentinela '*').
+        - COM grupo de acesso: só as páginas do grupo (restrição opt-in).
+        - SEM grupo: todas ('*') — preserva o comportamento atual; a restrição
+          só entra quando o usuário é colocado num grupo. Evita trancar usuários
+          existentes por engano ao introduzir o RBAC.
+        """
+        if self.is_owner:
+            return {"*"}
+        if self.access_group_id and self.access_group:
+            return set(self.access_group.allowed_pages or [])
+        return {"*"}
+
+
+# =============================================================================
+# AccessGroup — grupo de permissões (quais abas) por organização
+# =============================================================================
+class AccessGroup(models.Model):
+    """Grupo de permissões de uma organização: um nome + o conjunto de abas
+    (page keys) que os membros do grupo podem ver/acessar.
+
+    Facilita a gestão: cria-se o grupo uma vez e atribui-se usuários a ele
+    (`OrganizationMembership.access_group`). OWNER ignora grupos (vê tudo).
+    """
+
+    organization = models.ForeignKey(
+        "tenancy.Organization",
+        on_delete=models.CASCADE,
+        related_name="access_groups",
+    )
+    name = models.CharField(max_length=100)
+    allowed_pages = models.JSONField(default=list, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    history = HistoricalRecords()
+
+    class Meta:
+        verbose_name = _("Grupo de acesso")
+        verbose_name_plural = _("Grupos de acesso")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "name"],
+                name="unique_access_group_name_per_org",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name} @ {self.organization.slug} ({len(self.allowed_pages or [])} abas)"
+
+
+# =============================================================================
+# OrganizationInvite — registro de convite (auditoria + reenvio)
+# =============================================================================
+class OrganizationInvite(models.Model):
+    """Registro de um convite de usuário (#66).
+
+    Como o signup público é fechado, o convite PROVISIONA a conta na hora
+    (cria User + OrganizationMembership) e dispara um e-mail de definir senha
+    (reset do allauth). Este model guarda a auditoria e permite reenviar.
+    """
+
+    organization = models.ForeignKey(
+        "tenancy.Organization",
+        on_delete=models.CASCADE,
+        related_name="invites",
+    )
+    email = models.EmailField()
+    role = models.CharField(
+        max_length=16,
+        choices=OrganizationMembership.Role.choices,
+        default=OrganizationMembership.Role.MEMBER,
+    )
+    access_group = models.ForeignKey(
+        "tenancy.AccessGroup",
+        on_delete=models.SET_NULL,
+        related_name="invites",
+        null=True,
+        blank=True,
+    )
+    invited_by = models.ForeignKey(
+        "tenancy.User",
+        on_delete=models.SET_NULL,
+        related_name="sent_invites",
+        null=True,
+        blank=True,
+    )
+    user = models.ForeignKey(
+        "tenancy.User",
+        on_delete=models.CASCADE,
+        related_name="invites",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("Convite de organização")
+        verbose_name_plural = _("Convites de organização")
+        indexes = [
+            models.Index(fields=["organization", "created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"convite {self.email} @ {self.organization.slug} ({self.role})"
 
 
 # =============================================================================

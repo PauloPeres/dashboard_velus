@@ -13,10 +13,12 @@ import calendar
 import math
 import statistics
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import date as date_cls
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
 
@@ -29,6 +31,7 @@ from django.db.models import (
     Max,
     OuterRef,
     Q,
+    QuerySet,
     Subquery,
     Sum,
 )
@@ -37,6 +40,7 @@ from django.db.models.functions import (
     Coalesce,
     ExtractDay,
     TruncDate,
+    TruncHour,
     TruncMonth,
 )
 from django.utils import timezone
@@ -4917,32 +4921,71 @@ _ATENDIMENTO_STATUS_LABELS = {
 }
 
 
+# Cortes da granularidade da série temporal da triagem (#89) — ver
+# `triagem_trend_granularity`.
+_TRIAGEM_TREND_DIA_MAX_DIAS = 31
+_TRIAGEM_TREND_SEMANA_MAX_DIAS = 120
+_TRIAGEM_TREND_LABELS = {
+    "day": "dia a dia",
+    "week": "semana a semana",
+    "month": "mês a mês",
+}
+
+
+def triagem_trend_granularity(start: datetime, end: datetime) -> str:
+    """Granularidade da série temporal da triagem, derivada do tamanho da janela.
+
+    Regra (#89), pensada pra manter o gráfico entre ~10 e ~40 pontos em qualquer
+    preset do componente de período:
+
+    - até 31 dias  → **dia**    (Hoje, Ontem, 7d, 14d, 30d, 1 mês)
+    - até 120 dias → **semana** (3 meses; semana começa na segunda)
+    - acima disso  → **mês**    (6m, 12m, 24m)
+
+    Sem a regra, "Hoje" renderizaria um único ponto mensal e "12 meses" viraria
+    365 pontos diários ilegíveis.
+    """
+    span_days = (end.date() - start.date()).days + 1
+    if span_days <= _TRIAGEM_TREND_DIA_MAX_DIAS:
+        return "day"
+    if span_days <= _TRIAGEM_TREND_SEMANA_MAX_DIAS:
+        return "week"
+    return "month"
+
+
 @allow_cross_tenant(reason="aggregation read-only; org passada explicitamente")
 def compute_atendimento_triagem(
     organization: Organization,
     *,
-    months: int = 3,
+    start: datetime,
+    end: datetime,
     departamento_id: int | None = None,
 ) -> dict[str, Any]:
     """Triagem de atendimentos Opa! Suite por departamento (read-only, issue #48).
 
-    Janela = últimos `months` meses por `opened_at`. Filtro opcional por
+    Janela `[start, end]` por `opened_at`, com `end` **inclusivo** (é o último
+    instante do dia que o componente de período devolve). Filtro opcional por
     departamento. Retorna KPIs (volume, TMA, nota média, % ligados a cliente),
-    distribuição por status, top motivos, série mensal e o recorte por
+    distribuição por status, top motivos, série temporal e o recorte por
     departamento — tudo pronto pro template/charts.
+
+    Paridade com a lista (#89): a base sai de `atendimento_lista_queryset`, o
+    MESMO helper de recorte que a lista genérica (#87) usa, com `foco="todos"`.
+    Assim a altura da barra de um departamento/motivo é exatamente o total que a
+    lista mostra quando o usuário clica nela — não há dois caminhos de filtro.
     """
-    from apps.atendimento.infrastructure.models import Atendimento, Departamento
+    from apps.atendimento.infrastructure.models import Departamento
 
-    now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    # `atendimento_lista_queryset` trabalha com fim EXCLUSIVO; o período do
+    # componente (#86) termina no último instante do dia, daí o microssegundo —
+    # exatamente o que `_lista_recorte` faz do outro lado.
+    qs = atendimento_lista_queryset(
+        organization,
+        start=start,
+        end=end + timedelta(microseconds=1),
+        foco="todos",
+        departamento_id=departamento_id,
     )
-
-    qs = Atendimento.objects.filter(
-        organization=organization, opened_at__gte=window_start
-    )
-    if departamento_id is not None:
-        qs = qs.filter(departamento_id=departamento_id)
 
     # --- KPIs globais ---
     total = qs.count()
@@ -5012,33 +5055,41 @@ def compute_atendimento_triagem(
         )
 
     # --- Top motivos (JSONField list[str] desnormalizado em Python) ---
+    # `set(...)` por atendimento porque a lista filtra com `motivos__has_key`,
+    # que é presença: um motivo repetido no mesmo registro conta 1 dos dois
+    # lados. Sem isso a barra ficaria maior que o total da lista (#89).
     motivo_counter: Counter[str] = Counter()
     for motivos in qs.values_list("motivos", flat=True):
         if motivos:
-            motivo_counter.update(m for m in motivos if m)
+            motivo_counter.update({m for m in motivos if m})
     top_motivos = [
         {"motivo": m, "count": c} for m, c in motivo_counter.most_common(12)
     ]
 
-    # --- Tendência mensal (volume por mês de abertura) ---
+    # --- Série temporal (volume por bucket de abertura) ---
+    trend_granularity = triagem_trend_granularity(start, end)
     trend_qs = (
-        qs.annotate(m=TruncMonth("opened_at"))
-        .values("m")
+        qs.annotate(d=TruncDate("opened_at"))
+        .values("d")
         .annotate(count=Count("id"))
-        .order_by("m")
     )
-    trend_map = {r["m"].strftime("%Y-%m"): r["count"] for r in trend_qs if r["m"]}
+    by_bucket: Counter[date_cls] = Counter()
+    for r in trend_qs:
+        if r["d"]:
+            by_bucket[_bucket_start(r["d"], trend_granularity)] += r["count"]
+
     trend = []
-    for i in range(months - 1, -1, -1):
-        m_first = _first_of_month_n_ago(now.date(), i)
-        key = m_first.strftime("%Y-%m")
+    cur = _bucket_start(start.date(), trend_granularity)
+    last = end.date()
+    while cur <= last:
         trend.append(
             {
-                "month": key,
-                "label": m_first.strftime("%b/%y"),
-                "count": trend_map.get(key, 0),
+                "bucket": cur.isoformat(),
+                "label": _bucket_label(cur, trend_granularity),
+                "count": by_bucket.get(cur, 0),
             }
         )
+        cur = _next_bucket(cur, trend_granularity)
 
     # --- Lista de departamentos pro filtro ---
     departamentos = list(
@@ -5064,6 +5115,1203 @@ def compute_atendimento_triagem(
         "by_departamento": by_departamento,
         "top_motivos": top_motivos,
         "trend": trend,
+        "trend_granularity": trend_granularity,
+        "trend_granularity_label": _TRIAGEM_TREND_LABELS[trend_granularity],
+        "departamentos": departamentos,
+        "selected_departamento_id": departamento_id,
+        "selected_departamento_nome": selected_nome,
+    }
+
+
+_TENDENCIA_GRANULARIDADES = ("week", "month")
+
+
+def _bucket_start(d: date_cls, granularity: str) -> date_cls:
+    """Início do bucket (o próprio dia, a segunda-feira ou o dia 1) de uma data."""
+    if granularity == "month":
+        return d.replace(day=1)
+    if granularity == "day":
+        return d
+    return d - timedelta(days=d.weekday())  # segunda da semana
+
+
+def _next_bucket(d: date_cls, granularity: str) -> date_cls:
+    """Início do bucket seguinte (avança 1 dia, 1 semana ou 1 mês)."""
+    if granularity == "month":
+        return (d.replace(day=1) + relativedelta(months=1))
+    if granularity == "day":
+        return d + timedelta(days=1)
+    return d + timedelta(days=7)
+
+
+def _bucket_label(d: date_cls, granularity: str) -> str:
+    """Rótulo do eixo: 'mmm/yy' no mês, 'dd/mm' no dia e na semana (a segunda)."""
+    if granularity == "month":
+        return d.strftime("%b/%y")
+    return d.strftime("%d/%m")
+
+
+def _build_categoria_series(
+    total_counter: Counter[str],
+    by_bucket: dict[date_cls, Counter[str]],
+    buckets: list[date_cls],
+    *,
+    top_n: int | None,
+) -> list[dict[str, Any]]:
+    """Séries por categoria (motivo/tag) prontas p/ barras empilhadas.
+
+    `top_n=None` inclui TODAS as categorias, cada uma como sua própria série (sem
+    "Outros"). Com `top_n` inteiro, pega as N mais frequentes e agrega o restante
+    numa série "Outros" (só aparece se houver mais que N categorias). Cada série
+    tem um valor por bucket (0 quando ausente), ordenadas por frequência total.
+    """
+    ordered = [name for name, _ in total_counter.most_common(top_n)]
+    top_set = set(ordered)
+    series: list[dict[str, Any]] = []
+    for name in ordered:
+        series.append(
+            {"name": name, "values": [by_bucket.get(b, Counter()).get(name, 0) for b in buckets]}
+        )
+    # "Outros" = soma das categorias fora do top_n, por bucket (só quando há corte).
+    if top_n is not None and len(total_counter) > len(ordered):
+        outros = []
+        for b in buckets:
+            c = by_bucket.get(b, Counter())
+            outros.append(sum(v for k, v in c.items() if k not in top_set))
+        series.append({"name": "Outros", "values": outros, "is_outros": True})
+    return series
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def _categoria_focus_series(
+    name: str | None,
+    by_bucket: dict[date_cls, Counter[str]],
+    buckets: list[date_cls],
+    total_counter: Counter[str],
+) -> dict[str, Any] | None:
+    """Série de uma única categoria (motivo/tag) por bucket, p/ a visão focada.
+
+    Retorna None se `name` vazio ou ausente na janela. Serve pra "destacar" uma
+    tag/motivo especifico sem poluir o gráfico geral.
+    """
+    if not name or name not in total_counter:
+        return None
+    return {
+        "name": name,
+        "values": [by_bucket.get(b, Counter()).get(name, 0) for b in buckets],
+        "total": total_counter[name],
+    }
+
+
+def compute_atendimento_tendencias(
+    organization: Organization,
+    *,
+    months: int = 6,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    granularity: str = "week",
+    departamento_id: int | None = None,
+    top_n: int | None = 10,
+    focus_motivo: str | None = None,
+    focus_tag: str | None = None,
+) -> dict[str, Any]:
+    """Séries temporais de motivos e tags de atendimento (Opa! Suite) — F2.
+
+    Agrega, por bucket semanal ou mensal de `opened_at`, quantos atendimentos
+    tiveram cada motivo e cada tag (um atendimento pode ter N de cada — conta
+    cada ocorrência). Retorna as `top_n` categorias + "Outros", com o eixo de
+    buckets completo (buckets sem dado aparecem como zero) — pronto pro gráfico
+    de área empilhada. Motivos/tags são JSONField (list[str]), então a
+    contagem é feita em Python, igual a `top_motivos`.
+
+    Janela (#75): `start`/`end` arbitrários têm precedência; quando ausentes,
+    cai no atalho `months` (últimos N meses até agora) — mantido pra
+    compatibilidade com chamadas antigas.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento, Departamento
+
+    if granularity not in _TENDENCIA_GRANULARIDADES:
+        granularity = "week"
+
+    now = timezone.now()
+    window_end = end or now
+    window_start = start or (now - relativedelta(months=months)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    qs = Atendimento.objects.filter(
+        organization=organization,
+        opened_at__gte=window_start,
+        opened_at__lte=window_end,
+        opened_at__isnull=False,
+    )
+    if departamento_id is not None:
+        qs = qs.filter(departamento_id=departamento_id)
+
+    motivo_by_bucket: dict[date_cls, Counter[str]] = defaultdict(Counter)
+    tag_by_bucket: dict[date_cls, Counter[str]] = defaultdict(Counter)
+    motivo_total: Counter[str] = Counter()
+    tag_total: Counter[str] = Counter()
+    atendimentos_com_tag = 0
+    total = 0
+
+    for opened_at, motivos, tags in qs.values_list(
+        "opened_at", "motivos", "tags"
+    ).iterator(chunk_size=2000):
+        if opened_at is None:
+            continue
+        total += 1
+        bucket = _bucket_start(timezone.localtime(opened_at).date(), granularity)
+        if motivos:
+            for m in motivos:
+                if m:
+                    motivo_by_bucket[bucket][m] += 1
+                    motivo_total[m] += 1
+        if tags:
+            has_tag = False
+            for t in tags:
+                if t:
+                    tag_by_bucket[bucket][t] += 1
+                    tag_total[t] += 1
+                    has_tag = True
+            if has_tag:
+                atendimentos_com_tag += 1
+
+    # Eixo de buckets completo (do início da janela até agora), pra buracos
+    # virarem zero em vez de sumir do gráfico.
+    buckets: list[date_cls] = []
+    cursor = _bucket_start(timezone.localtime(window_start).date(), granularity)
+    last = _bucket_start(timezone.localtime(window_end).date(), granularity)
+    while cursor <= last:
+        buckets.append(cursor)
+        cursor = _next_bucket(cursor, granularity)
+
+    labels = [_bucket_label(b, granularity) for b in buckets]
+    motivos_series = _build_categoria_series(
+        motivo_total, motivo_by_bucket, buckets, top_n=top_n
+    )
+    tags_series = _build_categoria_series(
+        tag_total, tag_by_bucket, buckets, top_n=top_n
+    )
+
+    # Total por bucket (altura da barra empilhada = soma de todas as categorias,
+    # inclui a cauda) — usado no hover pra mostrar "categoria + Total".
+    motivos_bucket_totals = [
+        sum(motivo_by_bucket.get(b, Counter()).values()) for b in buckets
+    ]
+    tags_bucket_totals = [
+        sum(tag_by_bucket.get(b, Counter()).values()) for b in buckets
+    ]
+
+    # Listas completas (ordenadas por frequência) p/ os seletores de "destacar".
+    motivos_all = [name for name, _ in motivo_total.most_common()]
+    tags_all = [name for name, _ in tag_total.most_common()]
+    motivo_focus = _categoria_focus_series(
+        focus_motivo, motivo_by_bucket, buckets, motivo_total
+    )
+    tag_focus = _categoria_focus_series(
+        focus_tag, tag_by_bucket, buckets, tag_total
+    )
+
+    departamentos = list(
+        Departamento.objects.filter(organization=organization)
+        .order_by("nome")
+        .values("id", "nome")
+    )
+    selected_nome = None
+    if departamento_id is not None:
+        selected_nome = next(
+            (d["nome"] for d in departamentos if d["id"] == departamento_id), None
+        )
+
+    return {
+        "granularity": granularity,
+        "window_start": window_start,
+        "window_end": window_end,
+        "buckets": labels,
+        "motivos_series": motivos_series,
+        "tags_series": tags_series,
+        "motivos_bucket_totals": motivos_bucket_totals,
+        "tags_bucket_totals": tags_bucket_totals,
+        "motivos_all": motivos_all,
+        "tags_all": tags_all,
+        "motivo_focus": motivo_focus,
+        "tag_focus": tag_focus,
+        "focus_motivo": focus_motivo if motivo_focus else None,
+        "focus_tag": focus_tag if tag_focus else None,
+        "n_motivos_distintos": len(motivo_total),
+        "n_tags_distintas": len(tag_total),
+        "atendimentos_com_tag": atendimentos_com_tag,
+        "total": total,
+        "top_n": top_n,
+        "departamentos": departamentos,
+        "selected_departamento_id": departamento_id,
+        "selected_departamento_nome": selected_nome,
+    }
+
+
+_ATENDIMENTO_TZ = ZoneInfo("America/Sao_Paulo")
+_HORARIO_DIAS_VALIDOS = (7, 14, 30)
+_HORARIO_FOCOS = ("todos", "suporte", "rede", "comercial")
+# ISO local (sem fuso) de um slot horário — formato do `?h=` da página da hora
+# e do `customdata` dos pontos do gráfico (#77).
+_ATENDIMENTO_SLOT_FMT = "%Y-%m-%dT%H:%M"
+
+# Foco "Rede": motivos/tags que sinalizam problema de rede (confirmado c/ Paulo
+# 2026-07-30). Um atendimento entra no foco se tiver QUALQUER um (motivo OU tag).
+_REDE_MOTIVOS = ["Sem Cobertura", "Lentidão", "Quedas", "Problema no Wi-Fi", "WI-FI"]
+_REDE_TAGS = [
+    "Sem Conexão", "Sem cobertura", "Lentidão", "Rompimento", "LOS",
+    "Quedas", "WiFi – 2.4", "WiFi",
+]
+
+
+def atendimento_foco_queryset(
+    qs: QuerySet[Any], foco: str, departamento_id: int | None = None
+) -> QuerySet[Any]:
+    """Recorte de `foco`/departamento do gráfico horário (#76).
+
+    Fonte única do filtro: o gráfico (`compute_atendimento_horario`) e a lista de
+    uma hora (`compute_atendimento_hora`) usam este helper, pra a contagem da
+    lista bater exatamente com o ponto do gráfico.
+
+    - "suporte"/"comercial": departamento pelo nome;
+    - "rede": motivo OU tag de conexão (`_REDE_MOTIVOS` / `_REDE_TAGS`);
+    - "todos": sem recorte de foco — aí sim `departamento_id` (filtro da página)
+      é aplicado; nos demais focos ele não vale, pois o próprio foco já define o
+      recorte.
+    """
+    if foco == "suporte":
+        return qs.filter(departamento__nome__iexact="Suporte")
+    if foco == "comercial":
+        return qs.filter(departamento__nome__iexact="Comercial")
+    if foco == "rede":
+        return qs.filter(
+            Q(motivos__has_any_keys=_REDE_MOTIVOS) | Q(tags__has_any_keys=_REDE_TAGS)
+        )
+    if departamento_id is not None:
+        return qs.filter(departamento_id=departamento_id)
+    return qs
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_horario(
+    organization: Organization,
+    *,
+    days: int = 14,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    baseline_weeks: int = 8,
+    k: float = 3.0,
+    foco: str = "suporte",
+    min_abs_anomaly: int = 5,
+    drop_ratio: float = 0.34,
+    min_expected_drop: float = 4.0,
+    departamento_id: int | None = None,
+    billing_min_invoices: int = 30,
+    billing_window_days: int = 1,
+) -> dict[str, Any]:
+    """Série horária de atendimentos abertos vs baseline sazonal (F3, gráfico 1).
+
+    Pra cada hora da janela, compara o volume real com o esperado pra aquele
+    *slot sazonal*, estimado pelas últimas `baseline_weeks` semanas ANTERIORES
+    ao início da janela.
+
+    Janela (#75): `start`/`end` arbitrários (datetimes aware) têm precedência.
+    Quando ausentes, cai no atalho `days` (últimos N dias até agora, com N
+    restrito a `_HORARIO_DIAS_VALIDOS`) — mantido pra compatibilidade.
+
+    `foco`: recorte vigiado —
+    - "suporte" (departamento Suporte) / "rede" (motivo/tag de rede: Sem Conexão,
+      Quedas, Rompimento, LOS…) / "todos": detecta **PICO** (volume acima do
+      normal → possível incidente de rede);
+    - "comercial" (departamento Comercial): detecta **QUEDA** (volume bem abaixo
+      do esperado → menos oportunidade comercial). Queda em suporte/rede NÃO é
+      anomalia (significa que está tudo bem), por isso só o foco comercial olha
+      quedas.
+
+    Detecção de queda (comercial): flag quando, numa hora que normalmente tem
+    movimento (`esperado >= min_expected_drop`), o real cai pra `<=
+    esperado · drop_ratio` (ex.: caiu a 1/3 do normal). A banda de Poisson com
+    k=3 zera o limite inferior em volumes baixos, então a queda usa razão, não a
+    banda.
+
+    Sensibilidade conservadora (k=3): a banda usa `k · max(desvio, √média)` —
+    o piso de Poisson (√média) evita falso alarme em horas de baixo volume
+    (madrugada) onde o desvio amostral é instável. Anomalia exige também um piso
+    absoluto (`min_abs_anomaly`). O baseline descarta o maior outlier de cada
+    slot pra um incidente passado não inflar o esperado das semanas seguintes.
+
+    v2 — baseline por proximidade de vencimento: dias com >= `billing_min_invoices`
+    faturas vencendo (± `billing_window_days` dias) usam um baseline PRÓPRIO de
+    cobrança (por hora), separado do normal — pico de cobrança não vira falsa
+    anomalia, e anomalia de rede num dia de vencimento ainda aparece.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento, Departamento
+    from apps.financial.infrastructure.models import Invoice
+
+    if foco not in _HORARIO_FOCOS:
+        foco = "suporte"
+
+    now_local = timezone.localtime(timezone.now(), _ATENDIMENTO_TZ)
+    if start is not None and end is not None:
+        # Janela explícita (#75): primeira e última hora exibidas, inclusivas.
+        display_start = timezone.localtime(start, _ATENDIMENTO_TZ).replace(
+            minute=0, second=0, microsecond=0
+        )
+        display_end = timezone.localtime(end, _ATENDIMENTO_TZ).replace(
+            minute=0, second=0, microsecond=0
+        )
+        if display_end < display_start:
+            display_end = display_start
+        days = (display_end.date() - display_start.date()).days + 1
+    else:
+        if days not in _HORARIO_DIAS_VALIDOS:
+            days = 14
+        display_end = now_local.replace(minute=0, second=0, microsecond=0)
+        display_start = display_end - timedelta(days=days) + timedelta(hours=1)
+    baseline_start = display_start - timedelta(weeks=baseline_weeks)
+
+    qs = Atendimento.objects.filter(
+        organization=organization,
+        opened_at__gte=baseline_start,
+        opened_at__lt=display_end + timedelta(hours=1),
+        opened_at__isnull=False,
+    )
+    qs = atendimento_foco_queryset(qs, foco, departamento_id)
+
+    # Contagem por hora (no fuso local) — chave = datetime truncado na hora.
+    hourly_rows = (
+        qs.annotate(h=TruncHour("opened_at", tzinfo=_ATENDIMENTO_TZ))
+        .values("h")
+        .annotate(c=Count("id"))
+    )
+    counts: dict[datetime, int] = {}
+    for row in hourly_rows:
+        h = row["h"]
+        if h is not None:
+            counts[timezone.localtime(h, _ATENDIMENTO_TZ)] = row["c"]
+
+    # --- Classificação de dias de cobrança (v2) -----------------------------
+    # Faturas vencendo por dia em toda a janela (baseline + exibição). Um dia é
+    # "de cobrança" se tem >= billing_min_invoices vencimentos; a folga
+    # billing_window_days marca também os vizinhos (spillover de cobrança).
+    due_by_date: dict[date_cls, int] = {}
+    due_rows_all = (
+        Invoice.objects.filter(
+            organization=organization,
+            due_date__gte=baseline_start.date(),
+            due_date__lte=display_end.date(),
+        )
+        .values("due_date")
+        .annotate(c=Count("id"))
+    )
+    for r in due_rows_all:
+        due_by_date[r["due_date"]] = r["c"]
+
+    billing_days = {d for d, c in due_by_date.items() if c >= billing_min_invoices}
+    billing_proximal: set[date_cls] = set()
+    for bd in billing_days:
+        for off in range(-billing_window_days, billing_window_days + 1):
+            billing_proximal.add(bd + timedelta(days=off))
+
+    # --- Dois baselines -----------------------------------------------------
+    # normal: por (dia-da-semana, hora), só de dias NÃO-cobrança.
+    # billing: por hora, agregando os dias de cobrança (poucos p/ separar por
+    # dia-da-semana). Percorre hora a hora incluindo zeros.
+    normal_samples: dict[tuple[int, int], list[int]] = defaultdict(list)
+    billing_samples: dict[int, list[int]] = defaultdict(list)
+    cursor = baseline_start
+    while cursor < display_start:
+        c = counts.get(cursor, 0)
+        if cursor.date() in billing_proximal:
+            billing_samples[cursor.hour].append(c)
+        else:
+            normal_samples[(cursor.weekday(), cursor.hour)].append(c)
+        cursor += timedelta(hours=1)
+
+    def _stats(samples: list[int]) -> tuple[float, float]:
+        # Descarta o maior outlier quando há amostra suficiente, pra um incidente
+        # passado não inflar o "esperado" das semanas seguintes.
+        s = sorted(samples)
+        if len(s) >= 6:
+            s = s[:-1]
+        mean = statistics.fmean(s) if s else 0.0
+        std = statistics.pstdev(s) if len(s) > 1 else 0.0
+        return mean, std
+
+    normal_stats = {slot: _stats(s) for slot, s in normal_samples.items()}
+    billing_stats = {hour: _stats(s) for hour, s in billing_samples.items()}
+
+    # Série da janela de exibição, hora a hora.
+    labels: list[str] = []
+    slots: list[str] = []
+    actual: list[int] = []
+    expected: list[float] = []
+    upper: list[float] = []
+    lower: list[float] = []
+    is_billing: list[bool] = []
+    anomaly_x: list[str] = []
+    anomaly_y: list[int] = []
+    anomaly_slots: list[str] = []
+
+    cursor = display_start
+    while cursor <= display_end:
+        billing = cursor.date() in billing_proximal
+        # Usa o baseline de cobrança quando o dia é de cobrança e há amostra
+        # daquela hora; senão cai no baseline sazonal normal.
+        if billing and cursor.hour in billing_stats:
+            mean, std = billing_stats[cursor.hour]
+        else:
+            mean, std = normal_stats.get((cursor.weekday(), cursor.hour), (0.0, 0.0))
+        # Desvio efetivo com piso de Poisson (√média): estabiliza a banda em
+        # horas de baixo volume, onde o desvio amostral é ~0 e instável.
+        sigma_eff = max(std, math.sqrt(mean))
+        up = mean + k * sigma_eff
+        lo = max(0.0, mean - k * sigma_eff)
+        val = counts.get(cursor, 0)
+        label = cursor.strftime("%d/%m %Hh")
+        # `slot`: mesmo instante do ponto em ISO local — é o que o clique no
+        # gráfico manda pra página da hora (#77). `label` é só exibição.
+        slot = cursor.strftime(_ATENDIMENTO_SLOT_FMT)
+        labels.append(label)
+        slots.append(slot)
+        actual.append(val)
+        expected.append(round(mean, 2))
+        upper.append(round(up, 2))
+        lower.append(round(lo, 2))
+        is_billing.append(billing)
+        if foco == "comercial":
+            # Queda: hora que normalmente tem movimento caiu bem abaixo do normal.
+            if mean >= min_expected_drop and val <= mean * drop_ratio:
+                anomaly_x.append(label)
+                anomaly_y.append(val)
+                anomaly_slots.append(slot)
+        else:
+            # Pico bem acima da banda + piso absoluto (queda não conta).
+            if val > up and val >= min_abs_anomaly:
+                anomaly_x.append(label)
+                anomaly_y.append(val)
+                anomaly_slots.append(slot)
+        cursor += timedelta(hours=1)
+
+    # Vencimentos na janela de exibição (p/ marcadores). billing=dia de cobrança
+    # (baseline próprio); os demais são vencimentos menores (só marcador).
+    vencimentos = [
+        {
+            "date": d.strftime("%d/%m"),
+            "count": due_by_date[d],
+            "billing": d in billing_days,
+        }
+        for d in sorted(due_by_date)
+        if display_start.date() <= d <= display_end.date()
+    ]
+    # Rótulos "%d/%m" dos dias de cobrança visíveis na janela (p/ sombrear).
+    billing_day_labels = sorted(
+        {
+            d.strftime("%d/%m")
+            for d in billing_proximal
+            if display_start.date() <= d <= display_end.date()
+        }
+    )
+
+    departamentos = list(
+        Departamento.objects.filter(organization=organization)
+        .order_by("nome")
+        .values("id", "nome")
+    )
+    selected_nome = None
+    if departamento_id is not None:
+        selected_nome = next(
+            (d["nome"] for d in departamentos if d["id"] == departamento_id), None
+        )
+
+    return {
+        "days": days,
+        "window_start": display_start,
+        "window_end": display_end,
+        "n_slots": len(labels),
+        "labels": labels,
+        "slots": slots,
+        "actual": actual,
+        "expected": expected,
+        "upper": upper,
+        "lower": lower,
+        "is_billing": is_billing,
+        "anomaly_x": anomaly_x,
+        "anomaly_y": anomaly_y,
+        "anomaly_slots": anomaly_slots,
+        "n_anomalias": len(anomaly_x),
+        "total_janela": sum(actual),
+        "vencimentos": vencimentos,
+        "billing_day_labels": billing_day_labels,
+        "n_billing_days": len(billing_day_labels),
+        "baseline_weeks": baseline_weeks,
+        "k": k,
+        "foco": foco,
+        "detect": "drop" if foco == "comercial" else "spike",
+        "departamentos": departamentos,
+        "selected_departamento_id": departamento_id,
+        "selected_departamento_nome": selected_nome,
+    }
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_eventos_rede(
+    organization: Organization,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+) -> list[dict[str, Any]]:
+    """Eventos de rede (#78) que intersectam a janela exibida do gráfico horário.
+
+    `window_start`/`window_end` são a primeira e a última hora exibidas
+    (inclusivas — os mesmos `window_start`/`window_end` de
+    `compute_atendimento_horario`); a janela real vai até `window_end + 1h`.
+
+    Interseção:
+    - evento com fim entra se `ended_at > window_start` (fim exatamente no
+      início da janela **não** intersecta — o evento já tinha acabado) e
+      `started_at < window_end + 1h`;
+    - evento pontual entra se `window_start <= started_at < window_end + 1h`.
+
+    Cada evento sai com `slot_start`/`slot_end`: o ISO local (`_ATENDIMENTO_SLOT_FMT`)
+    da hora **recortada na janela** — é a chave que o chart casa com `slots` pra
+    achar o rótulo do eixo categórico ("%d/%m %Hh"). Evento que começa antes da
+    janela é clampado no primeiro slot; que termina depois, no último.
+    """
+    from apps.atendimento.infrastructure.models import EventoRede
+
+    ws = timezone.localtime(window_start, _ATENDIMENTO_TZ).replace(
+        minute=0, second=0, microsecond=0
+    )
+    we = timezone.localtime(window_end, _ATENDIMENTO_TZ).replace(
+        minute=0, second=0, microsecond=0
+    )
+    we_excl = we + timedelta(hours=1)
+
+    qs = (
+        EventoRede.objects.filter(
+            organization=organization, started_at__lt=we_excl
+        )
+        .filter(
+            Q(ended_at__isnull=False, ended_at__gt=ws)
+            | Q(ended_at__isnull=True, started_at__gte=ws)
+        )
+        .order_by("started_at")
+    )
+
+    def _slot(dt: datetime) -> str:
+        local = timezone.localtime(dt, _ATENDIMENTO_TZ).replace(
+            minute=0, second=0, microsecond=0
+        )
+        local = min(max(local, ws), we)
+        return local.strftime(_ATENDIMENTO_SLOT_FMT)
+
+    eventos: list[dict[str, Any]] = []
+    for ev in qs:
+        started_local = timezone.localtime(ev.started_at, _ATENDIMENTO_TZ)
+        ended_local = (
+            timezone.localtime(ev.ended_at, _ATENDIMENTO_TZ)
+            if ev.ended_at is not None
+            else None
+        )
+        eventos.append(
+            {
+                "id": ev.id,
+                "tipo": ev.tipo,
+                "tipo_label": ev.get_tipo_display(),
+                "titulo": ev.titulo,
+                "descricao": ev.descricao,
+                "cor": ev.cor,
+                "pontual": ev.is_pontual,
+                "started_at": ev.started_at,
+                "ended_at": ev.ended_at,
+                "started_at_str": started_local.strftime("%d/%m/%Y %H:%M"),
+                "ended_at_str": (
+                    ended_local.strftime("%d/%m/%Y %H:%M") if ended_local else ""
+                ),
+                # Valores pro <input type="datetime-local"> da edição.
+                "started_at_input": started_local.strftime("%Y-%m-%dT%H:%M"),
+                "ended_at_input": (
+                    ended_local.strftime("%Y-%m-%dT%H:%M") if ended_local else ""
+                ),
+                "slot_start": _slot(ev.started_at),
+                "slot_end": _slot(ev.ended_at) if ev.ended_at else _slot(ev.started_at),
+            }
+        )
+    return eventos
+
+
+def _atendimento_categorias(
+    motivos: list[str] | None, tags: list[str] | None
+) -> list[str]:
+    """Motivos + tags do atendimento, sem repetir e preservando a ordem."""
+    categorias: list[str] = []
+    for c in list(motivos or []) + list(tags or []):
+        if c and c not in categorias:
+            categorias.append(c)
+    return categorias
+
+
+def atendimento_lista_queryset(
+    organization: Organization,
+    *,
+    start: datetime,
+    end: datetime,
+    foco: str = "todos",
+    departamento_id: int | None = None,
+    motivo: str | None = None,
+    tag: str | None = None,
+) -> QuerySet[Any]:
+    """Queryset do recorte da lista de atendimentos (#87) — fonte única.
+
+    Janela `[start, end)` (fim EXCLUSIVO), pra a hora do gráfico continuar
+    fechando exatamente como o `TruncHour` (um atendimento aberto em
+    `start + 1h` já é da hora seguinte). Quem quer um fim inclusivo (o período
+    do componente #86, cujo `end` é o último instante do dia) passa
+    `end + 1µs`.
+
+    `foco`/`departamento` saem de `atendimento_foco_queryset` — o MESMO helper
+    do gráfico horário —, então `count()` daqui bate exatamente com a barra/ponto
+    que originou o clique. `motivo`/`tag` recortam os JSONField de categorias,
+    como os gráficos de Tendências.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento
+
+    if foco not in _HORARIO_FOCOS:
+        foco = "todos"
+
+    qs = Atendimento.objects.filter(
+        organization=organization,
+        opened_at__gte=start,
+        opened_at__lt=end,
+    )
+    qs = atendimento_foco_queryset(qs, foco, departamento_id)
+    if motivo:
+        qs = qs.filter(motivos__has_key=motivo)
+    if tag:
+        qs = qs.filter(tags__has_key=tag)
+    return qs
+
+
+def _atendimento_lista_row(at: Any) -> dict[str, Any]:
+    """Linha da tabela/CSV a partir de um `Atendimento` carregado."""
+    opened_local = timezone.localtime(at.opened_at, _ATENDIMENTO_TZ)
+    return {
+        "atendimento_id": at.id,
+        "customer_id": at.customer_id,
+        "customer_name": at.customer_name or "—",
+        "customer_document": at.customer_document,
+        "opened_at": opened_local,
+        "opened_at_str": opened_local.strftime("%d/%m %H:%M"),
+        "atendente_nome": at.atendente_nome or "—",
+        "departamento_nome": at.departamento.nome if at.departamento else "",
+        "categorias": _atendimento_categorias(at.motivos, at.tags),
+        "protocol": at.protocol,
+        "status_label": at.get_status_display(),
+        "canal": at.canal or "—",
+    }
+
+
+def atendimento_lista_ordered(qs: QuerySet[Any]) -> QuerySet[Any]:
+    """Ordenação estável da lista + `select_related` do que a linha lê.
+
+    Só `departamento` entra no join: o cliente é usado apenas pelo `customer_id`
+    (já na própria linha) pra montar o link, então puxar a tabela de clientes
+    seria join à toa num recorte de 12 meses.
+    """
+    return qs.select_related("departamento").order_by("opened_at", "id")
+
+
+def iter_atendimento_lista_rows(qs: QuerySet[Any]) -> Iterator[dict[str, Any]]:
+    """Linhas de TODO o recorte (usado pelo CSV) — sem materializar a lista."""
+    for at in atendimento_lista_ordered(qs).iterator(chunk_size=1000):
+        yield _atendimento_lista_row(at)
+
+
+def _iter_resumo_rows(qs: QuerySet[Any]) -> Iterator[dict[str, Any]]:
+    """Projeção mínima que o resumo lê, direto do banco (sem instanciar model).
+
+    O resumo é do recorte INTEIRO (não da página exibida), então essa varredura
+    carrega só as 5 colunas necessárias.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento
+
+    labels = dict(Atendimento.Status.choices)
+    values = qs.values_list("motivos", "tags", "atendente_nome", "status", "canal")
+    for motivos, tags, atendente, status, canal in values.iterator(chunk_size=2000):
+        yield {
+            "categorias": _atendimento_categorias(motivos, tags),
+            "atendente_nome": atendente or "—",
+            "status_label": str(labels.get(status, status)),
+            "canal": canal or "—",
+        }
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_lista(
+    organization: Organization,
+    *,
+    start: datetime,
+    end: datetime,
+    foco: str = "todos",
+    departamento_id: int | None = None,
+    motivo: str | None = None,
+    tag: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> dict[str, Any]:
+    """Lista paginada de atendimentos de um recorte qualquer (#87).
+
+    Serve os três recortes da página: uma hora (`?h=`), um dia (`?d=`) e
+    período + departamento/motivo/tag. `total` é sempre o total REAL do recorte
+    (`count()` no banco), independente da página exibida — o teto de 500 linhas
+    da tela da hora antiga truncava em silêncio.
+
+    `per_page=None` devolve o recorte inteiro numa página só (é o que a lista de
+    uma hora faz, onde o volume é sempre pequeno).
+    """
+    from apps.atendimento.infrastructure.models import Departamento
+
+    if foco not in _HORARIO_FOCOS:
+        foco = "todos"
+
+    qs = atendimento_lista_queryset(
+        organization,
+        start=start,
+        end=end,
+        foco=foco,
+        departamento_id=departamento_id,
+        motivo=motivo,
+        tag=tag,
+    )
+    total = qs.count()
+
+    ordered = atendimento_lista_ordered(qs)
+    if per_page is None or per_page <= 0:
+        page, per_page_out, num_pages = 1, None, 1
+        page_qs = ordered
+        offset = 0
+    else:
+        per_page_out = per_page
+        num_pages = max(1, math.ceil(total / per_page))
+        page = max(1, min(page, num_pages))
+        offset = (page - 1) * per_page
+        page_qs = ordered[offset : offset + per_page]
+
+    rows = [_atendimento_lista_row(at) for at in page_qs]
+    # Numa página só, o resumo sai das próprias linhas (sem segunda consulta);
+    # paginado, ele varre o recorte inteiro — é resumo DO RECORTE, não da página.
+    resumo = atendimento_hora_resumo(
+        rows if per_page_out is None else _iter_resumo_rows(qs)
+    )
+
+    departamento_nome = None
+    if departamento_id is not None:
+        departamento_nome = (
+            Departamento.objects.filter(organization=organization, id=departamento_id)
+            .values_list("nome", flat=True)
+            .first()
+        )
+
+    return {
+        "start": start,
+        "end": end,
+        "foco": foco,
+        "departamento_id": departamento_id,
+        "departamento_nome": departamento_nome,
+        "motivo": motivo,
+        "tag": tag,
+        "total": total,
+        "rows": rows,
+        "resumo": resumo,
+        "page": page,
+        "per_page": per_page_out,
+        "num_pages": num_pages,
+        "has_prev": page > 1,
+        "has_next": page < num_pages,
+        "page_first": offset + 1 if rows else 0,
+        "page_last": offset + len(rows),
+    }
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_lista_por_hora(
+    organization: Organization,
+    *,
+    start: datetime,
+    end: datetime,
+    foco: str = "todos",
+    departamento_id: int | None = None,
+    motivo: str | None = None,
+    tag: str | None = None,
+) -> list[dict[str, Any]]:
+    """Contagem por hora local do MESMO recorte da lista (#88).
+
+    Alimenta o mini-gráfico do recorte de dia, onde cada barra volta pro recorte
+    daquela hora (`?h=`). O recorte sai de `atendimento_lista_queryset` — o mesmo
+    queryset que produz o `total` da tela —, então **a soma das barras é, por
+    construção, igual ao total do dia**: é a mesma linha do banco contada uma vez
+    em cada agrupamento.
+
+    Os slots são gerados por hora-de-parede a partir de `start` até `end`
+    (24 num dia normal), então uma hora vazia aparece como zero em vez de sumir.
+    """
+    qs = atendimento_lista_queryset(
+        organization,
+        start=start,
+        end=end,
+        foco=foco,
+        departamento_id=departamento_id,
+        motivo=motivo,
+        tag=tag,
+    )
+    counts: dict[datetime, int] = {}
+    rows = (
+        qs.annotate(h=TruncHour("opened_at", tzinfo=_ATENDIMENTO_TZ))
+        .values("h")
+        .annotate(c=Count("id"))
+    )
+    for row in rows:
+        if row["h"] is not None:
+            counts[timezone.localtime(row["h"], _ATENDIMENTO_TZ)] = row["c"]
+
+    slots: list[dict[str, Any]] = []
+    slot = timezone.localtime(start, _ATENDIMENTO_TZ).replace(
+        minute=0, second=0, microsecond=0
+    )
+    while slot < end:
+        slots.append({
+            "slot": slot,
+            "param": slot.strftime(_ATENDIMENTO_SLOT_FMT),
+            "label": slot.strftime("%Hh"),
+            "count": counts.get(slot, 0),
+        })
+        slot += timedelta(hours=1)
+    return slots
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_hora(
+    organization: Organization,
+    *,
+    hour_start: datetime,
+    foco: str = "suporte",
+    departamento_id: int | None = None,
+) -> dict[str, Any]:
+    """Atendimentos abertos dentro de uma hora do gráfico horário (#76).
+
+    Wrapper fino de `compute_atendimento_lista` (#87): janela
+    `[hour_start, hour_start + 1h)` no fuso `_ATENDIMENTO_TZ` — mesma truncagem
+    do gráfico, então um atendimento aberto exatamente em `hour_start` entra e um
+    aberto em `hour_start + 1h` não. Mantida porque a hora tem contexto próprio
+    (rótulo, `hour_start`/`hour_end` pra navegação e baseline).
+    """
+    if foco not in _HORARIO_FOCOS:
+        foco = "suporte"
+
+    start = timezone.localtime(hour_start, _ATENDIMENTO_TZ).replace(
+        minute=0, second=0, microsecond=0
+    )
+    end = start + timedelta(hours=1)
+
+    data = compute_atendimento_lista(
+        organization,
+        start=start,
+        end=end,
+        foco=foco,
+        departamento_id=departamento_id,
+    )
+    data.update(
+        {
+            "hour_start": start,
+            "hour_end": end,
+            "hour_label": (
+                f"{start.strftime('%H:%M')} e {end.strftime('%H:%M')} "
+                f"de {start.strftime('%d/%m/%Y')}"
+            ),
+        }
+    )
+    return data
+
+
+_HORA_TOP_CATEGORIAS = 5
+
+
+def _dist(
+    counter: Counter[str], total: int, *, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """`Counter` → lista ordenada com contagem e % do total (desc, nome como desempate)."""
+    itens = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+    if limit is not None:
+        itens = itens[:limit]
+    return [
+        {
+            "nome": nome,
+            "count": count,
+            "pct": round(count * 100 / total, 1) if total else 0.0,
+        }
+        for nome, count in itens
+    ]
+
+
+def atendimento_hora_resumo(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Resumo do recorte (#77/#87) a partir das MESMAS linhas da lista.
+
+    Sem segunda fonte de verdade: recebe as linhas do recorte e só conta.
+    Categorias = motivos + tags já deduplicados por atendimento (um atendimento
+    conta no máximo uma vez por categoria); os percentuais são sobre o total de
+    atendimentos do recorte, então somam mais de 100% quando um atendimento tem
+    várias categorias.
+
+    Aceita qualquer iterável (não só `list`): num recorte grande, `#87` passa um
+    gerador do banco pra o resumo cobrir o recorte inteiro sem materializar
+    dezenas de milhares de linhas na memória.
+    """
+    total = 0
+    categorias: Counter[str] = Counter()
+    atendentes: Counter[str] = Counter()
+    status: Counter[str] = Counter()
+    canais: Counter[str] = Counter()
+    for r in rows:
+        total += 1
+        categorias.update(r["categorias"])
+        atendentes[r["atendente_nome"]] += 1
+        status[r["status_label"]] += 1
+        canais[r["canal"]] += 1
+    return {
+        "total": total,
+        "n_categorias": len(categorias),
+        "top_categorias": _dist(categorias, total, limit=_HORA_TOP_CATEGORIAS),
+        "atendentes": _dist(atendentes, total),
+        "n_atendentes": len(atendentes),
+        "status_dist": _dist(status, total),
+        "canal_dist": _dist(canais, total),
+    }
+
+
+def atendimento_hora_esperado(
+    organization: Organization,
+    *,
+    hour_start: datetime,
+    foco: str = "suporte",
+    departamento_id: int | None = None,
+) -> dict[str, Any]:
+    """Esperado do baseline pro slot de uma hora (#77).
+
+    Reaproveita `compute_atendimento_horario` com a janela de exibição reduzida
+    a UM slot (`start == end == hour_start`): o baseline sazonal continua sendo
+    o mesmo (as `baseline_weeks` semanas anteriores àquela hora), mas a série
+    exibida tem um ponto só. Assim o "esperado" é literalmente o do gráfico —
+    nada recalculado à mão — sem varrer a janela inteira da página.
+    """
+    d = compute_atendimento_horario(
+        organization,
+        start=hour_start,
+        end=hour_start,
+        foco=foco,
+        departamento_id=departamento_id,
+    )
+    esperado = d["expected"][0] if d["expected"] else 0.0
+    real = d["actual"][0] if d["actual"] else 0
+    return {
+        "esperado": esperado,
+        "real": real,
+        "upper": d["upper"][0] if d["upper"] else 0.0,
+        "lower": d["lower"][0] if d["lower"] else 0.0,
+        "is_billing": bool(d["is_billing"][0]) if d["is_billing"] else False,
+        "anomalia": bool(d["anomaly_x"]),
+        "detect": d["detect"],
+        "baseline_weeks": d["baseline_weeks"],
+        # Razão real/esperado ("4,1× o normal"). None quando o baseline é ~0 —
+        # aí a razão explodiria e não diz nada.
+        "ratio": round(real / esperado, 1) if esperado >= 0.5 else None,
+    }
+
+
+_CONVERSAO_HORIZONTES = (30, 90, 180)
+_CONVERSAO_MIN_VOL = 30  # volume mínimo pra uma tag/motivo entrar no ranking de %
+
+
+def _conversao_acc() -> dict[str, Any]:
+    return {
+        "n": 0, "churn": 0, "conv": 0,
+        "churn_custs": set(), "conv_custs": set(),
+        # Dedup por CONTRATO (unidade real do desfecho): ids distintos de
+        # contratos cancelados/ativados após uma conversa da categoria.
+        "churn_contratos": set(), "conv_contratos": set(),
+    }
+
+
+@allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
+def compute_atendimento_conversao(
+    organization: Organization,
+    *,
+    months: int = 6,
+    horizon_days: int = 90,
+    departamento_id: int | None = None,
+) -> dict[str, Any]:
+    """Desfecho por tag/motivo: churn e conversão após o atendimento (F4).
+
+    Entre atendimentos VINCULADOS a um cliente (ponte por documento), mede:
+    - churn: o cliente teve um contrato CANCELADO (`canceled_at`) DEPOIS da
+      conversa, dentro de `horizon_days` dias.
+    - conversão: o cliente teve um contrato ATIVADO (`activated_at`) depois da
+      conversa, dentro da janela (novo contrato/reativação — sinal comercial).
+
+    Agrega por tag e por motivo (um atendimento conta em cada tag/motivo seu) e
+    devolve rankings prontos. Taxas em cima do volume VINCULADO (só quem casou
+    com um cliente do IXC). Limitações: prospect novo que ainda não é cliente
+    não vincula (conversão dele fica invisível); canal é sempre whatsapp aqui,
+    então o recorte "de canal" vem das tags/motivos.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento, Departamento
+    from apps.customers.infrastructure.models import Contract
+
+    if horizon_days not in _CONVERSAO_HORIZONTES:
+        horizon_days = 90
+    horizon = timedelta(days=horizon_days)
+
+    now = timezone.now()
+    window_start = (now - relativedelta(months=months)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    qs = Atendimento.objects.filter(
+        organization=organization,
+        opened_at__gte=window_start,
+        opened_at__isnull=False,
+        customer__isnull=False,
+    )
+    if departamento_id is not None:
+        qs = qs.filter(departamento_id=departamento_id)
+
+    cust_ids = set(qs.values_list("customer_id", flat=True))
+
+    # Cancelamentos/ativações por cliente, carregando o id do CONTRATO (pra
+    # dedup por contrato) e o MRR do contrato.
+    cust_cancels: dict[int, list[tuple[datetime, int]]] = defaultdict(list)
+    cust_activations: dict[int, list[tuple[datetime, int]]] = defaultdict(list)
+    contract_mrr: dict[int, Decimal] = {}
+    if cust_ids:
+        for c in Contract.objects.filter(
+            organization=organization, customer_id__in=cust_ids
+        ).values("id", "customer_id", "canceled_at", "activated_at", "monthly_amount"):
+            cid = c["customer_id"]
+            contract_mrr[c["id"]] = c["monthly_amount"] or Decimal("0")
+            if c["canceled_at"] is not None:
+                cust_cancels[cid].append((c["canceled_at"], c["id"]))
+            if c["activated_at"] is not None:
+                cust_activations[cid].append((c["activated_at"], c["id"]))
+
+    by_tag: dict[str, dict[str, Any]] = defaultdict(_conversao_acc)
+    by_motivo: dict[str, dict[str, Any]] = defaultdict(_conversao_acc)
+    total_linked = 0
+    churn_total = 0
+    conv_total = 0
+
+    for at in qs.values("customer_id", "opened_at", "tags", "motivos").iterator(
+        chunk_size=2000
+    ):
+        cid = at["customer_id"]
+        opened = at["opened_at"]
+        end = opened + horizon
+        churn_contracts = [
+            kid for dt, kid in cust_cancels.get(cid, ()) if opened < dt <= end
+        ]
+        conv_contracts = [
+            kid for dt, kid in cust_activations.get(cid, ()) if opened < dt <= end
+        ]
+        churned = bool(churn_contracts)
+        converted = bool(conv_contracts)
+        total_linked += 1
+        churn_total += 1 if churned else 0
+        conv_total += 1 if converted else 0
+        for group, names in ((by_tag, at["tags"]), (by_motivo, at["motivos"])):
+            for name in set(names or []):
+                acc = group[name]
+                acc["n"] += 1
+                if churned:
+                    acc["churn"] += 1
+                    acc["churn_custs"].add(cid)
+                    acc["churn_contratos"].update(churn_contracts)
+                if converted:
+                    acc["conv"] += 1
+                    acc["conv_custs"].add(cid)
+                    acc["conv_contratos"].update(conv_contracts)
+
+    def _rows(acc_map: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        rows = []
+        for name, a in acc_map.items():
+            n = a["n"]
+            # MRR perdido = soma do MRR dos CONTRATOS cancelados (dedup por
+            # contrato — sem contar o mesmo contrato duas vezes).
+            mrr = sum(
+                (contract_mrr.get(k, Decimal("0")) for k in a["churn_contratos"]),
+                Decimal("0"),
+            )
+            rows.append(
+                {
+                    "name": name,
+                    "n": n,
+                    "churn": a["churn"],
+                    "churn_pct": round(a["churn"] / n * 100, 1) if n else 0.0,
+                    "conv": a["conv"],
+                    "conv_pct": round(a["conv"] / n * 100, 1) if n else 0.0,
+                    "churn_contratos": len(a["churn_contratos"]),
+                    "conv_contratos": len(a["conv_contratos"]),
+                    "mrr_churn": float(mrr),
+                }
+            )
+        return sorted(rows, key=lambda r: r["n"], reverse=True)
+
+    tag_rows = _rows(by_tag)
+    motivo_rows = _rows(by_motivo)
+
+    # Ranking por taxa de churn (só categorias com volume mínimo, pra evitar %
+    # instável de amostra pequena).
+    top_churn_tags = sorted(
+        (r for r in tag_rows if r["n"] >= _CONVERSAO_MIN_VOL),
+        key=lambda r: r["churn_pct"],
+        reverse=True,
+    )[:12]
+    top_conv_tags = sorted(
+        (r for r in tag_rows if r["n"] >= _CONVERSAO_MIN_VOL),
+        key=lambda r: r["conv_pct"],
+        reverse=True,
+    )[:12]
+
+    departamentos = list(
+        Departamento.objects.filter(organization=organization)
+        .order_by("nome")
+        .values("id", "nome")
+    )
+    selected_nome = None
+    if departamento_id is not None:
+        selected_nome = next(
+            (d["nome"] for d in departamentos if d["id"] == departamento_id), None
+        )
+
+    return {
+        "months": months,
+        "horizon_days": horizon_days,
+        "total_linked": total_linked,
+        "churn_total": churn_total,
+        "conv_total": conv_total,
+        "overall_churn_pct": round(churn_total / total_linked * 100, 1)
+        if total_linked
+        else 0.0,
+        "overall_conv_pct": round(conv_total / total_linked * 100, 1)
+        if total_linked
+        else 0.0,
+        "by_tag": tag_rows,
+        "by_motivo": motivo_rows,
+        "top_churn_tags": top_churn_tags,
+        "top_conv_tags": top_conv_tags,
+        "min_vol": _CONVERSAO_MIN_VOL,
         "departamentos": departamentos,
         "selected_departamento_id": departamento_id,
         "selected_departamento_nome": selected_nome,
@@ -5072,7 +6320,11 @@ def compute_atendimento_triagem(
 
 @allow_cross_tenant(reason="dashboard read-only, escopo é a organização passada")
 def compute_bot_deflection_trend(
-    organization: Organization, *, months: int = 3
+    organization: Organization,
+    *,
+    months: int = 3,
+    start: datetime | None = None,
+    end: datetime | None = None,
 ) -> dict[str, Any]:
     """Série diária: atendimentos resolvidos pelo bot (deflexão) vs encaminhados
     ao humano.
@@ -5088,16 +6340,26 @@ def compute_bot_deflection_trend(
     diária a partir do primeiro dia COM dado na janela — o nome do atendente só
     passou a ser capturado recentemente, então não há histórico confiável antes
     disso (por isso a série "começa de agora", sem backfill).
+
+    Janela (#89): `start`/`end` explícitos (o período da página, `end` inclusivo)
+    têm precedência — o card de deflexão precisa falar do MESMO período do resto
+    da tela. Sem eles cai no atalho antigo de "últimos N meses".
     """
     from apps.atendimento.infrastructure.models import Atendimento
 
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    if start is not None and end is not None:
+        window_start, window_end = start, end
+    else:
+        window_start = (now - relativedelta(months=months)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        window_end = now
     rows = (
         Atendimento.objects.filter(
-            organization=organization, opened_at__gte=window_start
+            organization=organization,
+            opened_at__gte=window_start,
+            opened_at__lte=window_end,
         )
         .annotate(d=TruncDate("opened_at"))
         .values("d", "atendente_nome")
@@ -5122,8 +6384,8 @@ def compute_bot_deflection_trend(
     trend: list[dict[str, Any]] = []
     if by_day:
         cur = min(by_day)
-        end = now.date()
-        while cur <= end:
+        last_day = timezone.localtime(window_end, _ATENDIMENTO_TZ).date()
+        while cur <= last_day:
             bot, human = by_day.get(cur, [0, 0])
             day_total = bot + human
             trend.append(
@@ -5187,6 +6449,9 @@ _BAD_SIGNAL_LABELS = {
 }
 _BAD_TMA_THRESHOLD_H = 72.0  # 3 dias
 _REABERTURA_JANELA_DIAS = 7
+# Janela padrão quando a chamada não passa start/end (mesmo default do filtro
+# de período das páginas em dias — ver `apps.dashboards.period.DEFAULT_DAY_KEY`).
+_BAD_DEFAULT_WINDOW_DAYS = 30
 
 
 def _strip_accents(text: str) -> str:
@@ -5205,7 +6470,8 @@ def _is_triagem(dep_nome: str | None) -> bool:
 def compute_bad_conversations(
     organization: Organization,
     *,
-    months: int = 3,
+    start: datetime | None = None,
+    end: datetime | None = None,
     departamento_id: int | None = None,
     limit: int = 100,
 ) -> dict[str, Any]:
@@ -5218,6 +6484,10 @@ def compute_bad_conversations(
     conversa ruim** — só o desfecho qualifica, então o bot é excluído da
     reabertura e do TMA. Cruza com MRR + risco de churn (FK por documento) e
     prioriza por **MRR × score** — quem dói mais perder sobe ao topo.
+
+    A janela é `start`/`end` (datetimes aware, ambos inclusivos) — o período
+    resolvido pelo filtro em dias das páginas de atendimento (#97). Sem eles,
+    os últimos `_BAD_DEFAULT_WINDOW_DAYS` dias.
     """
     import bisect
     from collections import defaultdict
@@ -5226,9 +6496,16 @@ def compute_bad_conversations(
     from apps.customers.infrastructure.models import Contract
 
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    window_end = end or now
+    window_start = start or (
+        (now - timedelta(days=_BAD_DEFAULT_WINDOW_DAYS)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
     )
+    # A reabertura precisa enxergar ANTES da janela exibida: com "Hoje"/"Ontem"
+    # o contato anterior do cliente cai fora do período, e sem esse recuo o
+    # sinal simplesmente nunca dispararia nas janelas curtas.
+    contacts_start = window_start - timedelta(days=_REABERTURA_JANELA_DIAS)
 
     # Reabertura (FCR falho): cliente voltou pro MESMO departamento, atendido por
     # HUMANO, dentro de _REABERTURA_JANELA_DIAS. Exclui Triagem (menu do bot) e
@@ -5239,7 +6516,9 @@ def compute_bad_conversations(
     human_contacts: dict[tuple[str, int], list[Any]] = defaultdict(list)
     for c in (
         Atendimento.objects.filter(
-            organization=organization, opened_at__gte=window_start
+            organization=organization,
+            opened_at__gte=contacts_start,
+            opened_at__lte=window_end,
         )
         .exclude(customer_document="")
         .exclude(opened_at__isnull=True)
@@ -5282,11 +6561,14 @@ def compute_bad_conversations(
         QAReview.objects.filter(
             organization=organization,
             atendimento__opened_at__gte=window_start,
+            atendimento__opened_at__lte=window_end,
         ).values_list("atendimento_id", "resolveu")
     )
 
     base = Atendimento.objects.filter(
-        organization=organization, opened_at__gte=window_start
+        organization=organization,
+        opened_at__gte=window_start,
+        opened_at__lte=window_end,
     )
     if departamento_id is not None:
         base = base.filter(departamento_id=departamento_id)

@@ -6,6 +6,8 @@
 {% block content %}
 <h1 class="text-2xl font-bold mb-6">Fluxo de Caixa</h1>
 
+{% include "dashboards/_period_header.html" %}
+
 {% if cashflow_data %}
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
     {% include "dashboards/_kpi_card.html" with label="Receita (último mês)" value=last_revenue_str %}
