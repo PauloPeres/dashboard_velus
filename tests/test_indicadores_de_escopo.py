@@ -216,9 +216,11 @@ class TestVendas:
         client.force_login(user_a)
         resp = client.get(f"{reverse('dashboards:sales')}?periodo=6m")
         body = resp.content.decode()
-        i = body.index("Net adds por mês")
+        # Na Fase 2 o título deixou de ser "por mês": a série acompanha a
+        # janela e diz a granularidade dela.
+        i = body.index("Net adds — ")
         assert _SELO not in body[i : body.index("</h2>", i)]
-        assert f"Net adds por mês — {resp.context['period_label']}" in body
+        assert f"Net adds — {resp.context['period_label']}" in body
 
     def test_tooltip_diz_que_o_funil_e_desde_sempre(
         self, client: Any, user_a: User, organization_a: Organization

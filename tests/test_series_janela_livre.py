@@ -299,3 +299,103 @@ class TestPaginaFinanceiro:
         body = client.get(self.URL).content.decode()
         assert body.count("posição de agora") == 7
         assert body.count("janela fixa") == 3
+
+
+@pytest.mark.django_db
+class TestNetAdds:
+    """Net adds é FLUXO: o bucket soma eventos, ao contrário do estoque."""
+
+    def _contrato(
+        self, org: Organization, *, ativado: Any = None, cancelado: Any = None
+    ) -> None:
+        global _seq
+        _seq += 1
+        set_current_organization(org)
+        Contract.objects.create(
+            organization=org,
+            source_type="FAKE",
+            external_id=f"na-ctr-{_seq}",
+            customer_external_id=f"na-cust-{_seq}",
+            plan_name="Plano X",
+            monthly_amount=Decimal("100"),
+            status="CANCELED" if cancelado else "ACTIVE",
+            activated_at=ativado,
+            canceled_at=cancelado,
+        )
+
+    def test_modo_legado_rende_um_ponto_por_mes_pedido(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.analytics.application.aggregations import compute_net_adds_series
+
+        série = compute_net_adds_series(organization_a, months=6)
+        assert len(série) == 6
+        assert set(série[0]) == {"month", "label", "adds", "churn", "net"}
+
+    def test_janela_livre_soma_eventos_do_bucket(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.analytics.application.aggregations import compute_net_adds_series
+
+        agora = timezone.now()
+        ontem = agora - timedelta(days=1)
+        self._contrato(organization_a, ativado=ontem)
+        self._contrato(organization_a, ativado=ontem)
+        self._contrato(organization_a, cancelado=ontem)
+
+        hoje = _hoje()
+        série = compute_net_adds_series(
+            organization_a, start=hoje - timedelta(days=6), end=hoje
+        )
+        assert len(série) == 7
+        do_dia = next(p for p in série if p["adds"] or p["churn"])
+        assert (do_dia["adds"], do_dia["churn"], do_dia["net"]) == (2, 1, 1)
+
+    def test_janela_livre_corta_nos_dois_extremos(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.analytics.application.aggregations import compute_net_adds_series
+
+        agora = timezone.now()
+        self._contrato(organization_a, ativado=agora - timedelta(days=10))
+        hoje = _hoje()
+        série = compute_net_adds_series(
+            organization_a, start=hoje - timedelta(days=2), end=hoje
+        )
+        assert sum(p["adds"] for p in série) == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestPaginaVendas:
+    URL = "/sales/"
+
+    def test_barra_tem_presets_em_dias(
+        self, client: Any, user_a: Any, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(self.URL)
+        assert resp.status_code == 200
+        html = resp.content.decode()
+        assert "setPeriodo('1d')" in html
+        assert 'name="de"' in html
+        assert resp.context["period"].key == "30d"
+        assert resp.context["period_warning"] is None
+
+    def test_serie_muda_de_granularidade_com_a_janela(
+        self, client: Any, user_a: Any, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        assert client.get(f"{self.URL}?periodo=7d").context[
+            "serie_granularidade"
+        ] == "dia a dia"
+        assert client.get(f"{self.URL}?periodo=12m").context[
+            "serie_granularidade"
+        ] == "mês a mês"
+
+    def test_blocos_fora_do_filtro_continuam_marcados(
+        self, client: Any, user_a: Any, organization_a: Organization
+    ) -> None:
+        """A Fase 2 não pode ter desfeito a Fase 3."""
+        client.force_login(user_a)
+        assert client.get(self.URL).content.decode().count("posição de agora") == 6

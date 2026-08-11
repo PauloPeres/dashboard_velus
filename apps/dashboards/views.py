@@ -2560,10 +2560,15 @@ def sales(request: HttpRequest) -> HttpResponse:
         return org_or_redirect
     org = org_or_redirect
 
-    months = _get_months(request)
+    # Período em dias (#100, Fase 2): net adds é fluxo e sabe trabalhar em
+    # dia/semana/mês. O resto da página (funil, origem, pipeline) é foto de
+    # agora ou base inteira — segue fora do filtro, e diz isso na tela.
+    period = _get_period(request)
     funnel = compute_sales_funnel(org)
     origin = compute_lead_origin(org)
-    net_adds = compute_net_adds_series(org, months=months)
+    net_adds = compute_net_adds_series(
+        org, start=period.start_date, end=period.end_date
+    )
     pipeline = compute_pipeline_aging(org)
 
     net_adds_total = sum(p["net"] for p in net_adds)
@@ -2586,6 +2591,9 @@ def sales(request: HttpRequest) -> HttpResponse:
             "funnel_chart_json": charts.sales_funnel_chart(funnel["funnel_stages"]),
             "net_adds_chart_json": charts.net_adds_bar_chart(net_adds),
             "lead_origin_chart_json": charts.lead_origin_pie(origin),
+            "serie_granularidade": time_buckets.GRANULARITY_LABELS[
+                time_buckets.series_granularity(period.start_date, period.end_date)
+            ],
         },
     )
 
