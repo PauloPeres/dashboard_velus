@@ -11,6 +11,11 @@
             </span>
         </span>
         {% endif %}
+        {% comment %}
+        `agora=True` marca o card como posição de agora — número que NÃO responde
+        ao filtro de período (estoque, foto do momento, mês fechado). Ver #100.
+        {% endcomment %}
+        {% if agora %}{% include "dashboards/_badge_agora.html" with titulo=agora_titulo %}{% endif %}
     </p>
     <p class="text-2xl font-bold {% if value_color %}{{ value_color }}{% else %}text-gray-900{% endif %}">{{ value }}</p>
     {% if delta %}

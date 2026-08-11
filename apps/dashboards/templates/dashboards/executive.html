@@ -68,11 +68,12 @@
 <!-- Seção Crescimento -->
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Crescimento</h2>
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-  {% include "dashboards/_kpi_card.html" with label="MRR Atual" value=mrr_now_str delta=mrr_delta_str delta_positive=mrr_delta_positive subtitle=mrr_subtitle tooltip="Soma do valor mensal de todos os contratos com status Ativo, Bloqueado ou Ag. Instalação hoje. Fonte: fact_contract_status_daily." %}
+  {% include "dashboards/_kpi_card.html" with label="MRR Atual" value=mrr_now_str delta=mrr_delta_str delta_positive=mrr_delta_positive subtitle=mrr_subtitle tooltip="Soma do valor mensal de todos os contratos com status Ativo, Bloqueado ou Ag. Instalação hoje. Fonte: fact_contract_status_daily." agora=True agora_titulo="MRR somado hoje, com os contratos ativos de agora — não olha o período selecionado." %}
   <!-- Card especial: breakdown de status de contratos -->
   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
     <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
       Contratos Ativos
+      {% include "dashboards/_badge_agora.html" with titulo="Contratos ativos neste momento — não olha o período selecionado." %}
       <span class="relative inline-block group/tip shrink-0">
         <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
         <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
@@ -100,24 +101,24 @@
       </div>
     </div>
   </div>
-  {% include "dashboards/_kpi_card.html" with label="Ticket Médio (ARPU)" value=arpu_str subtitle="MRR ÷ contratos ativos" tooltip="Average Revenue Per User — quanto cada contrato gera em média por mês. Fórmula: MRR atual ÷ total de contratos ativos." %}
-  {% include "dashboards/_kpi_card.html" with label="Churn Mensal" value=churn_pct_str subtitle=churn_subtitle variant=churn_variant tooltip="Contratos cancelados no mês ÷ contratos ativos no início do mês × 100. Meta para provedores saudáveis: abaixo de 1,5% ao mês." %}
+  {% include "dashboards/_kpi_card.html" with label="Ticket Médio (ARPU)" value=arpu_str subtitle="MRR ÷ contratos ativos" tooltip="Average Revenue Per User — quanto cada contrato gera em média por mês. Fórmula: MRR atual ÷ total de contratos ativos." agora=True agora_titulo="MRR de hoje ÷ contratos ativos de hoje — não olha o período selecionado." %}
+  {% include "dashboards/_kpi_card.html" with label="Churn Mensal" value=churn_pct_str subtitle=churn_subtitle variant=churn_variant tooltip="Contratos cancelados no mês ÷ contratos ativos no início do mês × 100. Meta para provedores saudáveis: abaixo de 1,5% ao mês." agora=True agora_titulo="Sempre o último mês FECHADO — não olha o período selecionado." %}
 </div>
 
 <!-- Seção Caixa -->
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Caixa</h2>
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-  {% include "dashboards/_kpi_card.html" with label="Caixa Recebido (mês)" value=cash_this_month_str subtitle="Pagamentos confirmados no mês corrente" tooltip="Soma das faturas pagas (status PAID, paid_date no mês corrente). Entrada de caixa real — não confundir com MRR faturado, que inclui o que ainda não foi pago." %}
-  {% include "dashboards/_kpi_card.html" with label="Projeção Próximo Mês" value=cash_projected_next_str subtitle="Caixa esperado no mês seguinte" tooltip="Projeção de caixa do próximo mês = MRR projetado × taxa de recebimento (tendência OLS sobre caixa÷MRR histórico). Cenário base do modelo de previsão." %}
-  {% include "dashboards/_kpi_card.html" with label="Taxa de Recebimento" value=collection_rate_str subtitle="Caixa recebido ÷ MRR faturado" tooltip="Percentual do MRR que efetivamente vira caixa. Abaixo de 100% indica inadimplência corrente: parte do que foi faturado não foi pago no mês." %}
+  {% include "dashboards/_kpi_card.html" with label="Caixa Recebido (mês)" value=cash_this_month_str subtitle="Pagamentos confirmados no mês corrente" tooltip="Soma das faturas pagas (status PAID, paid_date no mês corrente). Entrada de caixa real — não confundir com MRR faturado, que inclui o que ainda não foi pago." agora=True agora_titulo="Sempre o mês corrente — não olha o período selecionado." %}
+  {% include "dashboards/_kpi_card.html" with label="Projeção Próximo Mês" value=cash_projected_next_str subtitle="Caixa esperado no mês seguinte" tooltip="Projeção de caixa do próximo mês = MRR projetado × taxa de recebimento (tendência OLS sobre caixa÷MRR histórico). Cenário base do modelo de previsão." agora=True agora_titulo="Projeção do mês que vem — olha pra frente, não pro período selecionado." %}
+  {% include "dashboards/_kpi_card.html" with label="Taxa de Recebimento" value=collection_rate_str subtitle="Caixa recebido ÷ MRR faturado" tooltip="Percentual do MRR que efetivamente vira caixa. Abaixo de 100% indica inadimplência corrente: parte do que foi faturado não foi pago no mês." agora=True agora_titulo="Vem do mesmo modelo de projeção — não olha o período selecionado." %}
 </div>
 
 <!-- Seção Inadimplência -->
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Inadimplência</h2>
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-  {% include "dashboards/_kpi_card.html" with label="Estoque Inadimplente" value=delinquency_amount_str subtitle=delinquency_subtitle variant="border-red-200" tooltip="Soma de todas as mensalidades vencidas e não pagas (status PENDING ou OVERDUE com days_overdue > 0). Para um provedor, inclui clientes de qualquer período — mesmo os já desconectados que nunca quitaram. É um estoque acumulado, não o mês corrente." %}
-  {% include "dashboards/_kpi_card.html" with label="Crítico (90+ dias)" value=over_90_value subtitle=over_90_subtitle variant="border-red-300" value_color="text-red-700" tooltip="Faturas com mais de 90 dias sem pagamento. Nessa faixa, a probabilidade de recuperação é muito baixa — geralmente indica evasão do cliente. Ação recomendada: negativação no SPC/Serasa ou encaminhamento para cobrança judicial." %}
-  {% include "dashboards/_kpi_card.html" with label="Inadimplência / MRR" value=delinquency_pct_str subtitle="Estoque acumulado ÷ receita mensal" tooltip="Estoque total de inadimplência ÷ MRR atual. Mostra quantos meses de receita estão represados como dívida. Abaixo de 50%: saudável. Entre 50–100%: atenção. Acima de 100%: crítico — o estoque acumulado supera 1 mês de receita." %}
+  {% include "dashboards/_kpi_card.html" with label="Estoque Inadimplente" value=delinquency_amount_str subtitle=delinquency_subtitle variant="border-red-200" tooltip="Soma de todas as mensalidades vencidas e não pagas (status PENDING ou OVERDUE com days_overdue > 0). Para um provedor, inclui clientes de qualquer período — mesmo os já desconectados que nunca quitaram. É um estoque acumulado, não o mês corrente." agora=True agora_titulo="Estoque acumulado até hoje, de qualquer época — não olha o período selecionado." %}
+  {% include "dashboards/_kpi_card.html" with label="Crítico (90+ dias)" value=over_90_value subtitle=over_90_subtitle variant="border-red-300" value_color="text-red-700" tooltip="Faturas com mais de 90 dias sem pagamento. Nessa faixa, a probabilidade de recuperação é muito baixa — geralmente indica evasão do cliente. Ação recomendada: negativação no SPC/Serasa ou encaminhamento para cobrança judicial." agora=True agora_titulo="Estoque vencido há mais de 90 dias, posição de hoje — não olha o período selecionado." %}
+  {% include "dashboards/_kpi_card.html" with label="Inadimplência / MRR" value=delinquency_pct_str subtitle="Estoque acumulado ÷ receita mensal" tooltip="Estoque total de inadimplência ÷ MRR atual. Mostra quantos meses de receita estão represados como dívida. Abaixo de 50%: saudável. Entre 50–100%: atenção. Acima de 100%: crítico — o estoque acumulado supera 1 mês de receita." agora=True agora_titulo="Estoque de hoje ÷ MRR de hoje — não olha o período selecionado." %}
 </div>
 
 <!-- Gráfico — Caixa recebido × projetado (full-width) -->
@@ -135,7 +136,7 @@
 
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-4">
-      <h2 class="text-sm font-semibold text-gray-700">MRR — últimos 12 meses</h2>
+      <h2 class="text-sm font-semibold text-gray-700">MRR — {{ period_label }}</h2>
       <a href="{% url 'dashboards:revenue' %}" class="text-xs text-blue-600 hover:underline">Ver receita →</a>
     </div>
     <div id="mrr-chart" style="height:280px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
@@ -143,7 +144,9 @@
 
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-4">
-      <h2 class="text-sm font-semibold text-gray-700">Aging de inadimplência — snapshot atual</h2>
+      <h2 class="text-sm font-semibold text-gray-700 flex items-center gap-2">Aging de inadimplência
+        {% include "dashboards/_badge_agora.html" with titulo="Distribuição do que está vencido neste momento — não olha o período selecionado." %}
+      </h2>
       <a href="{% url 'dashboards:financial' %}" class="text-xs text-blue-600 hover:underline">Ver detalhe →</a>
     </div>
     <div id="aging-chart" style="height:280px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
@@ -165,7 +168,7 @@
 
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-1">
-      <h2 class="text-sm font-semibold text-gray-700">Contratos por status — últimos 12 meses</h2>
+      <h2 class="text-sm font-semibold text-gray-700">Contratos por status — {{ period_label }}</h2>
     </div>
     <p class="text-xs text-gray-400 mb-3">Verde = ativos · Laranja = bloqueados por inadimplência · Roxo = ag. instalação</p>
     <div id="contract-status-chart" style="height:260px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
