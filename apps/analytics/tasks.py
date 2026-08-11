@@ -190,6 +190,47 @@ def _dispatch_fact_rebuild() -> dict[str, int]:
 
 
 @shared_task(
+    name="apps.analytics.tasks.rebuild_after_sync",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    max_retries=2,
+    acks_late=True,
+)
+def rebuild_after_sync(*, organization_id: int, capability: str) -> dict[str, Any]:
+    """Rematerializa dim/fact de uma capability, em processo próprio (#132).
+
+    Antes, o `sync_completed` chamava isso **inline**, no mesmo processo que
+    acabara de sincronizar. Num BOOTSTRAP de 111 mil faturas o worker foi
+    OOMKilled 3 segundos depois de gravar COMPLETED: a origem ficou correta e as
+    fact tables ficaram velhas, **sem erro nenhum aparecer**. O dashboard mentiu
+    em silêncio até alguém rodar o rebuild à mão.
+
+    Como task própria, o rebuild começa com a memória limpa e, se morrer, morre
+    barulhento — com retry e um job visível.
+    """
+    return _run_rebuild_after_sync(
+        organization_id=organization_id, capability=capability
+    )
+
+
+@allow_cross_tenant(reason="rebuild de fact opera fora de request HTTP")
+def _run_rebuild_after_sync(
+    *, organization_id: int, capability: str
+) -> dict[str, Any]:
+    from apps.analytics.application.rebuild import rebuild_for_capability
+    from apps.tenancy.models import Organization
+
+    org = Organization.objects.get(pk=organization_id)
+    set_current_organization(org)
+    summary = rebuild_for_capability(org, capability)
+    _logger.info(
+        "rebuild_after_sync_done", org=org.slug, capability=capability, **summary
+    )
+    return summary
+
+
+@shared_task(
     name="apps.analytics.tasks.rebuild_financial_facts_for_org",
     autoretry_for=(Exception,),
     retry_backoff=True,

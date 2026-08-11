@@ -10,7 +10,6 @@ from django.dispatch import receiver
 from apps.sync.signals import sync_completed
 
 from .application.churn_risk import compute_churn_risk_scores
-from .application.rebuild import rebuild_for_capability
 
 _logger = structlog.get_logger(__name__)
 
@@ -31,12 +30,21 @@ def _on_sync_completed(
 ) -> None:
     if records_processed == 0:
         return
-    summary = rebuild_for_capability(organization, capability)
+
+    # O rebuild vai pra uma task própria (#132). Rodá-lo aqui significava
+    # rematerializar as fact tables no mesmo processo que acabara de sincronizar:
+    # num BOOTSTRAP de 111 mil faturas o worker morreu de OOM 3 segundos depois
+    # de gravar COMPLETED, e o dashboard ficou desatualizado sem erro visível.
+    from .tasks import rebuild_after_sync
+
+    rebuild_after_sync.delay(
+        organization_id=organization.pk, capability=capability
+    )
     _logger.info(
-        "analytics_rebuild_done",
+        "analytics_rebuild_dispatched",
         organization=organization.slug,
         capability=capability,
-        summary=summary,
+        records_processed=records_processed,
     )
 
     if capability in _CHURN_RELEVANT_CAPABILITIES:

@@ -104,6 +104,16 @@ class SyncCheckpoint(models.Model):
         ),
     )
 
+    consecutive_empty_runs = models.PositiveIntegerField(
+        default=0,
+        help_text=_(
+            "Rodadas INCREMENTAIS seguidas que não importaram nada. Zerado "
+            "assim que um registro entra. Uma rodada vazia é rotina; dezenas "
+            "seguidas foram seis semanas de caixa faltando sem ninguém ver "
+            "(#132)."
+        ),
+    )
+
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

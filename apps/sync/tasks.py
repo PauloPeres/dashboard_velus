@@ -208,6 +208,54 @@ _DEFAULT_INCREMENTAL_WINDOW: dict[Capability, timedelta] = {
 # =============================================================================
 # Task principal
 # =============================================================================
+# A partir de quantas rodadas vazias seguidas o sync vira alerta (#132). Uma
+# rodada sem novidade é rotina; oito seguidas, no ritmo de 3 em 3 horas, é um dia
+# inteiro sem dado entrando — e foi assim, em silêncio e sempre COMPLETED, que se
+# perderam seis semanas de faturas.
+EMPTY_RUNS_ALERTA = 8
+
+
+def _atualiza_checkpoint(
+    checkpoint: SyncCheckpoint, count: int, mode: SyncMode, slog: Any
+) -> None:
+    """Avança o marcador SÓ quando algo entrou (#132).
+
+    O bug era este: o incremental avançava `last_processed_at` pra "agora" mesmo
+    importando zero. A rodada seguinte perguntava "o que mudou desde agora?",
+    recebia nada, e gravava de novo que estava em dia. Uma vez atrasado, o sync
+    se convencia a cada 3 horas de que estava atualizado — e não havia caminho
+    de volta sem intervenção manual.
+
+    Não avançar em rodada vazia deixa a janela crescer sozinha até o dado voltar,
+    que é o comportamento auto-recuperável.
+    """
+    if count > 0:
+        checkpoint.last_processed_at = timezone.now()
+        checkpoint.consecutive_empty_runs = 0
+        checkpoint.save(
+            update_fields=[
+                "last_processed_at", "consecutive_empty_runs", "updated_at"
+            ]
+        )
+        return
+
+    if mode == SyncMode.BOOTSTRAP:
+        return  # bootstrap não mexe no checkpoint
+
+    checkpoint.consecutive_empty_runs += 1
+    checkpoint.save(update_fields=["consecutive_empty_runs", "updated_at"])
+    if checkpoint.consecutive_empty_runs >= EMPTY_RUNS_ALERTA:
+        slog.warning(
+            "sync_sem_registros_ha_muitas_rodadas",
+            consecutive_empty_runs=checkpoint.consecutive_empty_runs,
+            last_processed_at=str(checkpoint.last_processed_at),
+            detalhe=(
+                "incremental não traz registro há várias rodadas; checkpoint "
+                "mantido de propósito pra a janela se recuperar sozinha"
+            ),
+        )
+
+
 @shared_task(
     bind=True,
     name="apps.sync.tasks.sync_capability",
@@ -329,8 +377,7 @@ def _run_sync(
                             slog.error("sync_too_many_skips", skipped=skipped)
                             raise
 
-                checkpoint.last_processed_at = timezone.now()
-                checkpoint.save(update_fields=["last_processed_at", "updated_at"])
+                _atualiza_checkpoint(checkpoint, count, mode, slog)
 
                 job.status = SyncStatus.COMPLETED
                 job.records_processed = count
