@@ -134,3 +134,63 @@ class TestFinanceiro:
         for titulo in ("Recebimentos mensais", "Inadimplência — por mês de vencimento"):
             i = body.index(titulo)
             assert _SELO not in body[i : body.index("</h2>", i)]
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestContratos:
+    def test_blocos_de_base_e_parque_ficam_marcados(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        body = client.get(reverse("dashboards:contracts")).content.decode()
+        # 7 cards do partial + Contratos Ativos (manual) + receita por plano +
+        # duração dos bloqueios + lista de bloqueados.
+        assert body.count(_SELO) == 11
+
+    def test_titulos_deixam_de_dizer_janela_fixa(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(f"{reverse('dashboards:contracts')}?periodo=3m")
+        body = resp.content.decode()
+        label = resp.context["period_label"]
+        for titulo in ("Evolução da base", "Evolução do ARPU", "Taxa de churn mensal"):
+            assert f"{titulo} — {label}" in body
+        # "Cancelamentos por plano — últimos 3 meses" também era fixo, e a
+        # agregação por trás (compute_churn_by_plan) segue o filtro.
+        assert f"Cancelamentos por plano — {label}" in body
+        assert "últimos 12 meses" not in body
+        assert "últimos 3 meses" not in body
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestChurn:
+    def test_kpis_do_mes_corrente_e_ltv_ficam_marcados(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        body = client.get(reverse("dashboards:churn")).content.decode()
+        # Logo Churn, MRR Perdido/Recuperado/Líquido, LTV Médio + gráfico de LTV.
+        assert body.count(_SELO) == 6
+
+    def test_churn_controlavel_nao_e_marcado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        """Esse deriva de `compute_churn_by_reason`, que segue o filtro."""
+        client.force_login(user_a)
+        body = client.get(reverse("dashboards:churn")).content.decode()
+        i = body.index("Churn controlável")
+        assert _SELO not in body[i : body.index("</p>", i)]
+
+    def test_titulos_das_series_dizem_o_periodo(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(f"{reverse('dashboards:churn')}?periodo=6m")
+        body = resp.content.decode()
+        label = resp.context["period_label"]
+        assert f"MRR Perdido vs Recuperado — {label}" in body
+        assert f"Cancelamentos vs Ativações — {label}" in body
+        assert "— 12 meses" not in body
