@@ -85,14 +85,18 @@ class TestDelinquencySplit:
         assert fact.late_fee_amount == Decimal("10.00")
 
     def test_trend_separates_principal_and_late_fee(self, organization_a: Organization) -> None:
-        # duas faturas vencidas no mesmo mês: uma com multa, outra sem
+        # Duas faturas vencidas no MESMO mês: uma com multa, outra sem.
+        # O mesmo `due_days_ago` nas duas é o que garante isso. Com offsets
+        # diferentes (era 40 e 42) elas caem em meses distintos sempre que a
+        # data de hoje faz a janela cruzar a virada do mês — o teste passava ou
+        # quebrava conforme o dia em que rodasse.
         _make_invoice(
             organization_a,
             amount=Decimal("100"),
             due_days_ago=40,
             raw_extras={"valor_multas": "10.00", "valor_juros": "5.00"},
         )
-        _make_invoice(organization_a, amount=Decimal("50"), due_days_ago=42)
+        _make_invoice(organization_a, amount=Decimal("50"), due_days_ago=40)
         rebuild_for_capability(organization_a, "INVOICES")
 
         trend = compute_delinquency_trend(organization_a, months=6)

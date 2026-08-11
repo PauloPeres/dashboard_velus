@@ -92,6 +92,7 @@ from apps.analytics.application.aggregations import (
     iter_atendimento_lista_rows,
     search_customers,
 )
+from apps.analytics.application import time_buckets
 from apps.analytics.application.cto_snapshots import compute_cto_history
 from apps.analytics.application.network_snapshots import compute_network_history
 from apps.shared.context import get_current_organization
@@ -336,14 +337,27 @@ def cashflow(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100, Fase 2): recebimento e despesa têm data, então
+    # dia/semana faz sentido aqui — ao contrário do DRE (competência mensal) e
+    # do Burn (média mensal), que ficam em meses por decisão.
+    period = _get_period(request)
 
-    cashflow_data = compute_cashflow_series(org, months=months)
-    supplier_data = compute_expense_by_supplier(org, months=months)
-    category_data = compute_expense_by_category(org, months=months)
+    cashflow_data = compute_cashflow_series(
+        org, start=period.start_date, end=period.end_date
+    )
+    supplier_data = compute_expense_by_supplier(
+        org, start=period.start_date, end=period.end_date
+    )
+    category_data = compute_expense_by_category(
+        org, start=period.start_date, end=period.end_date
+    )
 
-    # Pré-formatados — evita bug de |add: string+float no template
+    # Pré-formatados — evita bug de |add: string+float no template.
+    # `last` é o ÚLTIMO BUCKET, que agora pode ser um dia ou uma semana — por
+    # isso o rótulo dos cards vem do próprio bucket, e não mais "último mês"
+    # chumbado no template (#100).
     last = cashflow_data[-1] if cashflow_data else {}
+    ultimo_bucket = last.get("label", "—")
     last_revenue_str = _fmt_brl(last.get("revenue", 0))
     last_expenses_str = _fmt_brl(last.get("expenses", 0))
     last_net_str = _fmt_brl(last.get("net", 0))
@@ -354,6 +368,9 @@ def cashflow(request: HttpRequest) -> HttpResponse:
         "dashboards/cashflow.html",
         {
             "cashflow_data": cashflow_data,
+            "label_receita": f"Receita ({ultimo_bucket})",
+            "label_despesas": f"Despesas ({ultimo_bucket})",
+            "label_saldo": f"Saldo ({ultimo_bucket})",
             "supplier_data": supplier_data,
             "category_data": category_data,
             "last_revenue_str": last_revenue_str,
@@ -363,6 +380,9 @@ def cashflow(request: HttpRequest) -> HttpResponse:
             "cashflow_chart_json": charts.cashflow_waterfall(cashflow_data),
             "supplier_chart_json": charts.expense_by_supplier_bar(supplier_data),
             "category_chart_json": charts.expense_by_category_pie(category_data),
+            "serie_granularidade": time_buckets.GRANULARITY_LABELS[
+                time_buckets.series_granularity(period.start_date, period.end_date)
+            ],
         },
     )
 
@@ -483,14 +503,24 @@ def financial(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100, Fase 2): as três séries desta página (recebimentos,
+    # inadimplência por vencimento e contratos bloqueados) sabem trabalhar em
+    # dia/semana/mês, então a página deixa de ser presa a meses fechados. Os KPIs
+    # de estoque e a recuperação seguem fora do filtro — e dizem isso na tela.
+    period = _get_period(request)
 
     kpis = compute_kpis(org)
     aging = compute_aging_distribution(org)
     top_delinquent = compute_top_delinquent_invoices(org, limit=50)
-    cash_series = compute_cash_received_series(org, months=months)
-    delinquency_trend = compute_delinquency_trend(org, months=months)
-    status_trend = compute_contract_status_trend(org, months=months)
+    cash_series = compute_cash_received_series(
+        org, start=period.start_date, end=period.end_date
+    )
+    delinquency_trend = compute_delinquency_trend(
+        org, start=period.start_date, end=period.end_date
+    )
+    status_trend = compute_contract_status_trend(
+        org, start=period.start_date, end=period.end_date
+    )
     recovery = compute_recovery_rate(org)
 
     # KPI cards extras
@@ -542,6 +572,9 @@ def financial(request: HttpRequest) -> HttpResponse:
             "cash_chart_json": charts.cash_received_chart(cash_series),
             "blocked_series_json": charts.blocked_trend_line(blocked_series),
             "recovery_chart_json": charts.recovery_by_aging_chart(recovery["by_aging"]),
+            "serie_granularidade": time_buckets.GRANULARITY_LABELS[
+                time_buckets.series_granularity(period.start_date, period.end_date)
+            ],
         },
     )
 
@@ -1042,21 +1075,26 @@ def operations(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100). Antes desta issue o seletor desta página governava
+    # só o gráfico de volume: os KPIs eram do MÊS CORRENTE hardcoded e o SLA por
+    # tipo era fixo em 30 dias. Agora tudo o que tem janela segue o filtro.
+    period = _get_period(request)
 
     # All tickets for this org (TenantManager filters by org)
     qs = Ticket.objects.filter(organization=org)
     now = timezone.now()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    # KPIs
+    # KPIs. "Chamados abertos" é ESTOQUE (posição de agora) e não tem janela —
+    # a página marca isso na UI em vez de fingir que o filtro se aplica.
     open_count = qs.exclude(status="CLOSED").count()
 
-    closed_this_month_qs = qs.filter(status="CLOSED", closed_at__gte=month_start)
-    closed_this_month = closed_this_month_qs.count()
+    closed_period_qs = qs.filter(
+        status="CLOSED", closed_at__gte=period.start, closed_at__lte=period.end
+    )
+    closed_in_period = closed_period_qs.count()
 
-    # Avg resolution time (closed tickets this month)
-    avg_resolution = closed_this_month_qs.filter(
+    # Tempo médio de resolução dos chamados fechados na janela.
+    avg_resolution = closed_period_qs.filter(
         opened_at__isnull=False,
         closed_at__isnull=False,
     ).aggregate(
@@ -1066,12 +1104,12 @@ def operations(request: HttpRequest) -> HttpResponse:
     if avg_resolution is not None:
         avg_resolution_hours = avg_resolution.total_seconds() / 3600
 
-    # SLA % (closed within 24h / total closed this month)
+    # SLA % (fechados em até 24h / total fechado na janela)
     sla_threshold = timedelta(hours=24)
-    if closed_this_month > 0:
+    if closed_in_period > 0:
         from django.db.models import DurationField, ExpressionWrapper
         within_sla = (
-            closed_this_month_qs
+            closed_period_qs
             .filter(opened_at__isnull=False, closed_at__isnull=False)
             .annotate(
                 resolution_time=ExpressionWrapper(
@@ -1082,30 +1120,41 @@ def operations(request: HttpRequest) -> HttpResponse:
             .filter(resolution_time__lte=sla_threshold)
             .count()
         )
-        sla_pct = round(within_sla / closed_this_month * 100, 1)
+        sla_pct = round(within_sla / closed_in_period * 100, 1)
     else:
         sla_pct = 0.0
 
-    # Volume trend (opened vs closed per month, last N months)
-    volume_series = []
-    for i in range(months):
-        m_start = (now - relativedelta(months=months - 1 - i)).replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
-        if i < months - 1:
-            m_end = (now - relativedelta(months=months - 2 - i)).replace(
+    # Volume abertos x fechados — continua MENSAL. Abaixo de 2 meses de janela
+    # sairia um ponto só, então some e a página explica no lugar (#100).
+    volume_meses = period.months
+    volume_series: list[dict[str, Any]] | None = None
+    periodo_nota = ""
+    if volume_meses >= 2:
+        volume_series = []
+        for i in range(volume_meses):
+            m_start = (now - relativedelta(months=volume_meses - 1 - i)).replace(
                 day=1, hour=0, minute=0, second=0, microsecond=0
             )
-        else:
-            m_end = now
-        opened_m = qs.filter(opened_at__gte=m_start, opened_at__lt=m_end).count()
-        closed_m = qs.filter(closed_at__gte=m_start, closed_at__lt=m_end).count()
-        volume_series.append({
-            "month": m_start.strftime("%Y-%m"),
-            "label": m_start.strftime("%b/%y"),
-            "opened": opened_m,
-            "closed": closed_m,
-        })
+            if i < volume_meses - 1:
+                m_end = (now - relativedelta(months=volume_meses - 2 - i)).replace(
+                    day=1, hour=0, minute=0, second=0, microsecond=0
+                )
+            else:
+                m_end = now
+            opened_m = qs.filter(opened_at__gte=m_start, opened_at__lt=m_end).count()
+            closed_m = qs.filter(closed_at__gte=m_start, closed_at__lt=m_end).count()
+            volume_series.append({
+                "month": m_start.strftime("%Y-%m"),
+                "label": m_start.strftime("%b/%y"),
+                "opened": opened_m,
+                "closed": closed_m,
+            })
+    else:
+        periodo_nota = (
+            "O volume mês a mês precisa de pelo menos dois meses de janela — "
+            "com o período escolhido ele sairia com um ponto só, então está "
+            "oculto. O resto da página respeita o período normalmente."
+        )
 
     # Priority distribution (open tickets)
     priority_labels = {
@@ -1161,23 +1210,30 @@ def operations(request: HttpRequest) -> HttpResponse:
     else:
         avg_res_str = f"{avg_resolution_hours:.1f}h"
 
-    # SLA por tipo de atendimento (Manutenção/Instalação/...) — últimos 30 dias
-    # com comparativo vs os 30 dias anteriores.
-    sla_by_type = compute_support_sla(org, period_days=30)
+    # SLA por tipo de atendimento (Manutenção/Instalação/...) — na janela do
+    # filtro, com comparativo vs a janela anterior de mesma duração. A função já
+    # trabalhava em DIAS; até a #100 recebia 30 fixo e ignorava o seletor.
+    sla_dias = max(1, (period.end_date - period.start_date).days + 1)
+    sla_by_type = compute_support_sla(org, period_days=sla_dias)
 
     return render(
         request,
         "dashboards/operations.html",
         {
             "open_count": open_count,
-            "closed_this_month": closed_this_month,
+            "closed_in_period": closed_in_period,
             "avg_resolution_str": avg_res_str,
             "sla_pct": sla_pct,
             "sla_pct_str": f"{sla_pct:.1f}%",
+            "sla_dias": sla_dias,
             "open_tickets": open_tickets,
             "priority_dist": priority_dist,
             "sla_by_type": sla_by_type,
-            "volume_chart_json": charts.ticket_volume_trend(volume_series),
+            "periodo_nota": periodo_nota,
+            "volume_visivel": volume_series is not None,
+            "volume_chart_json": (
+                charts.ticket_volume_trend(volume_series) if volume_series else ""
+            ),
             "priority_chart_json": charts.ticket_priority_pie(priority_dist),
         },
     )
@@ -1196,16 +1252,19 @@ def os_dashboard(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100): a janela já era montada aqui na view, então é só
+    # passar a vir do filtro em vez de `?months=`.
+    period = _get_period(request)
 
     lookups = load_os_lookups(org)
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
 
     # OS abertas dentro da janela do período selecionado.
-    qs = Ticket.objects.filter(organization=org, opened_at__gte=window_start)
+    qs = Ticket.objects.filter(
+        organization=org,
+        opened_at__gte=period.start,
+        opened_at__lte=period.end,
+    )
 
     # --- KPIs ---
     total_os = qs.count()
@@ -1270,25 +1329,38 @@ def os_dashboard(request: HttpRequest) -> HttpResponse:
     top_types = type_rows[:12]
 
     # --- Tendência mensal de OS abertas ---
-    trend_series = []
-    for i in range(months):
-        m_start = (now - relativedelta(months=months - 1 - i)).replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
-        if i < months - 1:
-            m_end = (now - relativedelta(months=months - 2 - i)).replace(
+    # Continua MENSAL (é o único bloco de série da página). Com uma janela curta
+    # ela viraria um ponto só, que não é tendência de nada: aí some e a página
+    # explica no lugar (#100).
+    trend_meses = period.months
+    trend_series: list[dict[str, Any]] | None = None
+    periodo_nota = ""
+    if trend_meses >= 2:
+        trend_series = []
+        for i in range(trend_meses):
+            m_start = (now - relativedelta(months=trend_meses - 1 - i)).replace(
                 day=1, hour=0, minute=0, second=0, microsecond=0
             )
-        else:
-            m_end = now
-        opened_m = Ticket.objects.filter(
-            organization=org, opened_at__gte=m_start, opened_at__lt=m_end
-        ).count()
-        trend_series.append({
-            "month": m_start.strftime("%Y-%m"),
-            "label": m_start.strftime("%b/%y"),
-            "opened": opened_m,
-        })
+            if i < trend_meses - 1:
+                m_end = (now - relativedelta(months=trend_meses - 2 - i)).replace(
+                    day=1, hour=0, minute=0, second=0, microsecond=0
+                )
+            else:
+                m_end = now
+            opened_m = Ticket.objects.filter(
+                organization=org, opened_at__gte=m_start, opened_at__lt=m_end
+            ).count()
+            trend_series.append({
+                "month": m_start.strftime("%Y-%m"),
+                "label": m_start.strftime("%b/%y"),
+                "opened": opened_m,
+            })
+    else:
+        periodo_nota = (
+            "A tendência mês a mês precisa de pelo menos dois meses de janela — "
+            "com o período escolhido ela sairia com um ponto só, então está "
+            "oculta. O resto da página respeita o período normalmente."
+        )
 
     # --- Distribuição por status ---
     status_labels = {
@@ -1322,7 +1394,11 @@ def os_dashboard(request: HttpRequest) -> HttpResponse:
             "synced": bool(lookups.subject_map),
             "volume_chart_json": charts.os_volume_by_type(top_types),
             "resolution_chart_json": charts.os_avg_resolution_by_type(top_types),
-            "trend_chart_json": charts.os_monthly_trend(trend_series),
+            "trend_chart_json": (
+                charts.os_monthly_trend(trend_series) if trend_series else ""
+            ),
+            "trend_visivel": trend_series is not None,
+            "periodo_nota": periodo_nota,
             "status_chart_json": charts.os_status_pie(status_dist),
         },
     )
@@ -2018,7 +2094,8 @@ def atendimento_conversao(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100): página de atendimento, mesmos presets de Tendências.
+    period = _get_period(request)
 
     try:
         horizon_days = int(request.GET.get("h", 90))
@@ -2032,8 +2109,17 @@ def atendimento_conversao(request: HttpRequest) -> HttpResponse:
     if raw_dep.isdigit():
         departamento_id = int(raw_dep)
 
+    # Recorte da página que o form de período personalizado precisa preservar.
+    set_period_extra_params(
+        request, {"h": horizon_days, "departamento": departamento_id}
+    )
+
     data = compute_atendimento_conversao(
-        org, months=months, horizon_days=horizon_days, departamento_id=departamento_id
+        org,
+        start=period.start,
+        end=period.end,
+        horizon_days=horizon_days,
+        departamento_id=departamento_id,
     )
 
     tabelas = [
@@ -2041,12 +2127,27 @@ def atendimento_conversao(request: HttpRequest) -> HttpResponse:
         {"titulo": "motivo", "rows": data["by_motivo"][:30]},
     ]
 
+    # Indicador de escopo (#100): esta página olha PRA FRENTE depois da conversa,
+    # então numa janela curta o desfecho ainda não teve tempo de acontecer e as
+    # taxas saem subestimadas. Dizer isso é melhor do que esconder a página.
+    periodo_nota = ""
+    if data["horizon_pending"]:
+        periodo_nota = (
+            f"Janela de desfecho ainda aberta: {data['horizon_pending_pct']}% das "
+            f"conversas do período ({data['horizon_pending']} de "
+            f"{data['total_linked']}) ainda não completaram os "
+            f"{horizon_days} dias de observação. As taxas abaixo tendem a "
+            "subestimar churn e conversão — quanto mais curto o período "
+            "escolhido, maior o efeito."
+        )
+
     return render(
         request,
         "dashboards/atendimento_conversao.html",
         {
             **data,
             "tabelas": tabelas,
+            "periodo_nota": periodo_nota,
             "churn_tags_json": charts.atendimento_conversao_bars(
                 data["top_churn_tags"], field="churn_pct", color="#ef4444"
             ),
@@ -2151,7 +2252,8 @@ def qa_supervisor(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100): página de atendimento, mesmos presets de Tendências.
+    period = _get_period(request)
 
     departamento_id: int | None = None
     raw_dep = request.GET.get("departamento", "")
@@ -2162,8 +2264,17 @@ def qa_supervisor(request: HttpRequest) -> HttpResponse:
     if cohort not in ("human", "bot", "all"):
         cohort = "human"
 
+    # Recorte da página que o form de período personalizado precisa preservar.
+    set_period_extra_params(
+        request, {"departamento": departamento_id, "cohort": cohort}
+    )
+
     data = compute_qa_overview(
-        org, months=months, departamento_id=departamento_id, cohort=cohort
+        org,
+        start=period.start,
+        end=period.end,
+        departamento_id=departamento_id,
+        cohort=cohort,
     )
     return render(request, "dashboards/qa_supervisor.html", data)
 
@@ -2189,24 +2300,30 @@ def tecnicos(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100): a janela já era montada aqui na view, então é só
+    # passar a vir do filtro em vez de `?months=`.
+    period = _get_period(request)
 
     # Filtro de perfil (rua/interno) — combinável com o recorte temporal.
     profile_f = request.GET.get("profile", "").strip().upper()
     if profile_f not in (PROFILE_FIELD, PROFILE_INTERNAL):
         profile_f = ""
 
+    # Recorte da página que o form de período personalizado precisa preservar.
+    set_period_extra_params(request, {"profile": profile_f})
+
     lookups = load_os_lookups(org)
     subject_to_category = {
         sid: classify_subject(name) for sid, name in lookups.subject_map.items()
     }
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
 
     tickets = list(
-        Ticket.objects.filter(organization=org, opened_at__gte=window_start).values(
+        Ticket.objects.filter(
+            organization=org,
+            opened_at__gte=period.start,
+            opened_at__lte=period.end,
+        ).values(
             "technician_id", "customer_external_id", "subject_id",
             "status", "opened_at", "closed_at",
         )
@@ -2261,17 +2378,30 @@ def tecnicos(request: HttpRequest) -> HttpResponse:
     top_rows = sorted(rows, key=lambda r: r["total"], reverse=True)[:12]
 
     # --- Evolução temporal: produção mês a mês dos top técnicos (filtrados) ---
+    # Este bloco continua MENSAL (é o único da página que é série de meses).
+    # Com uma janela curta ele viraria um ponto só — aí some e a página diz por
+    # quê, em vez de mostrar um gráfico de um dado ponto (#100).
     visible_ids = {r["technician_id"] for r in rows}
-    monthly = compute_technician_monthly(
-        [t for t in tickets if t["technician_id"] in visible_ids],
-        now=now,
-        months=months,
-    )
-    monthly_top = [
-        {**series, "technician": lookups.technician_name(series["technician_id"])}
-        for series in monthly["per_tech"][:6]
-    ]
-    monthly_data = {"labels": monthly["labels"], "per_tech": monthly_top}
+    monthly_meses = period.months
+    monthly_data = None
+    periodo_nota = ""
+    if monthly_meses >= 2:
+        monthly = compute_technician_monthly(
+            [t for t in tickets if t["technician_id"] in visible_ids],
+            now=now,
+            months=monthly_meses,
+        )
+        monthly_top = [
+            {**series, "technician": lookups.technician_name(series["technician_id"])}
+            for series in monthly["per_tech"][:6]
+        ]
+        monthly_data = {"labels": monthly["labels"], "per_tech": monthly_top}
+    else:
+        periodo_nota = (
+            "A evolução mês a mês precisa de pelo menos dois meses de janela — "
+            "com o período escolhido ela sairia com um ponto só, então está "
+            "oculta. O resto da página respeita o período normalmente."
+        )
 
     # --- Recorte por tipo de atendimento: mix de categorias dos top técnicos ---
     cat_keys: list[str] = []
@@ -2305,7 +2435,11 @@ def tecnicos(request: HttpRequest) -> HttpResponse:
             "internal_count": internal_count,
             "production_chart_json": charts.technician_production_bar(top_rows),
             "solution_chart_json": charts.technician_solution_bar(top_rows),
-            "monthly_chart_json": charts.technician_monthly_lines(monthly_data),
+            "monthly_chart_json": (
+                charts.technician_monthly_lines(monthly_data) if monthly_data else ""
+            ),
+            "monthly_visivel": monthly_data is not None,
+            "periodo_nota": periodo_nota,
             "category_chart_json": charts.technician_category_stacked(category_data),
         },
     )
@@ -2445,10 +2579,15 @@ def sales(request: HttpRequest) -> HttpResponse:
         return org_or_redirect
     org = org_or_redirect
 
-    months = _get_months(request)
+    # Período em dias (#100, Fase 2): net adds é fluxo e sabe trabalhar em
+    # dia/semana/mês. O resto da página (funil, origem, pipeline) é foto de
+    # agora ou base inteira — segue fora do filtro, e diz isso na tela.
+    period = _get_period(request)
     funnel = compute_sales_funnel(org)
     origin = compute_lead_origin(org)
-    net_adds = compute_net_adds_series(org, months=months)
+    net_adds = compute_net_adds_series(
+        org, start=period.start_date, end=period.end_date
+    )
     pipeline = compute_pipeline_aging(org)
 
     net_adds_total = sum(p["net"] for p in net_adds)
@@ -2471,6 +2610,9 @@ def sales(request: HttpRequest) -> HttpResponse:
             "funnel_chart_json": charts.sales_funnel_chart(funnel["funnel_stages"]),
             "net_adds_chart_json": charts.net_adds_bar_chart(net_adds),
             "lead_origin_chart_json": charts.lead_origin_pie(origin),
+            "serie_granularidade": time_buckets.GRANULARITY_LABELS[
+                time_buckets.series_granularity(period.start_date, period.end_date)
+            ],
         },
     )
 

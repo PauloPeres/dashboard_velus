@@ -46,11 +46,25 @@ URL = "/operations/atendimento/"
 LISTA_URL = "/operations/atendimento-lista/"
 
 
-def _hoje(hour: int = 10) -> datetime:
-    """Hora cheia de HOJE (local) — cai em qualquer preset, inclusive "Hoje"."""
-    return timezone.localtime(timezone.now(), _SP).replace(
-        hour=hour, minute=0, second=0, microsecond=0
-    )
+def _hoje() -> datetime:
+    """Instante de HOJE (local) garantidamente já PASSADO.
+
+    Era `now.replace(hour=10)`: numa execução de manhã cedo isso cai no FUTURO,
+    e como o preset "Hoje" termina em `now` (ver `period._bounds`), os registros
+    semeados ficavam fora da própria janela que o teste queria exercitar. O
+    resultado era um teste que passava ou quebrava conforme a HORA em que o CI
+    rodasse — verde à tarde, vermelho de manhã.
+
+    Os offsets do seed (abaixo) são de segundos pelo mesmo motivo: qualquer
+    coisa somada aqui precisa continuar caindo no passado.
+    """
+    agora = timezone.localtime(timezone.now(), _SP)
+    inicio_do_dia = agora.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Sem segundos/microssegundos: os testes fazem `hoje.replace(hour=0)` pra
+    # montar a janela do dia, e um resto de segundos ali empurraria o fim da
+    # janela pra dentro do dia seguinte (viraria 2 buckets na série).
+    cheio = (agora - timedelta(minutes=1)).replace(second=0, microsecond=0)
+    return max(inicio_do_dia, cheio)
 
 
 def _departamento(org: Organization, *, external_id: str, nome: str) -> Departamento:
@@ -106,13 +120,13 @@ def triagem_seed(organization_a: Organization) -> dict[str, Any]:
     # Suporte hoje: 3 atendimentos, 2 deles com o motivo "Lentidão".
     _at(organization_a, external_id="s1", opened_at=hoje,
         departamento=sup, motivos=["Lentidão", "Sem Cobertura"])
-    _at(organization_a, external_id="s2", opened_at=hoje + timedelta(minutes=30),
+    _at(organization_a, external_id="s2", opened_at=hoje + timedelta(seconds=1),
         departamento=sup, motivos=["Lentidão"])
-    _at(organization_a, external_id="s3", opened_at=hoje + timedelta(hours=2),
+    _at(organization_a, external_id="s3", opened_at=hoje + timedelta(seconds=2),
         departamento=sup, motivos=[])
     # Comercial hoje: 1, com motivo duplicado no MESMO registro (o `has_key` da
     # lista conta 1; o contador do gráfico tem que contar 1 também).
-    _at(organization_a, external_id="c1", opened_at=hoje + timedelta(minutes=10),
+    _at(organization_a, external_id="c1", opened_at=hoje + timedelta(seconds=3),
         departamento=com, motivos=["Upgrade", "Upgrade"])
     # Ruído: mesmo departamento/motivo, mas 10 dias atrás (fora do preset "Hoje").
     _at(organization_a, external_id="velho", opened_at=hoje - timedelta(days=10),

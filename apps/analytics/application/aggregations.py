@@ -22,6 +22,8 @@ from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
 
+from apps.analytics.application import time_buckets
+
 from django.db.models import (
     Avg,
     Count,
@@ -556,9 +558,23 @@ def compute_pipeline_by_status(organization: Organization) -> list[dict[str, Any
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_cash_received_series(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
+    granularity: str = time_buckets.AUTO,
 ) -> list[dict[str, Any]]:
-    """Recebimentos por mês — entrada de caixa real.
+    """Recebimentos por bucket de tempo — entrada de caixa real.
+
+    Dois modos (#100):
+
+    - **legado `months=N`** — uma linha por MÊS COM DADO, sem preencher buracos.
+      Preservado exatamente como estava porque Forecast e Executivo dependem
+      dele (e o Forecast é mensal por decisão, não por acidente).
+    - **janela livre `start`/`end`** — eixo COMPLETO por dia/semana/mês, com
+      bucket vazio virando zero. É o modo das páginas que passaram a ter o
+      filtro em dias.
 
     Fonte única: FactInvoice com status='PAID' e paid_date preenchida
     (pagamento_data do IXC), somando paid_amount. Cada fatura paga conta uma vez.
@@ -568,6 +584,9 @@ def compute_cash_received_series(
     para ~o dobro/triplo do real. O número correto bate com o MRR (~R$335k/mês);
     a soma das baixas dava ~R$650k–1,3M/mês. Ver probe_caixa em 2026-06.
     """
+    if start is not None and end is not None:
+        return _cash_received_por_bucket(organization, start, end, granularity)
+
     today = timezone.now().date()
     cutoff = _first_of_month_n_ago(today, months)
 
@@ -595,6 +614,60 @@ def compute_cash_received_series(
             "count": row["count"],
         }
         for row in by_month
+    ]
+
+
+def _cash_received_por_bucket(
+    organization: Organization,
+    start: date_cls,
+    end: date_cls,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    """Modo janela livre: agrupa por dia no banco e dobra nos buckets em Python.
+
+    Dobrar em Python (e não com TruncWeek/TruncMonth) é de propósito: garante
+    que o recorte dos buckets é EXATAMENTE o de `time_buckets.build_buckets`,
+    sem depender de o banco concordar sobre onde começa a semana. A janela
+    máxima do componente é de 24 meses, então são no máximo ~730 linhas.
+    """
+    gran = time_buckets.resolve_granularity(start, end, granularity)
+    buckets = time_buckets.build_buckets(start, end, gran)
+    pos = {b.start: i for i, b in enumerate(buckets)}
+
+    amounts = [0.0] * len(buckets)
+    counts = [0] * len(buckets)
+    rows = (
+        FactInvoice.objects.filter(
+            organization=organization,
+            status="PAID",
+            paid_date__gte=start,
+            paid_date__lte=end,
+            paid_date__isnull=False,
+        )
+        .values("paid_date")
+        .annotate(
+            total=Coalesce(
+                Sum("paid_amount"), Sum("amount"), _ZERO, output_field=DecimalField()
+            ),
+            count=Count("id"),
+        )
+    )
+    for row in rows:
+        i = pos.get(time_buckets.bucket_start(row["paid_date"], gran))
+        if i is None:  # fora da janela — não deveria acontecer, mas não explode
+            continue
+        amounts[i] += float(row["total"])
+        counts[i] += row["count"]
+
+    return [
+        {
+            "month": b.key,
+            "bucket": b.key,
+            "label": b.label,
+            "amount": amounts[i],
+            "count": counts[i],
+        }
+        for i, b in enumerate(buckets)
     ]
 
 
@@ -862,9 +935,21 @@ def compute_avulsas_billed_series(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_expense_series(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
+    granularity: str = time_buckets.AUTO,
 ) -> list[dict[str, Any]]:
-    """Despesas pagas por mês (expense_date)."""
+    """Despesas pagas por bucket de tempo (expense_date).
+
+    Dois modos (#100): o legado `months=N` — do qual o Burn depende, e o Burn
+    é mensal por decisão — e a janela livre `start`/`end`.
+    """
+    if start is not None and end is not None:
+        return _expense_series_por_bucket(organization, start, end, granularity)
+
     today = timezone.now().date()
     cutoff = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
     by_month = (
@@ -889,6 +974,51 @@ def compute_expense_series(
             "count": row["count"],
         }
         for row in by_month
+    ]
+
+
+def _expense_series_por_bucket(
+    organization: Organization,
+    start: date_cls,
+    end: date_cls,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    """Modo janela livre — despesa paga é fluxo, então o bucket soma."""
+    gran = time_buckets.resolve_granularity(start, end, granularity)
+    buckets = time_buckets.build_buckets(start, end, gran)
+    pos = {b.start: i for i, b in enumerate(buckets)}
+
+    totals = [0.0] * len(buckets)
+    counts = [0] * len(buckets)
+    rows = (
+        FactExpense.objects.filter(
+            organization=organization,
+            status="PAID",
+            expense_date__gte=start,
+            expense_date__lte=end,
+        )
+        .values("expense_date")
+        .annotate(
+            total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            count=Count("id"),
+        )
+    )
+    for row in rows:
+        i = pos.get(time_buckets.bucket_start(row["expense_date"], gran))
+        if i is None:
+            continue
+        totals[i] += float(row["total"])
+        counts[i] += row["count"]
+
+    return [
+        {
+            "month": b.key,
+            "bucket": b.key,
+            "label": b.label,
+            "expenses": totals[i],
+            "count": counts[i],
+        }
+        for i, b in enumerate(buckets)
     ]
 
 
@@ -973,9 +1103,17 @@ def compute_programmed_expenses(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_cashflow_series(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
+    granularity: str = time_buckets.AUTO,
 ) -> list[dict[str, Any]]:
-    """Fluxo de caixa: receita recebida - despesas pagas por mês."""
+    """Fluxo de caixa: receita recebida - despesas pagas, por bucket de tempo."""
+    if start is not None and end is not None:
+        return _cashflow_por_bucket(organization, start, end, granularity)
+
     revenue_series = compute_cash_received_series(organization, months=months)
     expense_series = compute_expense_series(organization, months=months)
 
@@ -1017,9 +1155,55 @@ def compute_cashflow_series(
     return result
 
 
+def _cashflow_por_bucket(
+    organization: Organization,
+    start: date_cls,
+    end: date_cls,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    """Modo janela livre — receita e despesa no MESMO eixo, ponto a ponto.
+
+    A granularidade é resolvida aqui e repassada às duas séries: elas voltam com
+    exatamente os mesmos buckets, na mesma ordem. O `strict=True` do zip é a
+    checagem disso — se um dia os dois eixos divergirem, o teste estoura em vez
+    de somar despesa de um dia com receita de outro.
+    """
+    gran = time_buckets.resolve_granularity(start, end, granularity)
+    revenue_series = compute_cash_received_series(
+        organization, start=start, end=end, granularity=gran
+    )
+    expense_series = compute_expense_series(
+        organization, start=start, end=end, granularity=gran
+    )
+
+    result: list[dict[str, Any]] = []
+    cumulative = 0.0
+    for rev, exp in zip(revenue_series, expense_series, strict=True):
+        revenue = rev["amount"]
+        expenses = exp["expenses"]
+        net = revenue - expenses
+        cumulative += net
+        result.append(
+            {
+                "month": rev["month"],
+                "bucket": rev["bucket"],
+                "label": rev["label"],
+                "revenue": revenue,
+                "expenses": expenses,
+                "net": net,
+                "cumulative_net": cumulative,
+            }
+        )
+    return result
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_expense_by_supplier(
-    organization: Organization, months: int = 3
+    organization: Organization,
+    months: int = 3,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
 ) -> list[dict[str, Any]]:
     """Top fornecedores por despesa paga nos últimos N meses.
 
@@ -1030,14 +1214,17 @@ def compute_expense_by_supplier(
     """
     from apps.financial.infrastructure.models import Expense as ExpenseModel
 
-    today = timezone.now().date()
-    cutoff = _first_of_month_n_ago(today, months)
+    if start is not None and end is not None:
+        janela = {"paid_at__gte": start, "paid_at__lte": end}
+    else:
+        today = timezone.now().date()
+        janela = {"paid_at__gte": _first_of_month_n_ago(today, months)}
     qs = (
         ExpenseModel.objects.filter(
             organization=organization,
             status="PAID",
             paid_at__isnull=False,
-            paid_at__gte=cutoff,
+            **janela,
         )
         .exclude(supplier_name__startswith="Fornecedor #")
         .exclude(supplier_name="")
@@ -1060,7 +1247,11 @@ def compute_expense_by_supplier(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_expense_by_category(
-    organization: Organization, months: int = 3
+    organization: Organization,
+    months: int = 3,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
 ) -> list[dict[str, Any]]:
     """Distribuição de despesas pagas por categoria IXC (planejamento) nos últimos N meses.
 
@@ -1070,14 +1261,17 @@ def compute_expense_by_category(
     """
     from apps.financial.infrastructure.models import Expense as ExpenseModel
 
-    today = timezone.now().date()
-    cutoff = _first_of_month_n_ago(today, months)
+    if start is not None and end is not None:
+        janela = {"paid_at__gte": start, "paid_at__lte": end}
+    else:
+        today = timezone.now().date()
+        janela = {"paid_at__gte": _first_of_month_n_ago(today, months)}
     qs = (
         ExpenseModel.objects.filter(
             organization=organization,
             status="PAID",
             paid_at__isnull=False,
-            paid_at__gte=cutoff,
+            **janela,
         )
         .annotate(id_conta_str=KeyTextTransform("id_conta", "raw_extras"))
         .values("id_conta_str")
@@ -1461,9 +1655,17 @@ def _naive_revenue_forecast(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_delinquency_trend(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
+    granularity: str = time_buckets.AUTO,
 ) -> list[dict[str, Any]]:
-    """Inadimplência por mês de vencimento — quanto de cada coorte mensal ainda está em aberto.
+    """Inadimplência por coorte de vencimento — quanto de cada coorte ainda está em aberto.
+
+    Dois modos (#100): o legado `months=N` (uma linha por mês COM dado) e a
+    janela livre `start`/`end`, que rende o eixo completo por dia/semana/mês.
 
     Para cada mês dos últimos N meses, soma o valor das faturas cujo `due_date` caiu
     naquele mês e que AINDA estão em aberto (PENDING ou OVERDUE, days_overdue > 0),
@@ -1476,6 +1678,9 @@ def compute_delinquency_trend(
     no pagamento/reemissão, então `late_fee` costuma vir 0 nas faturas em aberto
     (fallback gracioso — toda a inadimplência aparece como principal).
     """
+    if start is not None and end is not None:
+        return _delinquency_por_bucket(organization, start, end, granularity)
+
     today = timezone.now().date()
     cutoff = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
 
@@ -1512,11 +1717,80 @@ def compute_delinquency_trend(
     ]
 
 
+def _delinquency_por_bucket(
+    organization: Organization,
+    start: date_cls,
+    end: date_cls,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    """Modo janela livre — mesma lógica, dobrada nos buckets de `time_buckets`.
+
+    O fim da janela nunca passa de hoje: coorte de vencimento futuro não é
+    inadimplência, é fatura que ainda vai vencer.
+    """
+    hoje = timezone.now().date()
+    end = min(end, hoje)
+    gran = time_buckets.resolve_granularity(start, end, granularity)
+    buckets = time_buckets.build_buckets(start, end, gran)
+    pos = {b.start: i for i, b in enumerate(buckets)}
+
+    principal = [0.0] * len(buckets)
+    late_fee = [0.0] * len(buckets)
+    counts = [0] * len(buckets)
+    rows = (
+        FactInvoice.objects.filter(
+            organization=organization,
+            status__in=("PENDING", "OVERDUE"),
+            days_overdue__gt=0,
+            due_date__gte=start,
+            due_date__lte=end,
+        )
+        .values("due_date")
+        .annotate(
+            principal=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            late_fee=Coalesce(
+                Sum("late_fee_amount"), _ZERO, output_field=DecimalField()
+            ),
+            count=Count("id"),
+        )
+    )
+    for row in rows:
+        i = pos.get(time_buckets.bucket_start(row["due_date"], gran))
+        if i is None:
+            continue
+        principal[i] += float(row["principal"])
+        late_fee[i] += float(row["late_fee"])
+        counts[i] += row["count"]
+
+    return [
+        {
+            "month": b.key,
+            "bucket": b.key,
+            "label": b.label,
+            "principal": principal[i],
+            "late_fee": late_fee[i],
+            "amount": principal[i] + late_fee[i],
+            "count": counts[i],
+        }
+        for i, b in enumerate(buckets)
+    ]
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_contract_status_trend(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
+    granularity: str = time_buckets.AUTO,
 ) -> list[dict[str, Any]]:
-    """Evolução mensal de contratos por status — snapshot do último dia disponível de cada mês.
+    """Evolução de contratos por status — snapshot do último dia disponível de cada bucket.
+
+    Dois modos (#100): o legado `months=N` e a janela livre `start`/`end`, que
+    percorre buckets de dia/semana/mês em vez de meses fixos. Nos dois, cada
+    ponto é um SNAPSHOT (a foto do último dia com dado dentro do bucket), não
+    uma soma — contratos ativos é estoque, não fluxo.
 
     Retorna série de `{month, label, active, blocked, awaiting, total}` para
     alimentar gráfico de barras empilhadas.
@@ -1524,6 +1798,9 @@ def compute_contract_status_trend(
     `is_active = status in (ACTIVE, BLOCKED, AWAITING_INSTALL)` — conforme definição do modelo.
     Contratos CANCELED e UNKNOWN são excluídos (is_active=False).
     """
+    if start is not None and end is not None:
+        return _contract_status_por_bucket(organization, start, end, granularity)
+
     today = timezone.now().date()
     result: list[dict[str, Any]] = []
 
@@ -1576,6 +1853,64 @@ def compute_contract_status_trend(
             "total": active + blocked + awaiting,
         })
 
+    return result
+
+
+def _contract_status_por_bucket(
+    organization: Organization,
+    start: date_cls,
+    end: date_cls,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    """Modo janela livre — um snapshot por bucket de `time_buckets`.
+
+    Mesma regra do modo mensal: dentro do bucket, usa o ÚLTIMO dia que tem dado
+    (robusto a sync que não rodou). Bucket sem nenhum snapshot vira zero, em vez
+    de sumir do eixo.
+    """
+    hoje = timezone.now().date()
+    end = min(end, hoje)
+    gran = time_buckets.resolve_granularity(start, end, granularity)
+
+    result: list[dict[str, Any]] = []
+    for b in time_buckets.build_buckets(start, end, gran):
+        bucket_end = min(b.end, hoje)
+        latest_date = FactContractStatusDaily.objects.filter(
+            organization=organization,
+            date__gte=b.start,
+            date__lte=bucket_end,
+            is_active=True,
+        ).aggregate(latest=Max("date"))["latest"]
+
+        if not latest_date:
+            result.append({
+                "month": b.key, "bucket": b.key, "label": b.label,
+                "active": 0, "blocked": 0, "awaiting": 0, "total": 0,
+            })
+            continue
+
+        counts = {
+            row["status"]: row["count"]
+            for row in (
+                FactContractStatusDaily.objects.filter(
+                    organization=organization, date=latest_date, is_active=True
+                )
+                .values("status")
+                .annotate(count=Count("id"))
+            )
+        }
+        active = counts.get("ACTIVE", 0)
+        blocked = counts.get("BLOCKED", 0)
+        awaiting = counts.get("AWAITING_INSTALL", 0)
+        result.append({
+            "month": b.key,
+            "bucket": b.key,
+            "label": b.label,
+            "active": active,
+            "blocked": blocked,
+            "awaiting": awaiting,
+            "total": active + blocked + awaiting,
+        })
     return result
 
 
@@ -3951,14 +4286,27 @@ def compute_lead_origin(organization: Organization) -> list[dict[str, Any]]:
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_net_adds_series(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
+    granularity: str = time_buckets.AUTO,
 ) -> list[dict[str, Any]]:
-    """Série mensal de net adds = contratos ativados - cancelados no mês.
+    """Net adds por bucket = contratos ativados - cancelados no período.
 
     Net adds positivo = base crescendo; negativo = base encolhendo. Usa
     `activated_at` (gross adds) e `canceled_at` (gross churn) do contrato.
+
+    Dois modos (#100): o legado `months=N` e a janela livre `start`/`end`, que
+    rende o eixo completo por dia/semana/mês. Aqui net adds é FLUXO (soma de
+    eventos do intervalo), então o bucket soma — ao contrário do estoque de
+    contratos ativos, que é snapshot.
     """
     from apps.customers.infrastructure.models import Contract
+
+    if start is not None and end is not None:
+        return _net_adds_por_bucket(organization, start, end, granularity)
 
     today = timezone.now().date()
     series: list[dict[str, Any]] = []
@@ -3986,6 +4334,51 @@ def compute_net_adds_series(
             "net": adds - churn,
         })
     return series
+
+
+def _net_adds_por_bucket(
+    organization: Organization,
+    start: date_cls,
+    end: date_cls,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    """Modo janela livre — duas queries por data, dobradas nos buckets."""
+    from apps.customers.infrastructure.models import Contract
+
+    gran = time_buckets.resolve_granularity(start, end, granularity)
+    buckets = time_buckets.build_buckets(start, end, gran)
+    pos = {b.start: i for i, b in enumerate(buckets)}
+
+    adds = [0] * len(buckets)
+    churn = [0] * len(buckets)
+    for campo, destino in (("activated_at", adds), ("canceled_at", churn)):
+        rows = (
+            Contract.objects.filter(
+                organization=organization,
+                **{f"{campo}__date__gte": start, f"{campo}__date__lte": end},
+            )
+            .annotate(dia=TruncDate(campo))
+            .values("dia")
+            .annotate(count=Count("id"))
+        )
+        for row in rows:
+            if row["dia"] is None:
+                continue
+            i = pos.get(time_buckets.bucket_start(row["dia"], gran))
+            if i is not None:
+                destino[i] += row["count"]
+
+    return [
+        {
+            "month": b.key,
+            "bucket": b.key,
+            "label": b.label,
+            "adds": adds[i],
+            "churn": churn[i],
+            "net": adds[i] - churn[i],
+        }
+        for i, b in enumerate(buckets)
+    ]
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
@@ -4921,36 +5314,17 @@ _ATENDIMENTO_STATUS_LABELS = {
 }
 
 
-# Cortes da granularidade da série temporal da triagem (#89) — ver
-# `triagem_trend_granularity`.
-_TRIAGEM_TREND_DIA_MAX_DIAS = 31
-_TRIAGEM_TREND_SEMANA_MAX_DIAS = 120
-_TRIAGEM_TREND_LABELS = {
-    "day": "dia a dia",
-    "week": "semana a semana",
-    "month": "mês a mês",
-}
+_TRIAGEM_TREND_LABELS = time_buckets.GRANULARITY_LABELS
 
 
 def triagem_trend_granularity(start: datetime, end: datetime) -> str:
-    """Granularidade da série temporal da triagem, derivada do tamanho da janela.
+    """Granularidade da série da triagem — hoje só delega (#100).
 
-    Regra (#89), pensada pra manter o gráfico entre ~10 e ~40 pontos em qualquer
-    preset do componente de período:
-
-    - até 31 dias  → **dia**    (Hoje, Ontem, 7d, 14d, 30d, 1 mês)
-    - até 120 dias → **semana** (3 meses; semana começa na segunda)
-    - acima disso  → **mês**    (6m, 12m, 24m)
-
-    Sem a regra, "Hoje" renderizaria um único ponto mensal e "12 meses" viraria
-    365 pontos diários ilegíveis.
+    A regra nasceu aqui na #89 e virou `apps.analytics.application.time_buckets`
+    quando deixou de ser exclusividade da triagem. O nome fica como porta de
+    entrada dos chamadores antigos.
     """
-    span_days = (end.date() - start.date()).days + 1
-    if span_days <= _TRIAGEM_TREND_DIA_MAX_DIAS:
-        return "day"
-    if span_days <= _TRIAGEM_TREND_SEMANA_MAX_DIAS:
-        return "week"
-    return "month"
+    return time_buckets.series_granularity(start.date(), end.date())
 
 
 @allow_cross_tenant(reason="aggregation read-only; org passada explicitamente")
@@ -5126,29 +5500,11 @@ def compute_atendimento_triagem(
 _TENDENCIA_GRANULARIDADES = ("week", "month")
 
 
-def _bucket_start(d: date_cls, granularity: str) -> date_cls:
-    """Início do bucket (o próprio dia, a segunda-feira ou o dia 1) de uma data."""
-    if granularity == "month":
-        return d.replace(day=1)
-    if granularity == "day":
-        return d
-    return d - timedelta(days=d.weekday())  # segunda da semana
-
-
-def _next_bucket(d: date_cls, granularity: str) -> date_cls:
-    """Início do bucket seguinte (avança 1 dia, 1 semana ou 1 mês)."""
-    if granularity == "month":
-        return (d.replace(day=1) + relativedelta(months=1))
-    if granularity == "day":
-        return d + timedelta(days=1)
-    return d + timedelta(days=7)
-
-
-def _bucket_label(d: date_cls, granularity: str) -> str:
-    """Rótulo do eixo: 'mmm/yy' no mês, 'dd/mm' no dia e na semana (a segunda)."""
-    if granularity == "month":
-        return d.strftime("%b/%y")
-    return d.strftime("%d/%m")
+# Eixo do tempo: implementação única em `time_buckets` (#100). Os nomes locais
+# ficam porque são usados em vários pontos deste arquivo.
+_bucket_start = time_buckets.bucket_start
+_next_bucket = time_buckets.next_bucket
+_bucket_label = time_buckets.bucket_label
 
 
 def _build_categoria_series(
@@ -6133,6 +6489,9 @@ def atendimento_hora_esperado(
 
 
 _CONVERSAO_HORIZONTES = (30, 90, 180)
+# Janela padrão quando a chamada não passa start/end (mesmo default do filtro
+# de período das páginas em dias — ver `apps.dashboards.period.DEFAULT_DAY_KEY`).
+_CONVERSAO_DEFAULT_WINDOW_DAYS = 30
 _CONVERSAO_MIN_VOL = 30  # volume mínimo pra uma tag/motivo entrar no ranking de %
 
 
@@ -6150,7 +6509,8 @@ def _conversao_acc() -> dict[str, Any]:
 def compute_atendimento_conversao(
     organization: Organization,
     *,
-    months: int = 6,
+    start: datetime | None = None,
+    end: datetime | None = None,
     horizon_days: int = 90,
     departamento_id: int | None = None,
 ) -> dict[str, Any]:
@@ -6167,6 +6527,15 @@ def compute_atendimento_conversao(
     com um cliente do IXC). Limitações: prospect novo que ainda não é cliente
     não vincula (conversão dele fica invisível); canal é sempre whatsapp aqui,
     então o recorte "de canal" vem das tags/motivos.
+
+    A janela é `start`/`end` (datetimes aware, ambos inclusivos) — o período
+    resolvido pelo filtro em dias da página (#100). Sem eles, os últimos
+    `_CONVERSAO_DEFAULT_WINDOW_DAYS` dias.
+
+    **`horizon_pending`** conta os atendimentos da janela que ainda não
+    completaram `horizon_days` de observação. Numa janela curta (Hoje, 7 dias)
+    isso é quase 100%: as taxas de churn/conversão saem subestimadas porque o
+    desfecho ainda não teve tempo de acontecer. A página avisa — ver #100.
     """
     from apps.atendimento.infrastructure.models import Atendimento, Departamento
     from apps.customers.infrastructure.models import Contract
@@ -6176,13 +6545,17 @@ def compute_atendimento_conversao(
     horizon = timedelta(days=horizon_days)
 
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    window_end = end or now
+    window_start = start or (
+        (now - timedelta(days=_CONVERSAO_DEFAULT_WINDOW_DAYS)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
     )
 
     qs = Atendimento.objects.filter(
         organization=organization,
         opened_at__gte=window_start,
+        opened_at__lte=window_end,
         opened_at__isnull=False,
         customer__isnull=False,
     )
@@ -6212,18 +6585,23 @@ def compute_atendimento_conversao(
     total_linked = 0
     churn_total = 0
     conv_total = 0
+    horizon_pending = 0
 
     for at in qs.values("customer_id", "opened_at", "tags", "motivos").iterator(
         chunk_size=2000
     ):
         cid = at["customer_id"]
         opened = at["opened_at"]
-        end = opened + horizon
+        horizon_end = opened + horizon
+        if horizon_end > now:
+            horizon_pending += 1
         churn_contracts = [
-            kid for dt, kid in cust_cancels.get(cid, ()) if opened < dt <= end
+            kid for dt, kid in cust_cancels.get(cid, ()) if opened < dt <= horizon_end
         ]
         conv_contracts = [
-            kid for dt, kid in cust_activations.get(cid, ()) if opened < dt <= end
+            kid
+            for dt, kid in cust_activations.get(cid, ())
+            if opened < dt <= horizon_end
         ]
         churned = bool(churn_contracts)
         converted = bool(conv_contracts)
@@ -6296,8 +6674,11 @@ def compute_atendimento_conversao(
         )
 
     return {
-        "months": months,
         "horizon_days": horizon_days,
+        "horizon_pending": horizon_pending,
+        "horizon_pending_pct": round(horizon_pending / total_linked * 100)
+        if total_linked
+        else 0,
         "total_linked": total_linked,
         "churn_total": churn_total,
         "conv_total": conv_total,
@@ -6788,6 +7169,9 @@ def _avg1(value: float | None) -> float | None:
 # Coortes de QA: o bot (Gi/Felipe) é avaliado SEPARADO das pessoas — a "sensação
 # de qualidade" do autoatendimento é outra coisa que a do atendimento humano.
 _QA_COHORTS = {"human": "Humanos", "bot": "Bot", "all": "Todos"}
+# Janela padrão quando a chamada não passa start/end (mesmo default do filtro
+# de período das páginas em dias — ver `apps.dashboards.period.DEFAULT_DAY_KEY`).
+_QA_DEFAULT_WINDOW_DAYS = 30
 
 
 def _qa_bot_q() -> Q:
@@ -6910,7 +7294,8 @@ def _qa_detail_stats(base: Any, worst_limit: int) -> dict[str, Any]:
 def compute_qa_overview(
     organization: Organization,
     *,
-    months: int = 3,
+    start: datetime | None = None,
+    end: datetime | None = None,
     departamento_id: int | None = None,
     cohort: str = "human",
     worst_limit: int = 20,
@@ -6927,17 +7312,25 @@ def compute_qa_overview(
     são medidas distintas. `cohort` ∈ {human, bot, all} escolhe o recorte do
     detalhamento; `cohorts_summary` traz sempre o headline das duas pra
     comparação lado a lado. Default = humanos (foco de coaching).
+
+    A janela é `start`/`end` (datetimes aware, ambos inclusivos) — o período
+    resolvido pelo filtro em dias da página (#100). Sem eles, os últimos
+    `_QA_DEFAULT_WINDOW_DAYS` dias.
     """
     from apps.atendimento.infrastructure.models import Departamento
 
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    window_end = end or now
+    window_start = start or (
+        (now - timedelta(days=_QA_DEFAULT_WINDOW_DAYS)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
     )
 
     base = QAReview.objects.filter(
         organization=organization,
         atendimento__opened_at__gte=window_start,
+        atendimento__opened_at__lte=window_end,
     )
     if departamento_id is not None:
         base = base.filter(atendimento__departamento_id=departamento_id)

@@ -10,16 +10,16 @@
 
 {% if cashflow_data %}
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-    {% include "dashboards/_kpi_card.html" with label="Receita (último mês)" value=last_revenue_str %}
-    {% include "dashboards/_kpi_card.html" with label="Despesas (último mês)" value=last_expenses_str %}
-    {% include "dashboards/_kpi_card.html" with label="Saldo (último mês)" value=last_net_str %}
-    {% include "dashboards/_kpi_card.html" with label="Saldo Acumulado" value=last_cumulative_str %}
+    {% include "dashboards/_kpi_card.html" with label=label_receita value=last_revenue_str %}
+    {% include "dashboards/_kpi_card.html" with label=label_despesas value=last_expenses_str %}
+    {% include "dashboards/_kpi_card.html" with label=label_saldo value=last_net_str %}
+    {% include "dashboards/_kpi_card.html" with label="Saldo Acumulado" value=last_cumulative_str subtitle="acumulado dentro do período selecionado" %}
 </div>
 {% endif %}
 
 <div class="grid grid-cols-1 gap-6 mb-8">
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-        <h2 class="text-lg font-semibold mb-4">Receita vs Despesas — últimos 12 meses</h2>
+        <h2 class="text-lg font-semibold mb-4">Receita vs Despesas — {{ period_label }} ({{ serie_granularidade }})</h2>
         <div id="cashflow-chart" style="height:380px;"></div>
     </div>
 </div>
@@ -27,7 +27,7 @@
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
         <h2 class="text-lg font-semibold mb-1">Top Fornecedores</h2>
-        <p class="text-sm text-gray-500 mb-4">Despesas pagas — últimos 3 meses</p>
+        <p class="text-sm text-gray-500 mb-4">Despesas pagas — {{ period_label }}</p>
         {% if supplier_data %}
         <div id="supplier-chart" style="height:320px;"></div>
         {% else %}
@@ -36,7 +36,7 @@
     </div>
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
         <h2 class="text-lg font-semibold mb-1">Por Categoria</h2>
-        <p class="text-sm text-gray-500 mb-4">Distribuição de despesas pagas — últimos 3 meses</p>
+        <p class="text-sm text-gray-500 mb-4">Distribuição de despesas pagas — {{ period_label }}</p>
         {% if category_data %}
         <div id="category-chart" style="height:320px;"></div>
         {% else %}
