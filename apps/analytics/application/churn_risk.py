@@ -33,6 +33,7 @@ from django.utils import timezone
 
 from apps.analytics.infrastructure.models import (
     ChurnRiskScore,
+    FactChurnRiskDaily,
     FactContractStatusDaily,
 )
 from apps.helpdesk.application.os_classification import churn_relevant_subject_ids
@@ -80,6 +81,9 @@ DISSATISFACTION_MIN = 0.5
 
 LEVEL_HIGH_MIN = 50
 LEVEL_MEDIUM_MIN = 25
+
+# Profundidade do histórico diário de score (#123) — mesma do fact de contratos.
+HISTORICO_DIAS = 400
 
 
 def _level_for(score: int) -> str:
@@ -249,15 +253,59 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
         .delete()
     )
 
+    historico = _persistir_historico(organization, today)
+
     summary = {
         "at_risk": len(signals),
         "high": counts["HIGH"],
         "medium": counts["MEDIUM"],
         "low": counts["LOW"],
         "deleted": deleted,
+        "historico": historico,
     }
     _logger.info("churn_risk_computed", org=organization.slug, **summary)
     return summary
+
+
+def _persistir_historico(organization: Organization, dia: Any) -> int:
+    """Copia os scores de hoje pro histórico diário (#123).
+
+    Roda depois do upsert/delete do `ChurnRiskScore`, então grava exatamente a
+    foto que ficou valendo. Recomputar no mesmo dia sobrescreve a linha do dia
+    em vez de duplicar; dias anteriores nunca são tocados.
+
+    Só os clientes EM RISCO viram linha. A população de comparação (quem não
+    tinha sinal nenhum) sai de `Contract`, que já tem a história de ativação e
+    cancelamento — não faz sentido gravar 3 mil linhas por dia de gente sem
+    risco pra reconstruir o que já se sabe.
+    """
+    linhas = [
+        FactChurnRiskDaily(
+            organization=organization,
+            customer_id=s.customer_id,
+            date=dia,
+            score=s.score,
+            level=s.level,
+            signals=s.signals,
+            monthly_amount=s.monthly_amount,
+            ml_probability=s.ml_probability,
+        )
+        for s in ChurnRiskScore.objects.filter(organization=organization).iterator()
+    ]
+    if linhas:
+        FactChurnRiskDaily.objects.bulk_create(
+            linhas,
+            update_conflicts=True,
+            unique_fields=["organization", "customer", "date"],
+            update_fields=["score", "level", "signals", "monthly_amount", "ml_probability"],
+            batch_size=2000,
+        )
+
+    # Ringbuffer: mesma profundidade do FactContractStatusDaily.
+    FactChurnRiskDaily.objects.filter(
+        organization=organization, date__lt=dia - timedelta(days=HISTORICO_DIAS)
+    ).delete()
+    return len(linhas)
 
 
 def _apply_blocked_signal(

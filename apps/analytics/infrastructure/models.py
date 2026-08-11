@@ -359,6 +359,58 @@ class ChurnRiskScore(TenantModel):
         return f"ChurnRisk {self.customer_id} · {self.level} ({self.score})"
 
 
+class FactChurnRiskDaily(TenantModel):
+    """Foto diária do score de risco — o que o `ChurnRiskScore` não guarda (#123).
+
+    `ChurnRiskScore` tem uma linha por cliente, sobrescrita a cada execução e
+    apagada quando o cliente sai do risco. Isso torna a única pergunta que
+    importa — *"dos clientes marcados como HIGH em maio, quantos cancelaram?"* —
+    **irrespondível**: o score de maio não existe mais.
+
+    Esta tabela é append-only por dia. Um dia já gravado não muda de valor por
+    recomputar (upsert na mesma data), e o passado nunca é reescrito — é o
+    oposto do que o `FactContractStatusDaily` fazia antes da #122.
+
+    Guardar isso não melhora nenhum número hoje; é o que torna o algoritmo
+    avaliável daqui a 60–90 dias. Ver #121 pra o diagnóstico completo.
+    """
+
+    customer = models.ForeignKey(
+        "customers.Customer",
+        on_delete=models.CASCADE,
+        related_name="churn_risk_history",
+    )
+    date = models.DateField(db_index=True)
+    score = models.PositiveSmallIntegerField(default=0)
+    level = models.CharField(
+        max_length=8, choices=ChurnRiskScore.LEVEL_CHOICES, db_index=True
+    )
+    signals = models.JSONField(default=list)
+    monthly_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0
+    )
+    ml_probability = models.DecimalField(
+        max_digits=5, decimal_places=4, null=True, blank=True
+    )
+
+    class Meta:
+        verbose_name = _("Histórico diário de risco de churn")
+        verbose_name_plural = _("Histórico diário de risco de churn")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "customer", "date"],
+                name="unique_churn_risk_daily",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "date"]),
+            models.Index(fields=["organization", "date", "level"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"ChurnRiskDaily {self.customer_id} · {self.date} · {self.level}"
+
+
 class ChurnRiskModel(TenantModel):
     """Modelo de regressão logística treinado por organização (1 corrente).
 
