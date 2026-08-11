@@ -14,6 +14,10 @@
 
 {% include "dashboards/_period_header.html" %}
 
+{% if periodo_nota %}
+{% include "dashboards/_nota_periodo.html" with texto=periodo_nota %}
+{% endif %}
+
 {% if not synced %}
 <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
   <p class="text-sm text-yellow-800">
@@ -113,6 +117,7 @@
 
 <!-- Gráficos: tendência + tempo de resolução -->
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+{% if trend_visivel %}
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-1">
       <h2 class="text-sm font-semibold text-gray-700">Tendência mensal de OS abertas</h2>
@@ -120,6 +125,7 @@
     <p class="text-xs text-gray-400 mb-3">Volume de OS abertas mês a mês</p>
     <div id="os-trend-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
   </div>
+{% endif %}
 
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-1">
@@ -181,12 +187,12 @@
 {% block scripts %}
 {{ volume_chart_json|json_script:"os-volume-data" }}
 {{ status_chart_json|json_script:"os-status-data" }}
-{{ trend_chart_json|json_script:"os-trend-data" }}
+{% if trend_visivel %}{{ trend_chart_json|json_script:"os-trend-data" }}{% endif %}
 {{ resolution_chart_json|json_script:"os-resolution-data" }}
 <script>
   renderChart("os-volume-chart", "os-volume-data");
   renderChart("os-status-chart", "os-status-data");
-  renderChart("os-trend-chart", "os-trend-data");
+  {% if trend_visivel %}renderChart("os-trend-chart", "os-trend-data");{% endif %}
   renderChart("os-resolution-chart", "os-resolution-data");
 </script>
 {% endblock %}
