@@ -335,11 +335,19 @@ class TestNaView:
     def test_rotulo_cinza_da_barra_saiu(
         self, client: Any, user_a: User, organization_a: Organization
     ) -> None:
-        """Com o badge presente, o rótulo dentro da barra era redundante."""
+        """Com o badge presente, o rótulo dentro da barra era redundante.
+
+        A checagem é no partial da barra, não na contagem da página inteira: a
+        #100 fez títulos de gráfico passarem a dizer o período escolhido (era
+        "MRR — últimos 12 meses" fixo), então o rótulo aparece legitimamente
+        mais de uma vez na tela. O que não pode voltar é ele dentro da barra.
+        """
         client.force_login(user_a)
         resp = client.get(reverse("dashboards:executive"))
-        # O rótulo aparece uma vez só — no badge, e não também dentro da barra.
-        assert resp.content.decode().count(resp.context["period_label"]) == 1
+        req = _req()
+        get_period(req, granularity="month")
+        barra = render_to_string("dashboards/_period_filter.html", period_context(req))
+        assert resp.context["period_label"] not in barra
 
     def test_months_legado_continua_abrindo_pagina_mensal(
         self, client: Any, user_a: User, organization_a: Organization
