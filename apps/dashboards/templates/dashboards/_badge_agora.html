@@ -1,0 +1,17 @@
+{% comment %}
+Selo "posição de agora" (#100).
+
+Vai em bloco que é ESTOQUE, não fluxo: chamados abertos, contratos bloqueados,
+inadimplência, pipeline. Esses números são a foto do momento e não têm janela —
+"inadimplência de ontem" não existe. Como o badge no topo da página diz
+"Últimos 7 dias", o bloco precisa dizer que não é disso que ele está falando.
+
+Passe um `titulo` opcional via `{% include ... with titulo="…" %}` pro tooltip.
+{% endcomment %}
+<span class="relative inline-flex items-center gap-1 group/agora shrink-0 text-[10px] font-medium bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full cursor-help select-none">
+  posição de agora
+  <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/agora:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left font-normal">
+    {% if titulo %}{{ titulo }}{% else %}Este número é a foto de agora — não responde ao filtro de período.{% endif %}
+    <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+  </span>
+</span>

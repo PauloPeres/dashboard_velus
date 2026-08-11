@@ -1042,21 +1042,26 @@ def operations(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100). Antes desta issue o seletor desta página governava
+    # só o gráfico de volume: os KPIs eram do MÊS CORRENTE hardcoded e o SLA por
+    # tipo era fixo em 30 dias. Agora tudo o que tem janela segue o filtro.
+    period = _get_period(request)
 
     # All tickets for this org (TenantManager filters by org)
     qs = Ticket.objects.filter(organization=org)
     now = timezone.now()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    # KPIs
+    # KPIs. "Chamados abertos" é ESTOQUE (posição de agora) e não tem janela —
+    # a página marca isso na UI em vez de fingir que o filtro se aplica.
     open_count = qs.exclude(status="CLOSED").count()
 
-    closed_this_month_qs = qs.filter(status="CLOSED", closed_at__gte=month_start)
-    closed_this_month = closed_this_month_qs.count()
+    closed_period_qs = qs.filter(
+        status="CLOSED", closed_at__gte=period.start, closed_at__lte=period.end
+    )
+    closed_in_period = closed_period_qs.count()
 
-    # Avg resolution time (closed tickets this month)
-    avg_resolution = closed_this_month_qs.filter(
+    # Tempo médio de resolução dos chamados fechados na janela.
+    avg_resolution = closed_period_qs.filter(
         opened_at__isnull=False,
         closed_at__isnull=False,
     ).aggregate(
@@ -1066,12 +1071,12 @@ def operations(request: HttpRequest) -> HttpResponse:
     if avg_resolution is not None:
         avg_resolution_hours = avg_resolution.total_seconds() / 3600
 
-    # SLA % (closed within 24h / total closed this month)
+    # SLA % (fechados em até 24h / total fechado na janela)
     sla_threshold = timedelta(hours=24)
-    if closed_this_month > 0:
+    if closed_in_period > 0:
         from django.db.models import DurationField, ExpressionWrapper
         within_sla = (
-            closed_this_month_qs
+            closed_period_qs
             .filter(opened_at__isnull=False, closed_at__isnull=False)
             .annotate(
                 resolution_time=ExpressionWrapper(
@@ -1082,30 +1087,41 @@ def operations(request: HttpRequest) -> HttpResponse:
             .filter(resolution_time__lte=sla_threshold)
             .count()
         )
-        sla_pct = round(within_sla / closed_this_month * 100, 1)
+        sla_pct = round(within_sla / closed_in_period * 100, 1)
     else:
         sla_pct = 0.0
 
-    # Volume trend (opened vs closed per month, last N months)
-    volume_series = []
-    for i in range(months):
-        m_start = (now - relativedelta(months=months - 1 - i)).replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
-        if i < months - 1:
-            m_end = (now - relativedelta(months=months - 2 - i)).replace(
+    # Volume abertos x fechados — continua MENSAL. Abaixo de 2 meses de janela
+    # sairia um ponto só, então some e a página explica no lugar (#100).
+    volume_meses = period.months
+    volume_series: list[dict[str, Any]] | None = None
+    periodo_nota = ""
+    if volume_meses >= 2:
+        volume_series = []
+        for i in range(volume_meses):
+            m_start = (now - relativedelta(months=volume_meses - 1 - i)).replace(
                 day=1, hour=0, minute=0, second=0, microsecond=0
             )
-        else:
-            m_end = now
-        opened_m = qs.filter(opened_at__gte=m_start, opened_at__lt=m_end).count()
-        closed_m = qs.filter(closed_at__gte=m_start, closed_at__lt=m_end).count()
-        volume_series.append({
-            "month": m_start.strftime("%Y-%m"),
-            "label": m_start.strftime("%b/%y"),
-            "opened": opened_m,
-            "closed": closed_m,
-        })
+            if i < volume_meses - 1:
+                m_end = (now - relativedelta(months=volume_meses - 2 - i)).replace(
+                    day=1, hour=0, minute=0, second=0, microsecond=0
+                )
+            else:
+                m_end = now
+            opened_m = qs.filter(opened_at__gte=m_start, opened_at__lt=m_end).count()
+            closed_m = qs.filter(closed_at__gte=m_start, closed_at__lt=m_end).count()
+            volume_series.append({
+                "month": m_start.strftime("%Y-%m"),
+                "label": m_start.strftime("%b/%y"),
+                "opened": opened_m,
+                "closed": closed_m,
+            })
+    else:
+        periodo_nota = (
+            "O volume mês a mês precisa de pelo menos dois meses de janela — "
+            "com o período escolhido ele sairia com um ponto só, então está "
+            "oculto. O resto da página respeita o período normalmente."
+        )
 
     # Priority distribution (open tickets)
     priority_labels = {
@@ -1161,23 +1177,30 @@ def operations(request: HttpRequest) -> HttpResponse:
     else:
         avg_res_str = f"{avg_resolution_hours:.1f}h"
 
-    # SLA por tipo de atendimento (Manutenção/Instalação/...) — últimos 30 dias
-    # com comparativo vs os 30 dias anteriores.
-    sla_by_type = compute_support_sla(org, period_days=30)
+    # SLA por tipo de atendimento (Manutenção/Instalação/...) — na janela do
+    # filtro, com comparativo vs a janela anterior de mesma duração. A função já
+    # trabalhava em DIAS; até a #100 recebia 30 fixo e ignorava o seletor.
+    sla_dias = max(1, (period.end_date - period.start_date).days + 1)
+    sla_by_type = compute_support_sla(org, period_days=sla_dias)
 
     return render(
         request,
         "dashboards/operations.html",
         {
             "open_count": open_count,
-            "closed_this_month": closed_this_month,
+            "closed_in_period": closed_in_period,
             "avg_resolution_str": avg_res_str,
             "sla_pct": sla_pct,
             "sla_pct_str": f"{sla_pct:.1f}%",
+            "sla_dias": sla_dias,
             "open_tickets": open_tickets,
             "priority_dist": priority_dist,
             "sla_by_type": sla_by_type,
-            "volume_chart_json": charts.ticket_volume_trend(volume_series),
+            "periodo_nota": periodo_nota,
+            "volume_visivel": volume_series is not None,
+            "volume_chart_json": (
+                charts.ticket_volume_trend(volume_series) if volume_series else ""
+            ),
             "priority_chart_json": charts.ticket_priority_pie(priority_dist),
         },
     )
