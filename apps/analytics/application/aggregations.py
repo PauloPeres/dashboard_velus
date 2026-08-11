@@ -558,9 +558,23 @@ def compute_pipeline_by_status(organization: Organization) -> list[dict[str, Any
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_cash_received_series(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
+    granularity: str = time_buckets.AUTO,
 ) -> list[dict[str, Any]]:
-    """Recebimentos por mês — entrada de caixa real.
+    """Recebimentos por bucket de tempo — entrada de caixa real.
+
+    Dois modos (#100):
+
+    - **legado `months=N`** — uma linha por MÊS COM DADO, sem preencher buracos.
+      Preservado exatamente como estava porque Forecast e Executivo dependem
+      dele (e o Forecast é mensal por decisão, não por acidente).
+    - **janela livre `start`/`end`** — eixo COMPLETO por dia/semana/mês, com
+      bucket vazio virando zero. É o modo das páginas que passaram a ter o
+      filtro em dias.
 
     Fonte única: FactInvoice com status='PAID' e paid_date preenchida
     (pagamento_data do IXC), somando paid_amount. Cada fatura paga conta uma vez.
@@ -570,6 +584,9 @@ def compute_cash_received_series(
     para ~o dobro/triplo do real. O número correto bate com o MRR (~R$335k/mês);
     a soma das baixas dava ~R$650k–1,3M/mês. Ver probe_caixa em 2026-06.
     """
+    if start is not None and end is not None:
+        return _cash_received_por_bucket(organization, start, end, granularity)
+
     today = timezone.now().date()
     cutoff = _first_of_month_n_ago(today, months)
 
@@ -597,6 +614,60 @@ def compute_cash_received_series(
             "count": row["count"],
         }
         for row in by_month
+    ]
+
+
+def _cash_received_por_bucket(
+    organization: Organization,
+    start: date_cls,
+    end: date_cls,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    """Modo janela livre: agrupa por dia no banco e dobra nos buckets em Python.
+
+    Dobrar em Python (e não com TruncWeek/TruncMonth) é de propósito: garante
+    que o recorte dos buckets é EXATAMENTE o de `time_buckets.build_buckets`,
+    sem depender de o banco concordar sobre onde começa a semana. A janela
+    máxima do componente é de 24 meses, então são no máximo ~730 linhas.
+    """
+    gran = time_buckets.resolve_granularity(start, end, granularity)
+    buckets = time_buckets.build_buckets(start, end, gran)
+    pos = {b.start: i for i, b in enumerate(buckets)}
+
+    amounts = [0.0] * len(buckets)
+    counts = [0] * len(buckets)
+    rows = (
+        FactInvoice.objects.filter(
+            organization=organization,
+            status="PAID",
+            paid_date__gte=start,
+            paid_date__lte=end,
+            paid_date__isnull=False,
+        )
+        .values("paid_date")
+        .annotate(
+            total=Coalesce(
+                Sum("paid_amount"), Sum("amount"), _ZERO, output_field=DecimalField()
+            ),
+            count=Count("id"),
+        )
+    )
+    for row in rows:
+        i = pos.get(time_buckets.bucket_start(row["paid_date"], gran))
+        if i is None:  # fora da janela — não deveria acontecer, mas não explode
+            continue
+        amounts[i] += float(row["total"])
+        counts[i] += row["count"]
+
+    return [
+        {
+            "month": b.key,
+            "bucket": b.key,
+            "label": b.label,
+            "amount": amounts[i],
+            "count": counts[i],
+        }
+        for i, b in enumerate(buckets)
     ]
 
 
@@ -1463,9 +1534,17 @@ def _naive_revenue_forecast(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_delinquency_trend(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
+    granularity: str = time_buckets.AUTO,
 ) -> list[dict[str, Any]]:
-    """Inadimplência por mês de vencimento — quanto de cada coorte mensal ainda está em aberto.
+    """Inadimplência por coorte de vencimento — quanto de cada coorte ainda está em aberto.
+
+    Dois modos (#100): o legado `months=N` (uma linha por mês COM dado) e a
+    janela livre `start`/`end`, que rende o eixo completo por dia/semana/mês.
 
     Para cada mês dos últimos N meses, soma o valor das faturas cujo `due_date` caiu
     naquele mês e que AINDA estão em aberto (PENDING ou OVERDUE, days_overdue > 0),
@@ -1478,6 +1557,9 @@ def compute_delinquency_trend(
     no pagamento/reemissão, então `late_fee` costuma vir 0 nas faturas em aberto
     (fallback gracioso — toda a inadimplência aparece como principal).
     """
+    if start is not None and end is not None:
+        return _delinquency_por_bucket(organization, start, end, granularity)
+
     today = timezone.now().date()
     cutoff = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
 
@@ -1514,11 +1596,80 @@ def compute_delinquency_trend(
     ]
 
 
+def _delinquency_por_bucket(
+    organization: Organization,
+    start: date_cls,
+    end: date_cls,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    """Modo janela livre — mesma lógica, dobrada nos buckets de `time_buckets`.
+
+    O fim da janela nunca passa de hoje: coorte de vencimento futuro não é
+    inadimplência, é fatura que ainda vai vencer.
+    """
+    hoje = timezone.now().date()
+    end = min(end, hoje)
+    gran = time_buckets.resolve_granularity(start, end, granularity)
+    buckets = time_buckets.build_buckets(start, end, gran)
+    pos = {b.start: i for i, b in enumerate(buckets)}
+
+    principal = [0.0] * len(buckets)
+    late_fee = [0.0] * len(buckets)
+    counts = [0] * len(buckets)
+    rows = (
+        FactInvoice.objects.filter(
+            organization=organization,
+            status__in=("PENDING", "OVERDUE"),
+            days_overdue__gt=0,
+            due_date__gte=start,
+            due_date__lte=end,
+        )
+        .values("due_date")
+        .annotate(
+            principal=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            late_fee=Coalesce(
+                Sum("late_fee_amount"), _ZERO, output_field=DecimalField()
+            ),
+            count=Count("id"),
+        )
+    )
+    for row in rows:
+        i = pos.get(time_buckets.bucket_start(row["due_date"], gran))
+        if i is None:
+            continue
+        principal[i] += float(row["principal"])
+        late_fee[i] += float(row["late_fee"])
+        counts[i] += row["count"]
+
+    return [
+        {
+            "month": b.key,
+            "bucket": b.key,
+            "label": b.label,
+            "principal": principal[i],
+            "late_fee": late_fee[i],
+            "amount": principal[i] + late_fee[i],
+            "count": counts[i],
+        }
+        for i, b in enumerate(buckets)
+    ]
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_contract_status_trend(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
+    granularity: str = time_buckets.AUTO,
 ) -> list[dict[str, Any]]:
-    """Evolução mensal de contratos por status — snapshot do último dia disponível de cada mês.
+    """Evolução de contratos por status — snapshot do último dia disponível de cada bucket.
+
+    Dois modos (#100): o legado `months=N` e a janela livre `start`/`end`, que
+    percorre buckets de dia/semana/mês em vez de meses fixos. Nos dois, cada
+    ponto é um SNAPSHOT (a foto do último dia com dado dentro do bucket), não
+    uma soma — contratos ativos é estoque, não fluxo.
 
     Retorna série de `{month, label, active, blocked, awaiting, total}` para
     alimentar gráfico de barras empilhadas.
@@ -1526,6 +1677,9 @@ def compute_contract_status_trend(
     `is_active = status in (ACTIVE, BLOCKED, AWAITING_INSTALL)` — conforme definição do modelo.
     Contratos CANCELED e UNKNOWN são excluídos (is_active=False).
     """
+    if start is not None and end is not None:
+        return _contract_status_por_bucket(organization, start, end, granularity)
+
     today = timezone.now().date()
     result: list[dict[str, Any]] = []
 
@@ -1578,6 +1732,64 @@ def compute_contract_status_trend(
             "total": active + blocked + awaiting,
         })
 
+    return result
+
+
+def _contract_status_por_bucket(
+    organization: Organization,
+    start: date_cls,
+    end: date_cls,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    """Modo janela livre — um snapshot por bucket de `time_buckets`.
+
+    Mesma regra do modo mensal: dentro do bucket, usa o ÚLTIMO dia que tem dado
+    (robusto a sync que não rodou). Bucket sem nenhum snapshot vira zero, em vez
+    de sumir do eixo.
+    """
+    hoje = timezone.now().date()
+    end = min(end, hoje)
+    gran = time_buckets.resolve_granularity(start, end, granularity)
+
+    result: list[dict[str, Any]] = []
+    for b in time_buckets.build_buckets(start, end, gran):
+        bucket_end = min(b.end, hoje)
+        latest_date = FactContractStatusDaily.objects.filter(
+            organization=organization,
+            date__gte=b.start,
+            date__lte=bucket_end,
+            is_active=True,
+        ).aggregate(latest=Max("date"))["latest"]
+
+        if not latest_date:
+            result.append({
+                "month": b.key, "bucket": b.key, "label": b.label,
+                "active": 0, "blocked": 0, "awaiting": 0, "total": 0,
+            })
+            continue
+
+        counts = {
+            row["status"]: row["count"]
+            for row in (
+                FactContractStatusDaily.objects.filter(
+                    organization=organization, date=latest_date, is_active=True
+                )
+                .values("status")
+                .annotate(count=Count("id"))
+            )
+        }
+        active = counts.get("ACTIVE", 0)
+        blocked = counts.get("BLOCKED", 0)
+        awaiting = counts.get("AWAITING_INSTALL", 0)
+        result.append({
+            "month": b.key,
+            "bucket": b.key,
+            "label": b.label,
+            "active": active,
+            "blocked": blocked,
+            "awaiting": awaiting,
+            "total": active + blocked + awaiting,
+        })
     return result
 
 
