@@ -14,6 +14,10 @@
 
 {% include "dashboards/_period_header.html" %}
 
+{% if periodo_nota %}
+{% include "dashboards/_nota_periodo.html" with texto=periodo_nota %}
+{% endif %}
+
 <!-- KPI Cards -->
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Indicadores</h2>
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -31,22 +35,25 @@
       </span>
     </p>
     <p class="text-2xl font-bold text-gray-900">{{ open_count|intcomma }}</p>
-    <p class="text-xs text-gray-500 mt-1">pendentes de resolução</p>
+    <p class="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
+      pendentes de resolução
+      {% include "dashboards/_badge_agora.html" with titulo="Estoque de chamados em aberto neste momento — não responde ao filtro de período." %}
+    </p>
   </div>
 
   <!-- Fechados este mês -->
   <div class="bg-white rounded-lg shadow-sm border border-emerald-200 p-5">
     <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
-      Fechados este mês
+      Fechados no período
       <span class="relative inline-block group/tip shrink-0">
         <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
         <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
-          Chamados finalizados no mês corrente.
+          Chamados finalizados dentro do período selecionado.
           <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
         </span>
       </span>
     </p>
-    <p class="text-2xl font-bold text-emerald-700">{{ closed_this_month|intcomma }}</p>
+    <p class="text-2xl font-bold text-emerald-700">{{ closed_in_period|intcomma }}</p>
     <p class="text-xs text-gray-500 mt-1">resolvidos</p>
   </div>
 
@@ -57,13 +64,13 @@
       <span class="relative inline-block group/tip shrink-0">
         <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
         <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
-          Média de (data_fechamento - data_abertura) dos chamados fechados neste mês.
+          Média de (data_fechamento - data_abertura) dos chamados fechados no período.
           <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
         </span>
       </span>
     </p>
     <p class="text-2xl font-bold text-gray-900">{{ avg_resolution_str }}</p>
-    <p class="text-xs text-gray-500 mt-1">chamados fechados este mês</p>
+    <p class="text-xs text-gray-500 mt-1">chamados fechados no período</p>
   </div>
 
   <!-- SLA -->
@@ -73,7 +80,7 @@
       <span class="relative inline-block group/tip shrink-0">
         <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
         <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
-          Percentual de chamados fechados dentro de 24h após abertura neste mês. Acima de 90% é bom.
+          Percentual de chamados fechados dentro de 24h após a abertura, no período selecionado. Acima de 90% é bom.
           <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
         </span>
       </span>
@@ -86,7 +93,7 @@
 <!-- SLA por tipo de atendimento -->
 <div class="flex items-baseline justify-between mb-3">
   <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">SLA por tipo de atendimento</h2>
-  <span class="text-xs text-gray-400">últimos 30 dias · comparativo vs 30 dias anteriores</span>
+  <span class="text-xs text-gray-400">{{ sla_dias }} dias do período · comparativo vs os {{ sla_dias }} dias anteriores</span>
 </div>
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
   {% for s in sla_by_type %}
@@ -128,13 +135,14 @@
   </div>
   {% empty %}
   <div class="col-span-full bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center text-gray-500">
-    Sem atendimentos nos últimos 30 dias
+    Sem atendimentos no período selecionado
   </div>
   {% endfor %}
 </div>
 
 <!-- Gráficos -->
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+{% if volume_visivel %}
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-1">
       <h2 class="text-sm font-semibold text-gray-700">Volume de chamados — abertos vs fechados</h2>
@@ -142,10 +150,13 @@
     <p class="text-xs text-gray-400 mb-3">Quando a linha vermelha supera a verde, o backlog está crescendo</p>
     <div id="volume-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
   </div>
+{% endif %}
 
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-1">
-      <h2 class="text-sm font-semibold text-gray-700">Distribuição por prioridade — chamados abertos</h2>
+      <h2 class="text-sm font-semibold text-gray-700 flex items-center gap-2">Distribuição por prioridade — chamados abertos
+        {% include "dashboards/_badge_agora.html" with titulo="Prioridade dos chamados em aberto neste momento — não responde ao filtro de período." %}
+      </h2>
     </div>
     <p class="text-xs text-gray-400 mb-3">Proporção de chamados abertos por nível de prioridade</p>
     <div id="priority-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
@@ -156,7 +167,9 @@
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
   <div class="p-5 pb-0 flex items-baseline justify-between">
     <div>
-      <h2 class="text-sm font-semibold text-gray-700">Chamados abertos mais antigos</h2>
+      <h2 class="text-sm font-semibold text-gray-700 flex items-center gap-2">Chamados abertos mais antigos
+        {% include "dashboards/_badge_agora.html" with titulo="Fila de chamados ainda em aberto neste momento — não responde ao filtro de período." %}
+      </h2>
       <p class="text-xs text-gray-400 mt-0.5">Top 20 ordenados por data de abertura (mais antigo primeiro)</p>
     </div>
     <span class="text-xs text-gray-400">{{ open_count|intcomma }} aberto{{ open_count|pluralize }}</span>
@@ -219,10 +232,10 @@
 {% endblock %}
 
 {% block scripts %}
-{{ volume_chart_json|json_script:"volume-data" }}
+{% if volume_visivel %}{{ volume_chart_json|json_script:"volume-data" }}{% endif %}
 {{ priority_chart_json|json_script:"priority-data" }}
 <script>
-  renderChart("volume-chart", "volume-data");
+  {% if volume_visivel %}renderChart("volume-chart", "volume-data");{% endif %}
   renderChart("priority-chart", "priority-data");
 </script>
 {% endblock %}
