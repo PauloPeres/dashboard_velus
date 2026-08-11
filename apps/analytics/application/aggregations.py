@@ -22,6 +22,8 @@ from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
 
+from apps.analytics.application import time_buckets
+
 from django.db.models import (
     Avg,
     Count,
@@ -4921,36 +4923,17 @@ _ATENDIMENTO_STATUS_LABELS = {
 }
 
 
-# Cortes da granularidade da série temporal da triagem (#89) — ver
-# `triagem_trend_granularity`.
-_TRIAGEM_TREND_DIA_MAX_DIAS = 31
-_TRIAGEM_TREND_SEMANA_MAX_DIAS = 120
-_TRIAGEM_TREND_LABELS = {
-    "day": "dia a dia",
-    "week": "semana a semana",
-    "month": "mês a mês",
-}
+_TRIAGEM_TREND_LABELS = time_buckets.GRANULARITY_LABELS
 
 
 def triagem_trend_granularity(start: datetime, end: datetime) -> str:
-    """Granularidade da série temporal da triagem, derivada do tamanho da janela.
+    """Granularidade da série da triagem — hoje só delega (#100).
 
-    Regra (#89), pensada pra manter o gráfico entre ~10 e ~40 pontos em qualquer
-    preset do componente de período:
-
-    - até 31 dias  → **dia**    (Hoje, Ontem, 7d, 14d, 30d, 1 mês)
-    - até 120 dias → **semana** (3 meses; semana começa na segunda)
-    - acima disso  → **mês**    (6m, 12m, 24m)
-
-    Sem a regra, "Hoje" renderizaria um único ponto mensal e "12 meses" viraria
-    365 pontos diários ilegíveis.
+    A regra nasceu aqui na #89 e virou `apps.analytics.application.time_buckets`
+    quando deixou de ser exclusividade da triagem. O nome fica como porta de
+    entrada dos chamadores antigos.
     """
-    span_days = (end.date() - start.date()).days + 1
-    if span_days <= _TRIAGEM_TREND_DIA_MAX_DIAS:
-        return "day"
-    if span_days <= _TRIAGEM_TREND_SEMANA_MAX_DIAS:
-        return "week"
-    return "month"
+    return time_buckets.series_granularity(start.date(), end.date())
 
 
 @allow_cross_tenant(reason="aggregation read-only; org passada explicitamente")
@@ -5126,29 +5109,11 @@ def compute_atendimento_triagem(
 _TENDENCIA_GRANULARIDADES = ("week", "month")
 
 
-def _bucket_start(d: date_cls, granularity: str) -> date_cls:
-    """Início do bucket (o próprio dia, a segunda-feira ou o dia 1) de uma data."""
-    if granularity == "month":
-        return d.replace(day=1)
-    if granularity == "day":
-        return d
-    return d - timedelta(days=d.weekday())  # segunda da semana
-
-
-def _next_bucket(d: date_cls, granularity: str) -> date_cls:
-    """Início do bucket seguinte (avança 1 dia, 1 semana ou 1 mês)."""
-    if granularity == "month":
-        return (d.replace(day=1) + relativedelta(months=1))
-    if granularity == "day":
-        return d + timedelta(days=1)
-    return d + timedelta(days=7)
-
-
-def _bucket_label(d: date_cls, granularity: str) -> str:
-    """Rótulo do eixo: 'mmm/yy' no mês, 'dd/mm' no dia e na semana (a segunda)."""
-    if granularity == "month":
-        return d.strftime("%b/%y")
-    return d.strftime("%d/%m")
+# Eixo do tempo: implementação única em `time_buckets` (#100). Os nomes locais
+# ficam porque são usados em vários pontos deste arquivo.
+_bucket_start = time_buckets.bucket_start
+_next_bucket = time_buckets.next_bucket
+_bucket_label = time_buckets.bucket_label
 
 
 def _build_categoria_series(
