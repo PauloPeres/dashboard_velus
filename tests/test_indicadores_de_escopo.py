@@ -194,3 +194,59 @@ class TestChurn:
         assert f"MRR Perdido vs Recuperado — {label}" in body
         assert f"Cancelamentos vs Ativações — {label}" in body
         assert "— 12 meses" not in body
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestVendas:
+    def test_funil_e_pipeline_ficam_marcados(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        body = client.get(reverse("dashboards:sales")).content.decode()
+        # 3 KPIs + funil + origem dos leads + negociações em andamento.
+        assert body.count(_SELO) == 6
+
+    def test_net_adds_nao_e_marcado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        """Net adds é o único bloco da página que segue o filtro."""
+        client.force_login(user_a)
+        resp = client.get(f"{reverse('dashboards:sales')}?periodo=6m")
+        body = resp.content.decode()
+        i = body.index("Net adds por mês")
+        assert _SELO not in body[i : body.index("</h2>", i)]
+        assert f"Net adds por mês — {resp.context['period_label']}" in body
+
+    def test_tooltip_diz_que_o_funil_e_desde_sempre(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        body = client.get(reverse("dashboards:sales")).content.decode()
+        assert "base INTEIRA de leads, desde sempre" in body
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestReceita:
+    def test_blocos_de_hoje_ficam_marcados(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        body = client.get(reverse("dashboards:revenue")).content.decode()
+        # 3 KPIs + Contratos Ativos + comparativo mês a mês + receita por plano
+        # + ARPU por plano.
+        assert body.count(_SELO) == 7
+
+    def test_titulos_deixam_de_dizer_janela_fixa(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(f"{reverse('dashboards:revenue')}?periodo=6m")
+        body = resp.content.decode()
+        label = resp.context["period_label"]
+        assert f"MRR + Contratos — {label}" in body
+        assert f"Composição da base — {label}" in body
+        assert f"Cancelamentos por plano — {label}" in body
+        assert "últimos 12 meses" not in body
+        assert "últimos 3 meses" not in body
