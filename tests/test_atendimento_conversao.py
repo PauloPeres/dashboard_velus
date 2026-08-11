@@ -73,7 +73,9 @@ class TestAtendimentoConversao:
         _at(organization_a, ext="a1", cust=cust,
             opened_at=now - timedelta(days=30), tags=["Bloqueio"])
 
-        data = compute_atendimento_conversao(organization_a, months=6, horizon_days=90)
+        data = compute_atendimento_conversao(
+            organization_a, start=now - timedelta(days=180), horizon_days=90
+        )
         assert data["total_linked"] == 1
         assert data["churn_total"] == 1
         row = _by_name(data["by_tag"], "Bloqueio")
@@ -94,7 +96,9 @@ class TestAtendimentoConversao:
         )
         _at(organization_a, ext="a1", cust=cust,
             opened_at=now - timedelta(days=30), tags=["Suporte"])
-        data = compute_atendimento_conversao(organization_a, months=6, horizon_days=90)
+        data = compute_atendimento_conversao(
+            organization_a, start=now - timedelta(days=180), horizon_days=90
+        )
         assert data["churn_total"] == 0
 
     def test_cancel_outside_horizon_not_counted(
@@ -110,7 +114,9 @@ class TestAtendimentoConversao:
         )
         _at(organization_a, ext="a1", cust=cust,
             opened_at=now - timedelta(days=200), tags=["X"])
-        data = compute_atendimento_conversao(organization_a, months=12, horizon_days=90)
+        data = compute_atendimento_conversao(
+            organization_a, start=now - timedelta(days=400), horizon_days=90
+        )
         assert data["churn_total"] == 0
 
     def test_churn_deduped_by_contract(
@@ -130,7 +136,9 @@ class TestAtendimentoConversao:
             _at(organization_a, ext=f"a{i}", cust=cust,
                 opened_at=now - timedelta(days=30), tags=["Bloqueio"])
 
-        data = compute_atendimento_conversao(organization_a, months=6, horizon_days=90)
+        data = compute_atendimento_conversao(
+            organization_a, start=now - timedelta(days=180), horizon_days=90
+        )
         row = _by_name(data["by_tag"], "Bloqueio")
         assert row["churn"] == 3            # por atendimento
         assert row["churn_contratos"] == 1  # dedup por contrato
@@ -148,7 +156,9 @@ class TestAtendimentoConversao:
         )
         _at(organization_a, ext="a1", cust=cust,
             opened_at=now - timedelta(days=25), motivos=["comercial"])
-        data = compute_atendimento_conversao(organization_a, months=6, horizon_days=90)
+        data = compute_atendimento_conversao(
+            organization_a, start=now - timedelta(days=180), horizon_days=90
+        )
         assert data["conv_total"] == 1
         assert _by_name(data["by_motivo"], "comercial")["conv_pct"] == 100.0
 
@@ -159,7 +169,9 @@ class TestAtendimentoConversao:
         now = timezone.now()
         _at(organization_a, ext="a1", cust=None,
             opened_at=now - timedelta(days=5), tags=["Y"])
-        data = compute_atendimento_conversao(organization_a, months=6)
+        data = compute_atendimento_conversao(
+            organization_a, start=now - timedelta(days=180)
+        )
         assert data["total_linked"] == 0
         assert data["by_tag"] == []
 
@@ -187,3 +199,119 @@ class TestConversaoView:
         assert resp.status_code == 200
         assert b"churn-tags-chart" in resp.content
         assert b"Conversa" in resp.content
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestPeriodoEmDias:
+    """Filtro de período em dias na página (#100), como em Tendências."""
+
+    URL = "/operations/atendimento-conversao/"
+
+    def test_barra_tem_presets_em_dias_e_personalizado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(self.URL)
+        assert resp.status_code == 200
+        html = resp.content.decode()
+        assert "setPeriodo('1d')" in html
+        assert "setPeriodo('ontem')" in html
+        assert 'name="de"' in html
+        assert 'name="ate"' in html
+        assert resp.context["period"].key == "30d"
+        assert resp.context["period_warning"] is None
+
+    def test_janela_corta_nos_dois_lados(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        now = timezone.now()
+        cust = _customer(organization_a, doc="881")
+        _at(organization_a, ext="p-hoje", cust=cust, opened_at=now, tags=["Hoje"])
+        _at(organization_a, ext="p-ontem", cust=cust,
+            opened_at=now - timedelta(days=1), tags=["Ontem"])
+
+        client.force_login(user_a)
+        resp = client.get(f"{self.URL}?periodo=ontem")
+        assert resp.context["period"].key == "ontem"
+        assert [r["name"] for r in resp.context["by_tag"]] == ["Ontem"]
+
+        resp = client.get(f"{self.URL}?periodo=1d")
+        assert [r["name"] for r in resp.context["by_tag"]] == ["Hoje"]
+
+    def test_horizonte_e_departamento_propagados_no_personalizado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        html = client.get(f"{self.URL}?h=180").content.decode()
+        assert 'name="h" value="180"' in html
+
+    def test_cookie_atravessa_a_navegacao(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        client.get(f"{self.URL}?periodo=7d")
+        assert client.get(self.URL).context["period"].key == "7d"
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestNotaDeHorizonteAberto:
+    """Indicador de escopo (#100): janela curta subestima churn/conversão.
+
+    A página olha PRA FRENTE `horizon_days` depois de cada conversa. Numa janela
+    recente o desfecho ainda não teve tempo de acontecer — dizer isso é melhor
+    do que deixar o usuário ler 0% como se fosse resultado.
+    """
+
+    URL = "/operations/atendimento-conversao/"
+
+    def test_conversa_recente_conta_como_horizonte_pendente(
+        self, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        now = timezone.now()
+        cust = _customer(organization_a, doc="882")
+        _at(organization_a, ext="a1", cust=cust,
+            opened_at=now - timedelta(days=2), tags=["X"])
+        data = compute_atendimento_conversao(
+            organization_a, start=now - timedelta(days=30), horizon_days=90
+        )
+        assert data["horizon_pending"] == 1
+        assert data["horizon_pending_pct"] == 100
+
+    def test_conversa_antiga_ja_completou_o_horizonte(
+        self, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        now = timezone.now()
+        cust = _customer(organization_a, doc="883")
+        _at(organization_a, ext="a1", cust=cust,
+            opened_at=now - timedelta(days=200), tags=["X"])
+        data = compute_atendimento_conversao(
+            organization_a, start=now - timedelta(days=365), horizon_days=90
+        )
+        assert data["horizon_pending"] == 0
+        assert data["horizon_pending_pct"] == 0
+
+    def test_view_mostra_a_nota_quando_ha_pendencia(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        now = timezone.now()
+        cust = _customer(organization_a, doc="884")
+        _at(organization_a, ext="a1", cust=cust,
+            opened_at=now - timedelta(days=1), tags=["X"])
+        client.force_login(user_a)
+        resp = client.get(f"{self.URL}?periodo=7d&h=90")
+        assert resp.status_code == 200
+        assert "Janela de desfecho ainda aberta" in resp.content.decode()
+
+    def test_view_sem_nota_quando_tudo_completou(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(f"{self.URL}?periodo=7d")
+        # Org vazia: nada pendente → sem nota.
+        assert "Janela de desfecho ainda aberta" not in resp.content.decode()
