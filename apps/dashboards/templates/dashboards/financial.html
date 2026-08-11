@@ -15,28 +15,30 @@
 <!-- KPI Cards — linha 1: totais -->
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Estoque Total</h2>
 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-  {% include "dashboards/_kpi_card.html" with label="Estoque Inadimplente" value=delinquency_amount_str subtitle=delinquency_subtitle variant="border-red-200" tooltip="Soma de todas as mensalidades vencidas e não pagas (PENDING/OVERDUE com days_overdue > 0). Estoque acumulado histórico — não apenas o mês corrente." %}
-  {% include "dashboards/_kpi_card.html" with label="Inadimplência / MRR" value=delinquency_pct_str subtitle="Estoque acumulado ÷ receita mensal — abaixo de 50% = saudável · acima de 100% = crítico" tooltip="Quanto meses de receita estão represados como dívida. Referência: < 50% saudável, 50–100% atenção, > 100% crítico." %}
+  {% include "dashboards/_kpi_card.html" with label="Estoque Inadimplente" value=delinquency_amount_str subtitle=delinquency_subtitle variant="border-red-200" tooltip="Soma de todas as mensalidades vencidas e não pagas (PENDING/OVERDUE com days_overdue > 0). Estoque acumulado histórico — não apenas o mês corrente." agora=True agora_titulo="Estoque acumulado até hoje, de qualquer época — não olha o período selecionado." %}
+  {% include "dashboards/_kpi_card.html" with label="Inadimplência / MRR" value=delinquency_pct_str subtitle="Estoque acumulado ÷ receita mensal — abaixo de 50% = saudável · acima de 100% = crítico" tooltip="Quanto meses de receita estão represados como dívida. Referência: < 50% saudável, 50–100% atenção, > 100% crítico." agora=True agora_titulo="Estoque de hoje ÷ MRR de hoje — não olha o período selecionado." %}
 </div>
 
 <!-- KPI Cards — linha 2: por faixa de aging -->
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Por Faixa de Atraso</h2>
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-  {% include "dashboards/_kpi_card.html" with label="Crítico — 90+ dias" value=over_90_value subtitle=over_90.count|stringformat:"d"|add:" contratos — probabilidade de recuperação muito baixa" variant="border-red-400" value_color="text-red-700" tooltip="Faturas com mais de 90 dias. Nessa faixa a recuperação é rara — indica evasão. Ação: negativação SPC/Serasa ou cobrança judicial." %}
-  {% include "dashboards/_kpi_card.html" with label="Em risco — 31 a 90 dias" value=at_risk_str subtitle="Janela de recuperação ativa — cobrança proativa tem alta efetividade" variant="border-orange-300" value_color="text-orange-700" tooltip="Soma dos buckets 31–60d e 61–90d. Ainda recuperável com ação de cobrança. Prioridade 2 após o 90+." %}
-  {% include "dashboards/_kpi_card.html" with label="Novos — 0 a 30 dias" value=new_del_str subtitle=new_del.count|stringformat:"d"|add:" faturas — recém vencidas, alta chance de regularização" variant="border-yellow-300" value_color="text-yellow-700" tooltip="Faturas vencidas há menos de 30 dias. Alta taxa de recuperação espontânea ou com primeiro contato de cobrança." %}
+  {% include "dashboards/_kpi_card.html" with label="Crítico — 90+ dias" value=over_90_value subtitle=over_90.count|stringformat:"d"|add:" contratos — probabilidade de recuperação muito baixa" variant="border-red-400" value_color="text-red-700" tooltip="Faturas com mais de 90 dias. Nessa faixa a recuperação é rara — indica evasão. Ação: negativação SPC/Serasa ou cobrança judicial." agora=True agora_titulo="Posição de hoje das faturas vencidas há mais de 90 dias — não olha o período selecionado." %}
+  {% include "dashboards/_kpi_card.html" with label="Em risco — 31 a 90 dias" value=at_risk_str subtitle="Janela de recuperação ativa — cobrança proativa tem alta efetividade" variant="border-orange-300" value_color="text-orange-700" tooltip="Soma dos buckets 31–60d e 61–90d. Ainda recuperável com ação de cobrança. Prioridade 2 após o 90+." agora=True agora_titulo="Posição de hoje das faturas nessa faixa de atraso — não olha o período selecionado." %}
+  {% include "dashboards/_kpi_card.html" with label="Novos — 0 a 30 dias" value=new_del_str subtitle=new_del.count|stringformat:"d"|add:" faturas — recém vencidas, alta chance de regularização" variant="border-yellow-300" value_color="text-yellow-700" tooltip="Faturas vencidas há menos de 30 dias. Alta taxa de recuperação espontânea ou com primeiro contato de cobrança." agora=True agora_titulo="Posição de hoje das faturas recém-vencidas — não olha o período selecionado." %}
 </div>
 
 <!-- Recovery Rate — efetividade de recuperação -->
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Recuperação de Inadimplência</h2>
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
   <div class="lg:col-span-1 flex flex-col gap-4">
-    {% include "dashboards/_kpi_card.html" with label="Recovery Rate" value=recovery_pct_str subtitle=recovery_subtitle variant="border-emerald-300" value_color="text-emerald-700" tooltip="Das faturas que inadimpliram (venceram sem pagamento em dia) nos últimos 12 meses, quanto em R$ acabou sendo pago em atraso. Considera apenas coortes com 90+ dias de maturação." %}
-    {% include "dashboards/_kpi_card.html" with label="Valor recuperado" value=recovery_recovered_str subtitle="de "|add:recovery_delinquent_str|add:" que inadimpliu na janela" tooltip="Soma das faturas inadimplentes que foram pagas em atraso, sobre o total que inadimpliu no período analisado." %}
+    {% include "dashboards/_kpi_card.html" with label="Recovery Rate" value=recovery_pct_str subtitle=recovery_subtitle variant="border-emerald-300" value_color="text-emerald-700" tooltip="Das faturas que inadimpliram (venceram sem pagamento em dia) nos últimos 12 meses, quanto em R$ acabou sendo pago em atraso. Considera apenas coortes com 90+ dias de maturação." agora=True agora_titulo="Coorte fixa dos últimos 12 meses, só com faturas já maduras (90+ dias) — não olha o período selecionado." agora_rotulo="janela fixa" %}
+    {% include "dashboards/_kpi_card.html" with label="Valor recuperado" value=recovery_recovered_str subtitle="de "|add:recovery_delinquent_str|add:" que inadimpliu na janela" tooltip="Soma das faturas inadimplentes que foram pagas em atraso, sobre o total que inadimpliu no período analisado." agora=True agora_titulo="Mesma coorte fixa de 12 meses do Recovery Rate — não olha o período selecionado." agora_rotulo="janela fixa" %}
   </div>
   <div class="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-1">
-      <h2 class="text-sm font-semibold text-gray-700">Curva de recuperação por profundidade do atraso</h2>
+      <h2 class="text-sm font-semibold text-gray-700 flex items-center gap-2">Curva de recuperação por profundidade do atraso
+        {% include "dashboards/_badge_agora.html" with titulo="Mesma coorte fixa de 12 meses do Recovery Rate — não olha o período selecionado." rotulo="janela fixa" %}
+      </h2>
     </div>
     <p class="text-xs text-gray-400 mb-3">% do valor inadimplido recuperado em cada faixa — curva descendente confirma que quanto mais velho o atraso, menor a chance de recuperar</p>
     <div id="recovery-chart" style="height:260px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
@@ -47,7 +49,9 @@
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-4">
-      <h2 class="text-sm font-semibold text-gray-700">Aging — snapshot atual</h2>
+      <h2 class="text-sm font-semibold text-gray-700 flex items-center gap-2">Aging de inadimplência
+        {% include "dashboards/_badge_agora.html" with titulo="Distribuição do que está vencido neste momento — não olha o período selecionado." %}
+      </h2>
     </div>
     <div id="aging-chart" style="height:280px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
   </div>
@@ -87,7 +91,7 @@
 
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-1">
-      <h2 class="text-sm font-semibold text-gray-700">Contratos bloqueados — evolução 12 meses</h2>
+      <h2 class="text-sm font-semibold text-gray-700">Contratos bloqueados — {{ period_label }}</h2>
     </div>
     <p class="text-xs text-gray-400 mb-3">Crescimento de bloqueados = inadimplência convertendo em risco operacional · <a href="{% url 'dashboards:contracts' %}" class="text-blue-600 hover:underline">Ver detalhe por contrato →</a></p>
     <div id="blocked-chart" style="height:260px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
@@ -97,7 +101,9 @@
 <!-- Tabela Top 50 -->
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
   <div class="p-5 pb-0 flex items-baseline justify-between">
-    <h2 class="text-sm font-semibold text-gray-700">Top 50 inadimplentes</h2>
+    <h2 class="text-sm font-semibold text-gray-700 flex items-center gap-2">Top 50 inadimplentes
+        {% include "dashboards/_badge_agora.html" with titulo="Maiores devedores na posição de hoje — não olha o período selecionado." %}
+      </h2>
     <span class="text-xs text-gray-400">Ordenados por dias de atraso (maior primeiro)</span>
   </div>
   <div class="overflow-x-auto">
