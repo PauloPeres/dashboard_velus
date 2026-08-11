@@ -3,17 +3,27 @@
 Avalia, por cliente, sinais de risco de cancelamento derivados dos dados já
 sincronizados (sem ML, sem fontes novas) e persiste em `ChurnRiskScore`:
 
-    1. Contrato bloqueado há ≥ 30 dias consecutivos        peso 40
-    2. Atraso recorrente (≥ 3 faturas vencidas em 6 meses)  peso 25
-    3. Chamados de suporte frequentes (≥ 3 em 30d, só tipos
-       de problema técnico/rede/suporte — exclui rotina)    peso 20
-    4. Downgrade de plano (valor mensal caiu vs anterior)   peso 20
-    5. Offline com contrato ativo                           peso 15
-    6. Queda brusca de consumo de banda (≥ 70% em 30d)      peso 15
-    7. Insatisfação nas conversas (léxico PT-BR × likert)   peso 15
+    1. Contrato bloqueado (peso 40) — lift medido 3,8× a 5,2×
+    2. Atraso recorrente, ≥3 faturas vencidas em 6 meses (25) — 1,4× a 2,3×
+    3. Chamados frequentes, ≥3 em 30 dias (20) — 1,6× a 2,1×
+    4. Offline com contrato ativo (15) — não medido
+    5. Queda brusca de consumo de banda, ≥70% em 30d (15) — não medido
+    6. Insatisfação nas conversas (15) — não medido
+    7. Alta probabilidade prevista pelo modelo ML (30) — não medido
 
 Score = soma dos pesos disparados (capado em 100). Nível:
     HIGH ≥ 50 · MEDIUM ≥ 25 · LOW > 0
+
+Os lifts vêm do `churn_backtest` (#125), em janelas independentes. "Não medido"
+quer dizer que o sinal depende de dado sem história reconstrutível — não que
+esteja validado.
+
+**Downgrade de plano saiu na #126.** Ele era o sinal mais frequente da base (361
+clientes) e media lift 0,42× e 0,27× — abaixo do acaso em todas as janelas e em
+todos os limiares de queda testados (qualquer queda, >10%, >20%, >30%). A
+leitura mais provável é causal e inverte a premissa: quem reduz o plano está
+escolhendo FICAR mais barato em vez de sair. Vira candidato a sinal de retenção,
+nunca de risco — mas isso precisa da sua própria validação.
 
 Idempotente: clientes em risco têm 1 linha upsertada; clientes que saíram do
 risco têm a linha removida. Puramente analítico — alimenta alertas no
@@ -47,7 +57,6 @@ _ZERO = Decimal("0.00")
 W_BLOCKED = 40
 W_LATE_PAYMENTS = 25
 W_FREQUENT_TICKETS = 20
-W_DOWNGRADE = 20
 W_OFFLINE = 15
 W_BANDWIDTH_DROP = 15
 W_DISSATISFACTION = 15  # tom negativo nas conversas + nota likert baixa (#50)
@@ -111,8 +120,6 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
     mrr: dict[int, Decimal] = defaultdict(lambda: _ZERO)
     active_customers: set[int] = set()
     blocked_contract_customer: dict[int, int] = {}
-    # (source_type, external_id) → customer_id — base pro sinal de downgrade.
-    contract_keys: dict[tuple[str, str], int] = {}
 
     # ── Receita em risco + população relevante ──────────────────────────
     # Só contratos ACTIVE/BLOCKED geram MRR — base pra "receita em risco".
@@ -124,7 +131,6 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
         if c.customer_id is None:
             continue
         mrr[c.customer_id] += c.monthly_amount_net
-        contract_keys[(c.source_type, c.external_id)] = c.customer_id
         if c.status == "ACTIVE":
             active_customers.add(c.customer_id)
         elif c.status == "BLOCKED":
@@ -211,16 +217,13 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
                 "weight": W_OFFLINE,
             })
 
-    # ── Sinal 5: downgrade de plano (valor mensal caiu vs versão anterior) ─
-    _apply_downgrade_signal(organization, contract_keys, signals)
-
-    # ── Sinal 6: queda brusca de consumo de banda ───────────────────────
+    # ── Sinal 5: queda brusca de consumo de banda ───────────────────────
     _apply_bandwidth_drop_signal(organization, today, active_customers, signals)
 
-    # ── Sinal 7: insatisfação nas conversas (léxico × likert) ───────────
+    # ── Sinal 6: insatisfação nas conversas (léxico × likert) ───────────
     _apply_dissatisfaction_signal(organization, set(mrr.keys()), signals)
 
-    # ── Sinal 8: ML — alta probabilidade prevista de churn ──────────────
+    # ── Sinal 7: ML — alta probabilidade prevista de churn ──────────────
     # Complementar às regras: pode flagar clientes ativos sem sinal de regra.
     ml_probs = _apply_ml_signal(organization, active_customers, signals)
 
@@ -365,56 +368,6 @@ def _apply_blocked_signal(
         })
 
 
-def _apply_downgrade_signal(
-    organization: Organization,
-    contract_keys: dict[tuple[str, str], int],
-    signals: dict[int, list[dict[str, Any]]],
-) -> None:
-    """Dispara o sinal de downgrade comparando a versão SCD2 atual do contrato
-    com a versão imediatamente anterior em DimContract.
-
-    Downgrade = monthly_amount da versão `current` < monthly_amount da versão
-    anterior (maior `valid_from` entre as não-current). Reduzir o plano é um
-    sinal clássico de cliente prestes a sair.
-    """
-    from apps.analytics.infrastructure.models import DimContract
-
-    if not contract_keys:
-        return
-
-    external_ids = {ext for (_src, ext) in contract_keys}
-    # Agrupa versões por (source_type, external_id), ordenadas por valid_from.
-    versions: dict[tuple[str, str], list[DimContract]] = defaultdict(list)
-    for dim in (
-        DimContract.objects.filter(
-            organization=organization, external_id__in=external_ids
-        )
-        .only("source_type", "external_id", "monthly_amount", "current", "valid_from")
-        .order_by("valid_from")
-    ):
-        versions[(dim.source_type, dim.external_id)].append(dim)
-
-    for key, customer_id in contract_keys.items():
-        history = versions.get(key)
-        if not history or len(history) < 2:
-            continue
-        current = next((d for d in history if d.current), history[-1])
-        prior = [d for d in history if d is not current]
-        if not prior:
-            continue
-        # Versão anterior = a de maior valid_from entre as restantes.
-        previous = max(prior, key=lambda d: d.valid_from)
-        if current.monthly_amount >= previous.monthly_amount:
-            continue
-        signals[customer_id].append({
-            "code": "PLAN_DOWNGRADE",
-            "label": "Downgrade de plano",
-            "detail": (
-                f"Plano reduziu de R$ {previous.monthly_amount} "
-                f"para R$ {current.monthly_amount}"
-            ),
-            "weight": W_DOWNGRADE,
-        })
 
 
 def _apply_bandwidth_drop_signal(
