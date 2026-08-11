@@ -10,13 +10,37 @@
     <h1 class="text-2xl font-bold text-gray-900">Análise de Churn</h1>
     <p class="text-xs text-gray-400 mt-0.5">Cancelamentos · MRR perdido · Motivos · LTV · Planos em risco</p>
   </div>
-  <div class="flex gap-4 text-xs text-gray-500">
-    <a href="{% url 'dashboards:contracts' %}" class="text-blue-600 hover:underline">Ver contratos →</a>
-    <a href="{% url 'dashboards:revenue' %}" class="text-blue-600 hover:underline">Ver receita →</a>
+  <div class="flex items-center gap-4">
+    <div class="relative">
+      <select onchange="setParam('plano', this.value)"
+        class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 pr-8 appearance-none cursor-pointer text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <option value="" {% if not plano_selecionado %}selected{% endif %}>Todos os planos</option>
+        {% for p in planos %}
+        <option value="{{ p }}" {% if p == plano_selecionado %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+      <span class="pointer-events-none absolute right-2.5 inset-y-0 flex items-center">
+        <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+      </span>
+    </div>
+    <div class="flex gap-4 text-xs text-gray-500">
+      <a href="{% url 'dashboards:contracts' %}" class="text-blue-600 hover:underline">Ver contratos →</a>
+      <a href="{% url 'dashboards:revenue' %}" class="text-blue-600 hover:underline">Ver receita →</a>
+    </div>
   </div>
 </div>
 
 {% include "dashboards/_period_header.html" %}
+
+{% if plano_selecionado %}
+<div class="flex flex-wrap items-center gap-2 mb-5 text-xs">
+  <span class="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
+    Plano: <strong>{{ plano_selecionado }}</strong>
+  </span>
+  <button onclick="setParam('plano', '')" class="text-gray-500 hover:text-gray-700 underline">limpar</button>
+  <span class="text-gray-400">— a página inteira está recortada por este plano, inclusive a base que serve de denominador do churn %.</span>
+</div>
+{% endif %}
 
 <!-- Alerta: perdendo clientes de ticket alto -->
 {% if ticket_alert %}
@@ -222,7 +246,9 @@
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
   <div class="p-5 pb-0 flex items-baseline justify-between">
     <div>
-      <h2 class="text-sm font-semibold text-gray-700">Análise estatística de churn por plano</h2>
+      <h2 class="text-sm font-semibold text-gray-700 flex items-center gap-2">Análise estatística de churn por plano
+        {% include "dashboards/_badge_agora.html" with rotulo="todos os planos" titulo="Esta tabela compara TODOS os planos de propósito — é por ela que você escolhe o recorte. Clique num plano pra filtrar o resto da página." %}
+      </h2>
       <p class="text-xs text-gray-400 mt-0.5">
         Taxa global: <strong>{{ overall_rate|floatformat:1 }}%</strong> ·
         Índice de risco = taxa do plano ÷ taxa global ·
@@ -272,7 +298,15 @@
     <tbody class="divide-y divide-gray-100">
       {% for row in plan_detail %}
       <tr class="{% if row.risk_index and row.risk_index > 1.5 %}bg-red-50 hover:bg-red-100{% elif row.risk_index and row.risk_index > 1.0 %}bg-orange-50 hover:bg-orange-100{% elif row.risk_index and row.risk_index < 1.0 %}bg-emerald-50 hover:bg-emerald-100{% else %}hover:bg-gray-50{% endif %}">
-        <td class="px-4 py-3 font-medium text-gray-900">{{ row.plan }}</td>
+        <td class="px-4 py-3 font-medium">
+          {% comment %}
+          A tabela é o NAVEGADOR do filtro (#117): clicar no plano recorta a
+          página inteira. Por isso ela mesma não é filtrada — se fosse,
+          colapsaria numa linha e você perderia a comparação.
+          {% endcomment %}
+          <button onclick="setParam('plano', '{{ row.plan|escapejs }}')"
+            class="text-blue-600 hover:underline text-left">{{ row.plan }}</button>
+        </td>
         <td class="px-4 py-3 text-right text-gray-500 tabular-nums">{{ row.base|intcomma }}</td>
         <td class="px-4 py-3 text-right text-gray-700 tabular-nums">
           {{ row.count }}

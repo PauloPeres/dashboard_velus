@@ -2500,6 +2500,17 @@ _IXC_MOTIVO_MAP: dict[str, tuple[str, bool | None]] = {
 }
 
 
+def _plano_filtro(plano: str | None) -> dict[str, Any]:
+    """Recorte por plano p/ querysets de Contract (#117). Vazio = todos.
+
+    Filtrar por plano é o único recorte de churn que filtra os DOIS lados da
+    taxa (cancelados e base ativa), então `logo_churn_pct` continua sendo uma
+    taxa de churn de verdade. Motivo e controlável só filtram o numerador — ver
+    a ressalva de semântica na #117.
+    """
+    return {"plan_name": plano} if plano else {}
+
+
 def _motivo_label(mid: str) -> str:
     return _IXC_MOTIVO_MAP.get(str(mid), (f"Motivo #{mid}", None))[0]
 
@@ -2510,7 +2521,7 @@ def _motivo_controlavel(mid: str) -> bool | None:
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_mrr_churn_series(
-    organization: Organization, months: int = 12
+    organization: Organization, months: int = 12, *, plano: str | None = None
 ) -> list[dict[str, Any]]:
     """Série mensal de MRR Churn + Logo Churn + MRR Recuperado.
 
@@ -2525,6 +2536,7 @@ def compute_mrr_churn_series(
     """
     from apps.customers.infrastructure.models import Contract
 
+    plano_f = _plano_filtro(plano)
     today = timezone.now().date()
     result = []
 
@@ -2542,6 +2554,7 @@ def compute_mrr_churn_series(
             activated_at__isnull=False,
             canceled_at__date__gte=m_start,
             canceled_at__date__lte=m_end,
+            **plano_f,
         ).aggregate(
             n=Count("id"),
             mrr=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()),
@@ -2552,6 +2565,7 @@ def compute_mrr_churn_series(
             organization=organization,
             activated_at__date__gte=m_start,
             activated_at__date__lte=m_end,
+            **plano_f,
         ).aggregate(
             n=Count("id"),
             mrr=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()),
@@ -2574,7 +2588,7 @@ def compute_mrr_churn_series(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_churn_by_reason(
-    organization: Organization, months: int = 12
+    organization: Organization, months: int = 12, *, plano: str | None = None
 ) -> list[dict[str, Any]]:
     """MRR perdido por motivo de cancelamento (dos últimos N meses).
 
@@ -2589,6 +2603,7 @@ def compute_churn_by_reason(
     canceled = Contract.objects.filter(
         organization=organization,
         canceled_at__date__gte=cutoff,
+        **_plano_filtro(plano),
     ).filter(_CANCELED_Q)
 
     reasons: dict[str, dict] = {}
@@ -2620,7 +2635,7 @@ def compute_churn_by_reason(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_ltv_distribution(
-    organization: Organization,
+    organization: Organization, *, plano: str | None = None
 ) -> list[dict[str, Any]]:
     """Histograma de LTV — tempo de vida dos contratos cancelados.
 
@@ -2633,6 +2648,7 @@ def compute_ltv_distribution(
         organization=organization,
         canceled_at__isnull=False,
         activated_at__isnull=False,
+        **_plano_filtro(plano),
     ).filter(_CANCELED_Q).iterator()
 
     buckets: dict[str, dict] = {
@@ -2764,8 +2780,13 @@ def compute_churn_plan_detail(
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
-def compute_churn_summary(organization: Organization) -> dict[str, Any]:
+def compute_churn_summary(
+    organization: Organization, *, plano: str | None = None
+) -> dict[str, Any]:
     """KPIs de churn para o topo do dashboard.
+
+    `plano` recorta a página inteira por plano contratado (#117) — inclusive a
+    base ativa que serve de denominador, então a taxa continua comparável.
 
     Retorna:
       - mrr_lost_this_month: R$ perdido no mês corrente
@@ -2786,8 +2807,9 @@ def compute_churn_summary(organization: Organization) -> dict[str, Any]:
 
     # Apenas contratos que foram ativados — pré-contratos abandonados não geram MRR.
     # _CANCELED_Q: defensivo contra UNKNOWN c/ canceled_at (bug histórico de re-sync).
+    plano_f = _plano_filtro(plano)
     canceled_qs = Contract.objects.filter(
-        organization=organization, activated_at__isnull=False
+        organization=organization, activated_at__isnull=False, **plano_f
     ).filter(_CANCELED_Q)
 
     this_month = canceled_qs.filter(
@@ -2800,17 +2822,23 @@ def compute_churn_summary(organization: Organization) -> dict[str, Any]:
     activated_this = Contract.objects.filter(
         organization=organization,
         activated_at__date__gte=month_first,
+        **plano_f,
     ).aggregate(
         n=Count("id"),
         mrr=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()),
     )
 
     # Base ativa no início do mês
-    base_start = FactContractStatusDaily.objects.filter(
+    base_start_qs = FactContractStatusDaily.objects.filter(
         organization=organization,
         date=prev_month_first,
         is_active=True,
-    ).count()
+    )
+    if plano:
+        # A base também é recortada — é o que mantém `logo_churn_pct` sendo uma
+        # taxa, e não uma contribuição.
+        base_start_qs = base_start_qs.filter(contract__plan_name=plano)
+    base_start = base_start_qs.count()
 
     logo_churn = this_month["n"] or 0
     mrr_lost = float(this_month["mrr"] or 0)
@@ -2834,7 +2862,7 @@ def compute_churn_summary(organization: Organization) -> dict[str, Any]:
         avg=Coalesce(Avg("monthly_amount"), _ZERO, output_field=DecimalField())
     )
     avg_active = Contract.objects.filter(
-        organization=organization, status="ACTIVE"
+        organization=organization, status="ACTIVE", **plano_f
     ).aggregate(avg=Coalesce(Avg("monthly_amount"), _ZERO, output_field=DecimalField()))
 
     avg_ticket_canceled = float(avg_canceled["avg"] or 0)
