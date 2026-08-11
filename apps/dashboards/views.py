@@ -2176,7 +2176,8 @@ def qa_supervisor(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100): página de atendimento, mesmos presets de Tendências.
+    period = _get_period(request)
 
     departamento_id: int | None = None
     raw_dep = request.GET.get("departamento", "")
@@ -2187,8 +2188,17 @@ def qa_supervisor(request: HttpRequest) -> HttpResponse:
     if cohort not in ("human", "bot", "all"):
         cohort = "human"
 
+    # Recorte da página que o form de período personalizado precisa preservar.
+    set_period_extra_params(
+        request, {"departamento": departamento_id, "cohort": cohort}
+    )
+
     data = compute_qa_overview(
-        org, months=months, departamento_id=departamento_id, cohort=cohort
+        org,
+        start=period.start,
+        end=period.end,
+        departamento_id=departamento_id,
+        cohort=cohort,
     )
     return render(request, "dashboards/qa_supervisor.html", data)
 

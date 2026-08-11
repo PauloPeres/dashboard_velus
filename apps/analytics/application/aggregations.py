@@ -6813,6 +6813,9 @@ def _avg1(value: float | None) -> float | None:
 # Coortes de QA: o bot (Gi/Felipe) é avaliado SEPARADO das pessoas — a "sensação
 # de qualidade" do autoatendimento é outra coisa que a do atendimento humano.
 _QA_COHORTS = {"human": "Humanos", "bot": "Bot", "all": "Todos"}
+# Janela padrão quando a chamada não passa start/end (mesmo default do filtro
+# de período das páginas em dias — ver `apps.dashboards.period.DEFAULT_DAY_KEY`).
+_QA_DEFAULT_WINDOW_DAYS = 30
 
 
 def _qa_bot_q() -> Q:
@@ -6935,7 +6938,8 @@ def _qa_detail_stats(base: Any, worst_limit: int) -> dict[str, Any]:
 def compute_qa_overview(
     organization: Organization,
     *,
-    months: int = 3,
+    start: datetime | None = None,
+    end: datetime | None = None,
     departamento_id: int | None = None,
     cohort: str = "human",
     worst_limit: int = 20,
@@ -6952,17 +6956,25 @@ def compute_qa_overview(
     são medidas distintas. `cohort` ∈ {human, bot, all} escolhe o recorte do
     detalhamento; `cohorts_summary` traz sempre o headline das duas pra
     comparação lado a lado. Default = humanos (foco de coaching).
+
+    A janela é `start`/`end` (datetimes aware, ambos inclusivos) — o período
+    resolvido pelo filtro em dias da página (#100). Sem eles, os últimos
+    `_QA_DEFAULT_WINDOW_DAYS` dias.
     """
     from apps.atendimento.infrastructure.models import Departamento
 
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    window_end = end or now
+    window_start = start or (
+        (now - timedelta(days=_QA_DEFAULT_WINDOW_DAYS)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
     )
 
     base = QAReview.objects.filter(
         organization=organization,
         atendimento__opened_at__gte=window_start,
+        atendimento__opened_at__lte=window_end,
     )
     if departamento_id is not None:
         base = base.filter(atendimento__departamento_id=departamento_id)
