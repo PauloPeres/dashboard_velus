@@ -92,3 +92,45 @@ class TestExecutivo:
         i = body.index("MRR — ")
         titulo_mrr = body[i : body.index("</h2>", i)]
         assert _SELO not in titulo_mrr
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestFinanceiro:
+    """Inadimplência é estoque; recuperação é coorte de janela fixa."""
+
+    def test_blocos_de_estoque_e_de_coorte_ficam_marcados(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        body = client.get(reverse("dashboards:financial")).content.decode()
+        # 5 KPIs de estoque + aging + top 50 devedores.
+        assert body.count(_SELO) == 7
+        # Recovery rate e a curva de recuperação não são "agora": são uma coorte
+        # fixa de 12 meses, então o selo diz outra coisa.
+        assert body.count("janela fixa") == 3
+
+    def test_tooltip_explica_a_coorte_do_recovery(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        body = client.get(reverse("dashboards:financial")).content.decode()
+        assert "Coorte fixa dos últimos 12 meses" in body
+
+    def test_titulo_de_bloqueados_deixa_de_dizer_12_meses_fixo(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(f"{reverse('dashboards:financial')}?periodo=3m")
+        body = resp.content.decode()
+        assert f"Contratos bloqueados — {resp.context['period_label']}" in body
+        assert "evolução 12 meses" not in body
+
+    def test_graficos_que_seguem_o_filtro_nao_sao_marcados(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        body = client.get(reverse("dashboards:financial")).content.decode()
+        for titulo in ("Recebimentos mensais", "Inadimplência — por mês de vencimento"):
+            i = body.index(titulo)
+            assert _SELO not in body[i : body.index("</h2>", i)]
