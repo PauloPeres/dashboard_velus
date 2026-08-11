@@ -104,7 +104,7 @@ class TestComputeQaOverview:
     def test_kpis_and_atendente_scorecard(
         self, organization_a: Organization, seeded: dict[str, Any]
     ) -> None:
-        data = compute_qa_overview(organization_a, months=3)
+        data = compute_qa_overview(organization_a)
         assert data["total_reviews"] == 3
         # média (80+90+30)/3 ≈ 67
         assert data["avg_score"] == 67
@@ -121,7 +121,7 @@ class TestComputeQaOverview:
     def test_categorias_and_worst(
         self, organization_a: Organization, seeded: dict[str, Any]
     ) -> None:
-        data = compute_qa_overview(organization_a, months=3)
+        data = compute_qa_overview(organization_a)
         cats = {c["categoria"] for c in data["categorias"]}
         assert {"sem conexão", "lentidão", "cancelamento"} <= cats
         # Piores ordenadas por menor score → cancelamento (30) primeiro.
@@ -132,13 +132,13 @@ class TestComputeQaOverview:
         self, organization_a: Organization, seeded: dict[str, Any]
     ) -> None:
         data = compute_qa_overview(
-            organization_a, months=3, departamento_id=seeded["ouvidoria"].id
+            organization_a, departamento_id=seeded["ouvidoria"].id
         )
         assert data["total_reviews"] == 1
         assert data["by_atendente"][0]["atendente_nome"] == "Atendente João"
 
     def test_empty_org(self, organization_a: Organization) -> None:
-        data = compute_qa_overview(organization_a, months=3)
+        data = compute_qa_overview(organization_a)
         assert data["total_reviews"] == 0
         assert data["avg_score"] == 0
         assert data["by_atendente"] == []
@@ -171,7 +171,7 @@ class TestQaCohorts:
     def test_summary_splits_bot_and_human(
         self, organization_a: Organization, mixed: dict[str, Any]
     ) -> None:
-        data = compute_qa_overview(organization_a, months=3)
+        data = compute_qa_overview(organization_a)
         assert data["cohorts_summary"]["bot"]["n"] == 1
         assert data["cohorts_summary"]["human"]["n"] == 1
         assert data["cohorts_summary"]["bot"]["avg_score"] == 55
@@ -180,7 +180,7 @@ class TestQaCohorts:
     def test_default_cohort_excludes_bot(
         self, organization_a: Organization, mixed: dict[str, Any]
     ) -> None:
-        data = compute_qa_overview(organization_a, months=3)
+        data = compute_qa_overview(organization_a)
         assert data["selected_cohort"] == "human"
         assert data["total_reviews"] == 1
         nomes = [a["atendente_nome"] for a in data["by_atendente"]]
@@ -190,7 +190,7 @@ class TestQaCohorts:
     def test_bot_cohort_isolates_bot(
         self, organization_a: Organization, mixed: dict[str, Any]
     ) -> None:
-        data = compute_qa_overview(organization_a, months=3, cohort="bot")
+        data = compute_qa_overview(organization_a, cohort="bot")
         assert data["total_reviews"] == 1
         assert data["by_atendente"][0]["atendente_nome"] == "Felipe"
         assert data["by_atendente"][0]["is_bot"] is True
@@ -198,7 +198,7 @@ class TestQaCohorts:
     def test_all_cohort_includes_both(
         self, organization_a: Organization, mixed: dict[str, Any]
     ) -> None:
-        data = compute_qa_overview(organization_a, months=3, cohort="all")
+        data = compute_qa_overview(organization_a, cohort="all")
         assert data["total_reviews"] == 2
 
 
@@ -239,3 +239,67 @@ class TestQaBlockInDetail:
         assert resp.status_code == 200
         assert b"Avalia" in resp.content  # bloco "Avaliação da IA supervisora"
         assert b"Demonstrar mais empatia" in resp.content
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestPeriodoEmDias:
+    """Filtro de período em dias na página (#100), como em Tendências."""
+
+    URL = "/operations/qa/"
+
+    def test_barra_tem_presets_em_dias_e_personalizado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(self.URL)
+        assert resp.status_code == 200
+        html = resp.content.decode()
+        assert "setPeriodo('1d')" in html
+        assert "setPeriodo('ontem')" in html
+        assert 'name="de"' in html
+        assert 'name="ate"' in html
+        assert resp.context["period"].key == "30d"
+        assert resp.context["period_warning"] is None
+
+    def test_janela_corta_nos_dois_lados(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        sup = _departamento(organization_a, external_id="dep-p", nome="Suporte")
+        hoje = _atendimento(
+            organization_a, external_id="p-hoje", departamento=sup,
+            atendente_nome="Atendente Hoje", opened_offset_days=0,
+        )
+        _review(organization_a, hoje, overall_score=40)
+        ontem = _atendimento(
+            organization_a, external_id="p-ontem", departamento=sup,
+            atendente_external_id="ag-9", atendente_nome="Atendente Ontem",
+            opened_offset_days=1,
+        )
+        _review(organization_a, ontem, overall_score=90)
+
+        client.force_login(user_a)
+        resp = client.get(f"{self.URL}?periodo=ontem")
+        assert resp.context["period"].key == "ontem"
+        assert resp.context["total_reviews"] == 1
+        assert resp.context["by_atendente"][0]["atendente_nome"] == "Atendente Ontem"
+
+        resp = client.get(f"{self.URL}?periodo=1d")
+        assert resp.context["total_reviews"] == 1
+        assert resp.context["by_atendente"][0]["atendente_nome"] == "Atendente Hoje"
+
+    def test_cookie_atravessa_a_navegacao(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        client.get(f"{self.URL}?periodo=7d")
+        assert client.get(self.URL).context["period"].key == "7d"
+
+    def test_departamento_e_cohort_propagados_no_personalizado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        sup = _departamento(organization_a, external_id="dep-p2", nome="Suporte")
+        client.force_login(user_a)
+        html = client.get(f"{self.URL}?departamento={sup.id}&cohort=bot").content.decode()
+        assert f'name="departamento" value="{sup.id}"' in html
+        assert 'name="cohort" value="bot"' in html
