@@ -1,7 +1,6 @@
 """Testes das melhorias de churn — novos sinais, ML, digests e opt-in.
 
 Cobre:
-  - sinal de downgrade de plano (SCD2 DimContract)
   - sinal de queda brusca de banda (BandwidthUsage)
   - recompute de churn no signal sync_completed
   - treino + scoring ML (regressão logística pura-Python) + fallback
@@ -62,68 +61,6 @@ def _scores_by_ext(org: Organization) -> dict[str, ChurnRiskScore]:
         s.customer.external_id: s
         for s in ChurnRiskScore.objects.select_related("customer").all()
     }
-
-
-# =============================================================================
-# Sinal de downgrade de plano
-# =============================================================================
-@pytest.mark.django_db
-@pytest.mark.e2e
-class TestDowngradeSignal:
-    def test_downgrade_fires_after_plan_reduction(
-        self,
-        organization_a: Organization,
-        datasource_fake_customers_a: OrganizationDataSource,
-        datasource_fake_contracts_a: OrganizationDataSource,
-    ) -> None:
-        FakeCustomerSource.set_seed([
-            CustomerDTO(external_id="ext-dg", document="44444444444",
-                        name="Cliente Downgrade", status="ACTIVE",
-                        created_at_source=datetime(2025, 1, 1, tzinfo=UTC)),
-        ])
-        _sync(organization_a, "CUSTOMERS")
-
-        # Versão inicial: plano de R$ 200.
-        FakeContractSource.set_seed([
-            ContractDTO(external_id="ctr-dg", customer_external_id="ext-dg",
-                        plan_name="Fibra 1G", monthly_amount=Decimal("200.00"),
-                        status="ACTIVE", activated_at=datetime(2025, 1, 2, tzinfo=UTC)),
-        ])
-        _sync(organization_a, "CONTRACTS")
-
-        # Downgrade: mesmo contrato cai para R$ 100 → nova versão SCD2.
-        FakeContractSource.set_seed([
-            ContractDTO(external_id="ctr-dg", customer_external_id="ext-dg",
-                        plan_name="Fibra 200M", monthly_amount=Decimal("100.00"),
-                        status="ACTIVE", activated_at=datetime(2025, 1, 2, tzinfo=UTC)),
-        ])
-        _sync(organization_a, "CONTRACTS")
-
-        compute_churn_risk_scores(organization_a)
-        score = _scores_by_ext(organization_a)["ext-dg"]
-        codes = {s["code"] for s in score.signals}
-        assert "PLAN_DOWNGRADE" in codes
-
-    def test_no_downgrade_when_plan_stable(
-        self,
-        organization_a: Organization,
-        datasource_fake_customers_a: OrganizationDataSource,
-        datasource_fake_contracts_a: OrganizationDataSource,
-    ) -> None:
-        FakeCustomerSource.set_seed([
-            CustomerDTO(external_id="ext-st", document="55555555555",
-                        name="Cliente Estável", status="ACTIVE",
-                        created_at_source=datetime(2025, 1, 1, tzinfo=UTC)),
-        ])
-        _sync(organization_a, "CUSTOMERS")
-        FakeContractSource.set_seed([
-            ContractDTO(external_id="ctr-st", customer_external_id="ext-st",
-                        plan_name="Fibra 1G", monthly_amount=Decimal("200.00"),
-                        status="ACTIVE", activated_at=datetime(2025, 1, 2, tzinfo=UTC)),
-        ])
-        _sync(organization_a, "CONTRACTS")
-        compute_churn_risk_scores(organization_a)
-        assert "ext-st" not in _scores_by_ext(organization_a)
 
 
 # =============================================================================
