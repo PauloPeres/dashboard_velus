@@ -6133,6 +6133,9 @@ def atendimento_hora_esperado(
 
 
 _CONVERSAO_HORIZONTES = (30, 90, 180)
+# Janela padrão quando a chamada não passa start/end (mesmo default do filtro
+# de período das páginas em dias — ver `apps.dashboards.period.DEFAULT_DAY_KEY`).
+_CONVERSAO_DEFAULT_WINDOW_DAYS = 30
 _CONVERSAO_MIN_VOL = 30  # volume mínimo pra uma tag/motivo entrar no ranking de %
 
 
@@ -6150,7 +6153,8 @@ def _conversao_acc() -> dict[str, Any]:
 def compute_atendimento_conversao(
     organization: Organization,
     *,
-    months: int = 6,
+    start: datetime | None = None,
+    end: datetime | None = None,
     horizon_days: int = 90,
     departamento_id: int | None = None,
 ) -> dict[str, Any]:
@@ -6167,6 +6171,15 @@ def compute_atendimento_conversao(
     com um cliente do IXC). Limitações: prospect novo que ainda não é cliente
     não vincula (conversão dele fica invisível); canal é sempre whatsapp aqui,
     então o recorte "de canal" vem das tags/motivos.
+
+    A janela é `start`/`end` (datetimes aware, ambos inclusivos) — o período
+    resolvido pelo filtro em dias da página (#100). Sem eles, os últimos
+    `_CONVERSAO_DEFAULT_WINDOW_DAYS` dias.
+
+    **`horizon_pending`** conta os atendimentos da janela que ainda não
+    completaram `horizon_days` de observação. Numa janela curta (Hoje, 7 dias)
+    isso é quase 100%: as taxas de churn/conversão saem subestimadas porque o
+    desfecho ainda não teve tempo de acontecer. A página avisa — ver #100.
     """
     from apps.atendimento.infrastructure.models import Atendimento, Departamento
     from apps.customers.infrastructure.models import Contract
@@ -6176,13 +6189,17 @@ def compute_atendimento_conversao(
     horizon = timedelta(days=horizon_days)
 
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    window_end = end or now
+    window_start = start or (
+        (now - timedelta(days=_CONVERSAO_DEFAULT_WINDOW_DAYS)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
     )
 
     qs = Atendimento.objects.filter(
         organization=organization,
         opened_at__gte=window_start,
+        opened_at__lte=window_end,
         opened_at__isnull=False,
         customer__isnull=False,
     )
@@ -6212,18 +6229,23 @@ def compute_atendimento_conversao(
     total_linked = 0
     churn_total = 0
     conv_total = 0
+    horizon_pending = 0
 
     for at in qs.values("customer_id", "opened_at", "tags", "motivos").iterator(
         chunk_size=2000
     ):
         cid = at["customer_id"]
         opened = at["opened_at"]
-        end = opened + horizon
+        horizon_end = opened + horizon
+        if horizon_end > now:
+            horizon_pending += 1
         churn_contracts = [
-            kid for dt, kid in cust_cancels.get(cid, ()) if opened < dt <= end
+            kid for dt, kid in cust_cancels.get(cid, ()) if opened < dt <= horizon_end
         ]
         conv_contracts = [
-            kid for dt, kid in cust_activations.get(cid, ()) if opened < dt <= end
+            kid
+            for dt, kid in cust_activations.get(cid, ())
+            if opened < dt <= horizon_end
         ]
         churned = bool(churn_contracts)
         converted = bool(conv_contracts)
@@ -6296,8 +6318,11 @@ def compute_atendimento_conversao(
         )
 
     return {
-        "months": months,
         "horizon_days": horizon_days,
+        "horizon_pending": horizon_pending,
+        "horizon_pending_pct": round(horizon_pending / total_linked * 100)
+        if total_linked
+        else 0,
         "total_linked": total_linked,
         "churn_total": churn_total,
         "conv_total": conv_total,

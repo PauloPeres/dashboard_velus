@@ -1,0 +1,13 @@
+{% comment %}
+Nota de escopo do período (#100).
+
+Usar sempre que um bloco NÃO responde ao filtro de período, ou responde só em
+parte — o badge no topo diz "Últimos 7 dias" e o usuário merece saber quando o
+número embaixo não está olhando isso. Recebe a mensagem via `{% include ... with texto="…" %}`.
+{% endcomment %}
+<div class="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 mb-5 text-xs">
+  <svg class="w-4 h-4 shrink-0 mt-px" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+  </svg>
+  <span>{{ texto }}</span>
+</div>
