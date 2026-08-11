@@ -27,10 +27,6 @@ COMMERCIAL = "COMMERCIAL"  # venda / upgrade / mudança de plano
 ADMIN = "ADMIN"            # titularidade / portabilidade / cadastro / vencimento
 OTHER = "OTHER"            # não classificado
 
-# Categorias que indicam insatisfação recorrente com o serviço — as únicas que
-# contam pro sinal de "chamados frequentes" do churn.
-CHURN_RELEVANT_CATEGORIES = frozenset({SUPPORT})
-
 # Rótulos legíveis por categoria — usados nos cards de SLA por tipo (#34).
 CATEGORY_LABELS: dict[str, str] = {
     SUPPORT: "Manutenção",
@@ -125,19 +121,3 @@ def classify_subject(name: str | None) -> str:
         if any(kw in norm for kw in keywords):
             return category
     return OTHER
-
-
-def churn_relevant_subject_ids(subject_map: dict[str, str]) -> set[str] | None:
-    """IDs de assunto que contam pro sinal de chamados frequentes do churn.
-
-    Retorna `None` quando o mapa está vazio (org sem lookups sincronizados),
-    sinalizando ao chamador que deve usar o comportamento antigo (contar todos
-    os chamados) — fallback gracioso pra não suprimir o sinal por falta de dados.
-    """
-    if not subject_map:
-        return None
-    return {
-        sid
-        for sid, name in subject_map.items()
-        if classify_subject(name) in CHURN_RELEVANT_CATEGORIES
-    }

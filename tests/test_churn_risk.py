@@ -228,31 +228,39 @@ def _set_subject_map(org: Organization, subject_map: dict[str, str]) -> None:
 
 @pytest.mark.django_db
 @pytest.mark.e2e
-class TestFrequentTicketsByType:
-    def test_routine_subject_does_not_fire_signal(
+class TestFrequentTickets:
+    """Todo assunto conta (#124).
+
+    Havia aqui um recorte por categoria: só chamado de SUPPORT acendia o sinal,
+    na hipótese de que instalação, equipamento e financeiro eram rotina. Medido
+    em produção em duas janelas de 120 dias, o recorte ficou ABAIXO do acaso
+    (lift 0,48× e 0,57×) — cliente que abre chamado técnico cancela MENOS que a
+    base. Contando tudo, o sinal fica em 2,06× e 1,57×.
+    """
+
+    def test_qualquer_assunto_acende_o_sinal(
         self, churn_scenario: Organization
     ) -> None:
-        # Os 3 chamados do ext-high têm subject_id="1". Classificado como
-        # instalação (rotina) → não conta como chamado de suporte.
+        # Os 3 chamados do ext-high têm subject_id="1" — antes classificado
+        # como instalação e descartado.
         _set_subject_map(churn_scenario, {"1": "Nova Instalação"})
         compute_churn_risk_scores(churn_scenario)
         score = _scores_by_external_id(churn_scenario)["ext-high"]
-        assert _signal_codes(score) == {"LATE_PAYMENTS", "OFFLINE"}
-        assert score.score == 40  # 25 + 15 (sem os 20 de chamados)
+        assert "FREQUENT_TICKETS" in _signal_codes(score)
+        assert score.score == 60  # 25 + 20 + 15
 
-    def test_support_subject_fires_signal(
+    def test_assunto_de_suporte_tambem(
         self, churn_scenario: Organization
     ) -> None:
         _set_subject_map(churn_scenario, {"1": "Manutenção Técnica"})
         compute_churn_risk_scores(churn_scenario)
         score = _scores_by_external_id(churn_scenario)["ext-high"]
         assert "FREQUENT_TICKETS" in _signal_codes(score)
-        assert score.score == 60  # 25 + 20 + 15
+        assert score.score == 60
 
-    def test_no_lookups_counts_all_tickets(
+    def test_sem_lookups_continua_contando(
         self, churn_scenario: Organization
     ) -> None:
-        # Sem OsLookupCache: fallback conta todos os chamados (comportamento antigo).
         compute_churn_risk_scores(churn_scenario)
         score = _scores_by_external_id(churn_scenario)["ext-high"]
         assert "FREQUENT_TICKETS" in _signal_codes(score)

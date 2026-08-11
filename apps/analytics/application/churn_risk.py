@@ -36,8 +36,6 @@ from apps.analytics.infrastructure.models import (
     FactChurnRiskDaily,
     FactContractStatusDaily,
 )
-from apps.helpdesk.application.os_classification import churn_relevant_subject_ids
-from apps.helpdesk.application.os_lookups import load_os_lookups
 from apps.shared.decorators import allow_cross_tenant
 from apps.tenancy.models import Organization
 
@@ -161,22 +159,27 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
             "weight": W_LATE_PAYMENTS,
         })
 
-    # ── Sinal 3: chamados de suporte frequentes (≥ 3 nos últimos 30 dias) ─
-    # Conta só chamados que indicam insatisfação com o serviço (problema
-    # técnico/rede/suporte). Instalação, troca de equipamento, financeiro e
-    # titularidade são rotina e não sinalizam churn — antes inflavam o número.
+    # ── Sinal 3: chamados frequentes (≥ 3 nos últimos 30 dias) ──────────
+    # Conta TODOS os assuntos (#124). A versão anterior restringia à categoria
+    # SUPPORT, na hipótese de que só chamado técnico sinaliza insatisfação e
+    # que instalação/equipamento/financeiro seriam rotina.
+    #
+    # Medido em produção, a hipótese estava errada — e invertida. Em duas
+    # janelas independentes de 120 dias, o recorte SUPPORT ficou ABAIXO do
+    # acaso (lift 0,48× e 0,57×): o cliente que abre chamado técnico cancela
+    # MENOS que a base. Contando todos os assuntos, o sinal fica acima do acaso
+    # nas duas (2,06× e 1,57×) e cobre 12–14% dos cancelamentos, contra ~0%.
+    #
+    # Composições intermediárias (SUPPORT+EQUIPMENT+LIFECYCLE) chegaram a 5,3×
+    # numa janela e 1,1× na outra, com n≈30–50 — variação típica de amostra
+    # pequena. Escolher por causa do 5,3× seria escolher ruído; sem filtro é a
+    # única versão estável nas duas janelas, e a de maior cobertura.
     ticket_cutoff = now - timedelta(days=TICKETS_WINDOW_DAYS)
-    lookups = load_os_lookups(organization)
-    relevant_subject_ids = churn_relevant_subject_ids(lookups.subject_map)
-    ticket_qs = Ticket.objects.filter(
-        organization=organization, opened_at__gte=ticket_cutoff
-    )
-    if relevant_subject_ids is not None:
-        # Org com lookups sincronizados: restringe a assuntos de suporte.
-        ticket_qs = ticket_qs.filter(subject_id__in=relevant_subject_ids)
-    # Sem lookups (None): mantém comportamento antigo (conta todos) — fallback.
     ticket_rows = (
-        ticket_qs.values("customer_id")
+        Ticket.objects.filter(
+            organization=organization, opened_at__gte=ticket_cutoff
+        )
+        .values("customer_id")
         .annotate(n=Count("id"))
         .filter(n__gte=TICKETS_MIN)
     )
@@ -186,8 +189,8 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
             continue
         signals[cid].append({
             "code": "FREQUENT_TICKETS",
-            "label": "Chamados de suporte frequentes",
-            "detail": f"{row['n']} chamados de suporte nos últimos 30 dias",
+            "label": "Chamados frequentes",
+            "detail": f"{row['n']} chamados nos últimos 30 dias",
             "weight": W_FREQUENT_TICKETS,
         })
 
