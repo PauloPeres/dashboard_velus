@@ -17,7 +17,6 @@ from apps.helpdesk.application.os_classification import (
     LIFECYCLE,
     OTHER,
     SUPPORT,
-    churn_relevant_subject_ids,
     classify_subject,
 )
 
@@ -68,19 +67,3 @@ from apps.helpdesk.application.os_classification import (
 )
 def test_classify_subject(name: str, expected: str) -> None:
     assert classify_subject(name) == expected
-
-
-class TestChurnRelevantSubjectIds:
-    def test_empty_map_returns_none(self) -> None:
-        # Sem lookups → None sinaliza fallback (contar todos os chamados).
-        assert churn_relevant_subject_ids({}) is None
-
-    def test_filters_to_support_only(self) -> None:
-        subject_map = {
-            "1": "Nova Instalação",
-            "2": "Manutenção Técnica",
-            "55": "Cobrança",
-            "58": "Acesso ao Roteador",
-            "45": "Cancelamento",
-        }
-        assert churn_relevant_subject_ids(subject_map) == {"2", "58"}
