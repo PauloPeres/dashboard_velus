@@ -4165,14 +4165,27 @@ def compute_lead_origin(organization: Organization) -> list[dict[str, Any]]:
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_net_adds_series(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
+    granularity: str = time_buckets.AUTO,
 ) -> list[dict[str, Any]]:
-    """Série mensal de net adds = contratos ativados - cancelados no mês.
+    """Net adds por bucket = contratos ativados - cancelados no período.
 
     Net adds positivo = base crescendo; negativo = base encolhendo. Usa
     `activated_at` (gross adds) e `canceled_at` (gross churn) do contrato.
+
+    Dois modos (#100): o legado `months=N` e a janela livre `start`/`end`, que
+    rende o eixo completo por dia/semana/mês. Aqui net adds é FLUXO (soma de
+    eventos do intervalo), então o bucket soma — ao contrário do estoque de
+    contratos ativos, que é snapshot.
     """
     from apps.customers.infrastructure.models import Contract
+
+    if start is not None and end is not None:
+        return _net_adds_por_bucket(organization, start, end, granularity)
 
     today = timezone.now().date()
     series: list[dict[str, Any]] = []
@@ -4200,6 +4213,51 @@ def compute_net_adds_series(
             "net": adds - churn,
         })
     return series
+
+
+def _net_adds_por_bucket(
+    organization: Organization,
+    start: date_cls,
+    end: date_cls,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    """Modo janela livre — duas queries por data, dobradas nos buckets."""
+    from apps.customers.infrastructure.models import Contract
+
+    gran = time_buckets.resolve_granularity(start, end, granularity)
+    buckets = time_buckets.build_buckets(start, end, gran)
+    pos = {b.start: i for i, b in enumerate(buckets)}
+
+    adds = [0] * len(buckets)
+    churn = [0] * len(buckets)
+    for campo, destino in (("activated_at", adds), ("canceled_at", churn)):
+        rows = (
+            Contract.objects.filter(
+                organization=organization,
+                **{f"{campo}__date__gte": start, f"{campo}__date__lte": end},
+            )
+            .annotate(dia=TruncDate(campo))
+            .values("dia")
+            .annotate(count=Count("id"))
+        )
+        for row in rows:
+            if row["dia"] is None:
+                continue
+            i = pos.get(time_buckets.bucket_start(row["dia"], gran))
+            if i is not None:
+                destino[i] += row["count"]
+
+    return [
+        {
+            "month": b.key,
+            "bucket": b.key,
+            "label": b.label,
+            "adds": adds[i],
+            "churn": churn[i],
+            "net": adds[i] - churn[i],
+        }
+        for i, b in enumerate(buckets)
+    ]
 
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
