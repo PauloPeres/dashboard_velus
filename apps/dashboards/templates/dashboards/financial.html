@@ -58,7 +58,7 @@
 
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-1">
-      <h2 class="text-sm font-semibold text-gray-700">Inadimplência — por mês de vencimento</h2>
+      <h2 class="text-sm font-semibold text-gray-700">Inadimplência — por vencimento ({{ serie_granularidade }})</h2>
     </div>
     <p class="text-xs text-gray-400 mb-3">Valor em aberto por coorte de vencimento, separando principal (MRR) de multa/juros — barras altas à direita indicam crescimento de novos inadimplentes</p>
     <div id="delinquency-trend-chart" style="height:280px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
@@ -84,14 +84,14 @@
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-4">
-      <h2 class="text-sm font-semibold text-gray-700">Recebimentos mensais</h2>
+      <h2 class="text-sm font-semibold text-gray-700">Recebimentos — {{ period_label }}</h2>
     </div>
     <div id="cash-chart" style="height:260px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
   </div>
 
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
     <div class="flex items-baseline justify-between mb-1">
-      <h2 class="text-sm font-semibold text-gray-700">Contratos bloqueados — {{ period_label }}</h2>
+      <h2 class="text-sm font-semibold text-gray-700">Contratos bloqueados — {{ period_label }} ({{ serie_granularidade }})</h2>
     </div>
     <p class="text-xs text-gray-400 mb-3">Crescimento de bloqueados = inadimplência convertendo em risco operacional · <a href="{% url 'dashboards:contracts' %}" class="text-blue-600 hover:underline">Ver detalhe por contrato →</a></p>
     <div id="blocked-chart" style="height:260px;" class="animate-pulse bg-gray-50 rounded-lg"></div>

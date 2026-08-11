@@ -131,7 +131,9 @@ class TestFinanceiro:
     ) -> None:
         client.force_login(user_a)
         body = client.get(reverse("dashboards:financial")).content.decode()
-        for titulo in ("Recebimentos mensais", "Inadimplência — por mês de vencimento"):
+        # Os títulos deixaram de ser "mensais" na Fase 2 — as duas séries agora
+        # acompanham a janela e a granularidade dela.
+        for titulo in ("Recebimentos — ", "Inadimplência — por vencimento"):
             i = body.index(titulo)
             assert _SELO not in body[i : body.index("</h2>", i)]
 

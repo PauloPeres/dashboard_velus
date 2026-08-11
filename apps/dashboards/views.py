@@ -92,6 +92,7 @@ from apps.analytics.application.aggregations import (
     iter_atendimento_lista_rows,
     search_customers,
 )
+from apps.analytics.application import time_buckets
 from apps.analytics.application.cto_snapshots import compute_cto_history
 from apps.analytics.application.network_snapshots import compute_network_history
 from apps.shared.context import get_current_organization
@@ -483,14 +484,24 @@ def financial(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100, Fase 2): as três séries desta página (recebimentos,
+    # inadimplência por vencimento e contratos bloqueados) sabem trabalhar em
+    # dia/semana/mês, então a página deixa de ser presa a meses fechados. Os KPIs
+    # de estoque e a recuperação seguem fora do filtro — e dizem isso na tela.
+    period = _get_period(request)
 
     kpis = compute_kpis(org)
     aging = compute_aging_distribution(org)
     top_delinquent = compute_top_delinquent_invoices(org, limit=50)
-    cash_series = compute_cash_received_series(org, months=months)
-    delinquency_trend = compute_delinquency_trend(org, months=months)
-    status_trend = compute_contract_status_trend(org, months=months)
+    cash_series = compute_cash_received_series(
+        org, start=period.start_date, end=period.end_date
+    )
+    delinquency_trend = compute_delinquency_trend(
+        org, start=period.start_date, end=period.end_date
+    )
+    status_trend = compute_contract_status_trend(
+        org, start=period.start_date, end=period.end_date
+    )
     recovery = compute_recovery_rate(org)
 
     # KPI cards extras
@@ -542,6 +553,9 @@ def financial(request: HttpRequest) -> HttpResponse:
             "cash_chart_json": charts.cash_received_chart(cash_series),
             "blocked_series_json": charts.blocked_trend_line(blocked_series),
             "recovery_chart_json": charts.recovery_by_aging_chart(recovery["by_aging"]),
+            "serie_granularidade": time_buckets.GRANULARITY_LABELS[
+                time_buckets.series_granularity(period.start_date, period.end_date)
+            ],
         },
     )
 
