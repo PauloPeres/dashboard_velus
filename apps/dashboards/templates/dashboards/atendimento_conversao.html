@@ -37,6 +37,10 @@
   {% if selected_departamento_nome %}<span class="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">Departamento: <strong>{{ selected_departamento_nome }}</strong></span>{% endif %}
 </div>
 
+{% if periodo_nota %}
+{% include "dashboards/_nota_periodo.html" with texto=periodo_nota %}
+{% endif %}
+
 <!-- KPIs -->
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">

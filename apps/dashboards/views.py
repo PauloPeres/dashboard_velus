@@ -2018,7 +2018,8 @@ def atendimento_conversao(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100): página de atendimento, mesmos presets de Tendências.
+    period = _get_period(request)
 
     try:
         horizon_days = int(request.GET.get("h", 90))
@@ -2032,8 +2033,17 @@ def atendimento_conversao(request: HttpRequest) -> HttpResponse:
     if raw_dep.isdigit():
         departamento_id = int(raw_dep)
 
+    # Recorte da página que o form de período personalizado precisa preservar.
+    set_period_extra_params(
+        request, {"h": horizon_days, "departamento": departamento_id}
+    )
+
     data = compute_atendimento_conversao(
-        org, months=months, horizon_days=horizon_days, departamento_id=departamento_id
+        org,
+        start=period.start,
+        end=period.end,
+        horizon_days=horizon_days,
+        departamento_id=departamento_id,
     )
 
     tabelas = [
@@ -2041,12 +2051,27 @@ def atendimento_conversao(request: HttpRequest) -> HttpResponse:
         {"titulo": "motivo", "rows": data["by_motivo"][:30]},
     ]
 
+    # Indicador de escopo (#100): esta página olha PRA FRENTE depois da conversa,
+    # então numa janela curta o desfecho ainda não teve tempo de acontecer e as
+    # taxas saem subestimadas. Dizer isso é melhor do que esconder a página.
+    periodo_nota = ""
+    if data["horizon_pending"]:
+        periodo_nota = (
+            f"Janela de desfecho ainda aberta: {data['horizon_pending_pct']}% das "
+            f"conversas do período ({data['horizon_pending']} de "
+            f"{data['total_linked']}) ainda não completaram os "
+            f"{horizon_days} dias de observação. As taxas abaixo tendem a "
+            "subestimar churn e conversão — quanto mais curto o período "
+            "escolhido, maior o efeito."
+        )
+
     return render(
         request,
         "dashboards/atendimento_conversao.html",
         {
             **data,
             "tabelas": tabelas,
+            "periodo_nota": periodo_nota,
             "churn_tags_json": charts.atendimento_conversao_bars(
                 data["top_churn_tags"], field="churn_pct", color="#ef4444"
             ),
@@ -2151,7 +2176,8 @@ def qa_supervisor(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100): página de atendimento, mesmos presets de Tendências.
+    period = _get_period(request)
 
     departamento_id: int | None = None
     raw_dep = request.GET.get("departamento", "")
@@ -2162,8 +2188,17 @@ def qa_supervisor(request: HttpRequest) -> HttpResponse:
     if cohort not in ("human", "bot", "all"):
         cohort = "human"
 
+    # Recorte da página que o form de período personalizado precisa preservar.
+    set_period_extra_params(
+        request, {"departamento": departamento_id, "cohort": cohort}
+    )
+
     data = compute_qa_overview(
-        org, months=months, departamento_id=departamento_id, cohort=cohort
+        org,
+        start=period.start,
+        end=period.end,
+        departamento_id=departamento_id,
+        cohort=cohort,
     )
     return render(request, "dashboards/qa_supervisor.html", data)
 
