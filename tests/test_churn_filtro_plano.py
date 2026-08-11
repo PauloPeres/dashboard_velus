@@ -86,11 +86,11 @@ def base(organization_a: Organization) -> dict[str, Any]:
 
     premium_cancelado = _contrato(
         organization_a, plano="Premium", mrr="300",
-        status="CANCELED", cancelado_dias=1, motivo="1",
+        status="CANCELED", cancelado_dias=1, motivo="6",  # inadimplência (controlável)
     )
     basico_cancelado = _contrato(
         organization_a, plano="Básico", mrr="80",
-        status="CANCELED", cancelado_dias=1, motivo="2",
+        status="CANCELED", cancelado_dias=1, motivo="9",  # cobertura (não controlável)
     )
     # Base ativa no início do mês: 2 de cada plano (denominador da taxa).
     for plano in ("Premium", "Básico"):
@@ -222,3 +222,133 @@ class TestPaginaChurn:
         client.force_login(user_a)
         body = client.get(reverse("dashboards:churn")).content.decode()
         assert body.count("posição de agora") == 6
+
+
+@pytest.mark.django_db
+class TestFiltroPorMotivo:
+    """Motivo e controlável recortam SÓ o numerador — e isso muda a métrica."""
+
+    def test_motivo_recorta_os_cancelados(
+        self, organization_a: Organization, base: dict[str, Any]
+    ) -> None:
+        # Motivo "6" é o do Premium; "9" é o do Básico (ver fixture).
+        resumo = compute_churn_summary(organization_a, motivo="6")
+        assert resumo["logo_churn_this_month"] == 1
+        assert resumo["mrr_lost_this_month"] == 300.0
+
+    def test_controlavel_agrupa_por_classificacao(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.analytics.application.aggregations import (
+            CONTROLAVEL_NAO,
+            CONTROLAVEL_SIM,
+            motivos_por_controle,
+        )
+
+        # "6" (inadimplência) é controlável; "9" (fora de cobertura) não é.
+        assert "6" in motivos_por_controle(True)
+        assert "9" in motivos_por_controle(False)
+
+        _contrato(
+            organization_a, plano="Premium", mrr="100",
+            status="CANCELED", cancelado_dias=1, motivo="6",
+        )
+        _contrato(
+            organization_a, plano="Premium", mrr="200",
+            status="CANCELED", cancelado_dias=1, motivo="9",
+        )
+        assert compute_churn_summary(organization_a, controlavel=CONTROLAVEL_SIM)[
+            "mrr_lost_this_month"
+        ] == 100.0
+        assert compute_churn_summary(organization_a, controlavel=CONTROLAVEL_NAO)[
+            "mrr_lost_this_month"
+        ] == 200.0
+
+    def test_denominador_nao_e_recortado_por_motivo(
+        self, organization_a: Organization, base: dict[str, Any]
+    ) -> None:
+        """O ponto da ressalva: a base fica inteira, então o % vira contribuição.
+
+        1 cancelado do motivo "1" ÷ 4 ativos da base toda = 25%. Não é a taxa de
+        churn daquele motivo — é a contribuição dele. A página avisa.
+        """
+        assert compute_churn_summary(organization_a, motivo="6")[
+            "logo_churn_pct"
+        ] == 25.0
+
+    def test_motivo_combina_com_plano(
+        self, organization_a: Organization, base: dict[str, Any]
+    ) -> None:
+        # Motivo do Premium + plano Básico → nada.
+        resumo = compute_churn_summary(organization_a, plano="Básico", motivo="6")
+        assert resumo["logo_churn_this_month"] == 0
+
+    def test_serie_e_ltv_seguem_o_motivo(
+        self, organization_a: Organization, base: dict[str, Any]
+    ) -> None:
+        série = compute_mrr_churn_series(organization_a, months=3, motivo="9")
+        assert sum(p["mrr_lost"] for p in série) == 80.0
+        dist = compute_ltv_distribution(organization_a, motivo="9")
+        assert sum(b["count"] for b in dist) == 1
+
+    def test_pareto_de_motivos_nao_aceita_motivo_unico(
+        self, organization_a: Organization, base: dict[str, Any]
+    ) -> None:
+        """Filtrar o Pareto por um motivo deixaria uma barra só — a view não passa.
+
+        O corte por controlabilidade, sim: ele agrupa em vez de colapsar.
+        """
+        import inspect
+
+        sig = inspect.signature(compute_churn_by_reason)
+        assert "motivo" not in sig.parameters
+        assert "controlavel" in sig.parameters
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestPaginaChurnMotivo:
+    def test_nota_de_semantica_aparece_com_recorte_de_motivo(
+        self, client: Any, user_a: User, base: dict[str, Any]
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(f"{URL}?motivo=6")
+        assert resp.context["nota_numerador"] is True
+        body = resp.content.decode()
+        assert "só os CANCELADOS foram filtrados" in body
+        assert "contribui pro churn total" in body
+
+    def test_sem_recorte_de_motivo_nao_tem_nota(
+        self, client: Any, user_a: User, base: dict[str, Any]
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(f"{URL}?plano=Premium")
+        assert resp.context["nota_numerador"] is False
+        assert "só os CANCELADOS foram filtrados" not in resp.content.decode()
+
+    def test_motivo_especifico_vence_o_corte_por_controlabilidade(
+        self, client: Any, user_a: User, base: dict[str, Any]
+    ) -> None:
+        """Pedir os dois é redundante — o específico manda."""
+        client.force_login(user_a)
+        resp = client.get(f"{URL}?motivo=6&controlavel=sim")
+        assert resp.context["motivo_selecionado"] == "6"
+        assert resp.context["controlavel_selecionado"] is None
+
+    def test_valores_invalidos_sao_ignorados(
+        self, client: Any, user_a: User, base: dict[str, Any]
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(f"{URL}?motivo=banana&controlavel=talvez")
+        assert resp.status_code == 200
+        assert resp.context["motivo_selecionado"] is None
+        assert resp.context["controlavel_selecionado"] is None
+        assert resp.context["nota_numerador"] is False
+
+    def test_os_tres_filtros_aparecem_na_faixa(
+        self, client: Any, user_a: User, base: dict[str, Any]
+    ) -> None:
+        client.force_login(user_a)
+        body = client.get(f"{URL}?plano=Premium&controlavel=sim").content.decode()
+        assert "Plano:" in body
+        assert "Só churn controlável" in body

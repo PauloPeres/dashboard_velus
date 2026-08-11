@@ -28,6 +28,8 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
 from apps.analytics.application.aggregations import (
+    CONTROLAVEL_NAO,
+    CONTROLAVEL_SIM,
     atendimento_hora_esperado,
     atendimento_lista_queryset,
     compute_aging_distribution,
@@ -89,6 +91,8 @@ from apps.analytics.application.aggregations import (
     compute_support_sla,
     compute_top_delinquent_invoices,
     compute_top_risk_customers,
+    motivo_label,
+    motivos_catalogo,
     iter_atendimento_lista_rows,
     search_customers,
 )
@@ -1014,12 +1018,40 @@ def churn(request: HttpRequest) -> HttpResponse:
     plano = request.GET.get("plano", "").strip() or None
     if plano not in planos:
         plano = None
-    set_period_extra_params(request, {"plano": plano})
 
-    summary = compute_churn_summary(org, plano=plano)
-    mrr_series = compute_mrr_churn_series(org, months=months, plano=plano)
-    reasons = compute_churn_by_reason(org, months=months, plano=plano)
-    ltv_dist = compute_ltv_distribution(org, plano=plano)
+    # Motivo e controlável (#117): ao contrário do plano, estes recortam só o
+    # NUMERADOR — contrato ativo não tem motivo de cancelamento. Com um deles
+    # ligado, o churn % vira "contribuição do recorte", e a página diz isso.
+    motivos_disponiveis = motivos_catalogo()
+    motivo = request.GET.get("motivo", "").strip() or None
+    if motivo not in {m["id"] for m in motivos_disponiveis}:
+        motivo = None
+    controlavel = request.GET.get("controlavel", "").strip() or None
+    if controlavel not in (CONTROLAVEL_SIM, CONTROLAVEL_NAO):
+        controlavel = None
+    # Motivo específico vence o corte por controlabilidade — pedir os dois é
+    # redundante, e o específico é o mais explícito dos dois.
+    if motivo:
+        controlavel = None
+
+    set_period_extra_params(
+        request, {"plano": plano, "motivo": motivo, "controlavel": controlavel}
+    )
+
+    summary = compute_churn_summary(
+        org, plano=plano, motivo=motivo, controlavel=controlavel
+    )
+    mrr_series = compute_mrr_churn_series(
+        org, months=months, plano=plano, motivo=motivo, controlavel=controlavel
+    )
+    # O Pareto de motivos não aceita `motivo`: filtrar por um motivo deixaria o
+    # gráfico com uma barra só. O corte por controlabilidade, sim — ele agrupa.
+    reasons = compute_churn_by_reason(
+        org, months=months, plano=plano, controlavel=controlavel
+    )
+    ltv_dist = compute_ltv_distribution(
+        org, plano=plano, motivo=motivo, controlavel=controlavel
+    )
     # A tabela por plano é o NAVEGADOR do filtro — se ela também filtrasse,
     # colapsaria numa linha e você perderia a comparação que usa pra escolher.
     plan_detail = compute_churn_plan_detail(org, months=months)
@@ -1060,6 +1092,14 @@ def churn(request: HttpRequest) -> HttpResponse:
             "summary": summary,
             "planos": planos,
             "plano_selecionado": plano,
+            "motivos_disponiveis": motivos_disponiveis,
+            "motivo_selecionado": motivo,
+            "controlavel_selecionado": controlavel,
+            "motivo_label_selecionado": motivo_label(motivo) if motivo else None,
+            # A nota de semântica: com recorte por motivo, o churn % deixa de
+            # ser taxa e vira contribuição, e os KPIs de recuperação não se
+            # recortam (ativação não tem motivo).
+            "nota_numerador": bool(motivo or controlavel),
             "plan_detail": plan_detail_display,
             "overall_rate": overall_rate,
             "reasons": reasons,
