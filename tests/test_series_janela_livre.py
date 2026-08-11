@@ -399,3 +399,126 @@ class TestPaginaVendas:
         """A Fase 2 não pode ter desfeito a Fase 3."""
         client.force_login(user_a)
         assert client.get(self.URL).content.decode().count("posição de agora") == 6
+
+
+@pytest.mark.django_db
+class TestFluxoDeCaixa:
+    """Receita e despesa no mesmo eixo — o zip strict é a garantia disso."""
+
+    def _despesa(self, org: Organization, *, valor: str, quando: date) -> None:
+        global _seq
+        _seq += 1
+        set_current_organization(org)
+        from apps.analytics.infrastructure.models import FactExpense
+        from apps.financial.infrastructure.models import Expense
+
+        despesa = Expense.objects.create(
+            organization=org,
+            source_type="FAKE",
+            external_id=f"fc-exp-{_seq}",
+            amount=Decimal(valor),
+            due_date=quando,
+            paid_at=quando,
+            status="PAID",
+            supplier_name="Fornecedor Teste",
+        )
+        FactExpense.objects.create(
+            organization=org,
+            expense=despesa,
+            expense_date=quando,
+            due_date=quando,
+            amount=Decimal(valor),
+            status="PAID",
+        )
+
+    def test_modo_legado_intacto(self, organization_a: Organization) -> None:
+        from apps.analytics.application.aggregations import compute_expense_series
+
+        self._despesa(organization_a, valor="70", quando=_hoje() - timedelta(days=40))
+        série = compute_expense_series(organization_a, months=12)
+        assert len(série) == 1
+        assert set(série[0]) == {"month", "label", "expenses", "count"}
+
+    def test_receita_e_despesa_ficam_no_mesmo_eixo(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.analytics.application.aggregations import compute_cashflow_series
+
+        hoje = _hoje()
+        # Receita num dia, despesa em OUTRO: o eixo precisa conter os dois, cada
+        # um no seu bucket — e não colapsar num ponto só.
+        _invoice(
+            organization_a, amount="300", due=hoje - timedelta(days=5),
+            status="PAID", paid_date=hoje - timedelta(days=5),
+        )
+        self._despesa(organization_a, valor="100", quando=hoje - timedelta(days=2))
+
+        série = compute_cashflow_series(
+            organization_a, start=hoje - timedelta(days=6), end=hoje
+        )
+        assert len(série) == 7
+        assert sum(p["revenue"] for p in série) == 300.0
+        assert sum(p["expenses"] for p in série) == 100.0
+        # Nenhum bucket tem receita e despesa juntas — elas caíram em dias
+        # diferentes e o eixo respeitou isso.
+        assert not [p for p in série if p["revenue"] and p["expenses"]]
+        assert série[-1]["cumulative_net"] == 200.0
+
+    def test_acumulado_e_monotonico_no_eixo(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.analytics.application.aggregations import compute_cashflow_series
+
+        hoje = _hoje()
+        _invoice(
+            organization_a, amount="10", due=hoje - timedelta(days=3),
+            status="PAID", paid_date=hoje - timedelta(days=3),
+        )
+        _invoice(
+            organization_a, amount="20", due=hoje - timedelta(days=1),
+            status="PAID", paid_date=hoje - timedelta(days=1),
+        )
+        série = compute_cashflow_series(
+            organization_a, start=hoje - timedelta(days=4), end=hoje
+        )
+        acumulados = [p["cumulative_net"] for p in série]
+        assert acumulados == sorted(acumulados)
+        assert acumulados[-1] == 30.0
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestPaginaFluxoDeCaixa:
+    URL = "/financial/cashflow/"
+
+    def test_barra_tem_presets_em_dias(
+        self, client: Any, user_a: Any, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(self.URL)
+        assert resp.status_code == 200
+        html = resp.content.decode()
+        assert "setPeriodo('1d')" in html
+        assert 'name="de"' in html
+        assert resp.context["period"].key == "30d"
+        assert resp.context["period_warning"] is None
+
+    def test_kpi_do_ultimo_bucket_deixa_de_dizer_mes(
+        self, client: Any, user_a: Any, organization_a: Organization
+    ) -> None:
+        """Com janela em dias, "Receita (último mês)" era mentira."""
+        client.force_login(user_a)
+        body = client.get(f"{self.URL}?periodo=7d").content.decode()
+        assert "último mês" not in body
+        assert "Receita (" in body
+
+    def test_serie_muda_de_granularidade_com_a_janela(
+        self, client: Any, user_a: Any, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        assert client.get(f"{self.URL}?periodo=7d").context[
+            "serie_granularidade"
+        ] == "dia a dia"
+        assert client.get(f"{self.URL}?periodo=12m").context[
+            "serie_granularidade"
+        ] == "mês a mês"

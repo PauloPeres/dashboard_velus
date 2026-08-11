@@ -935,9 +935,21 @@ def compute_avulsas_billed_series(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_expense_series(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
+    granularity: str = time_buckets.AUTO,
 ) -> list[dict[str, Any]]:
-    """Despesas pagas por mês (expense_date)."""
+    """Despesas pagas por bucket de tempo (expense_date).
+
+    Dois modos (#100): o legado `months=N` — do qual o Burn depende, e o Burn
+    é mensal por decisão — e a janela livre `start`/`end`.
+    """
+    if start is not None and end is not None:
+        return _expense_series_por_bucket(organization, start, end, granularity)
+
     today = timezone.now().date()
     cutoff = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
     by_month = (
@@ -962,6 +974,51 @@ def compute_expense_series(
             "count": row["count"],
         }
         for row in by_month
+    ]
+
+
+def _expense_series_por_bucket(
+    organization: Organization,
+    start: date_cls,
+    end: date_cls,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    """Modo janela livre — despesa paga é fluxo, então o bucket soma."""
+    gran = time_buckets.resolve_granularity(start, end, granularity)
+    buckets = time_buckets.build_buckets(start, end, gran)
+    pos = {b.start: i for i, b in enumerate(buckets)}
+
+    totals = [0.0] * len(buckets)
+    counts = [0] * len(buckets)
+    rows = (
+        FactExpense.objects.filter(
+            organization=organization,
+            status="PAID",
+            expense_date__gte=start,
+            expense_date__lte=end,
+        )
+        .values("expense_date")
+        .annotate(
+            total=Coalesce(Sum("amount"), _ZERO, output_field=DecimalField()),
+            count=Count("id"),
+        )
+    )
+    for row in rows:
+        i = pos.get(time_buckets.bucket_start(row["expense_date"], gran))
+        if i is None:
+            continue
+        totals[i] += float(row["total"])
+        counts[i] += row["count"]
+
+    return [
+        {
+            "month": b.key,
+            "bucket": b.key,
+            "label": b.label,
+            "expenses": totals[i],
+            "count": counts[i],
+        }
+        for i, b in enumerate(buckets)
     ]
 
 
@@ -1046,9 +1103,17 @@ def compute_programmed_expenses(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_cashflow_series(
-    organization: Organization, months: int = 12
+    organization: Organization,
+    months: int = 12,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
+    granularity: str = time_buckets.AUTO,
 ) -> list[dict[str, Any]]:
-    """Fluxo de caixa: receita recebida - despesas pagas por mês."""
+    """Fluxo de caixa: receita recebida - despesas pagas, por bucket de tempo."""
+    if start is not None and end is not None:
+        return _cashflow_por_bucket(organization, start, end, granularity)
+
     revenue_series = compute_cash_received_series(organization, months=months)
     expense_series = compute_expense_series(organization, months=months)
 
@@ -1090,9 +1155,55 @@ def compute_cashflow_series(
     return result
 
 
+def _cashflow_por_bucket(
+    organization: Organization,
+    start: date_cls,
+    end: date_cls,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    """Modo janela livre — receita e despesa no MESMO eixo, ponto a ponto.
+
+    A granularidade é resolvida aqui e repassada às duas séries: elas voltam com
+    exatamente os mesmos buckets, na mesma ordem. O `strict=True` do zip é a
+    checagem disso — se um dia os dois eixos divergirem, o teste estoura em vez
+    de somar despesa de um dia com receita de outro.
+    """
+    gran = time_buckets.resolve_granularity(start, end, granularity)
+    revenue_series = compute_cash_received_series(
+        organization, start=start, end=end, granularity=gran
+    )
+    expense_series = compute_expense_series(
+        organization, start=start, end=end, granularity=gran
+    )
+
+    result: list[dict[str, Any]] = []
+    cumulative = 0.0
+    for rev, exp in zip(revenue_series, expense_series, strict=True):
+        revenue = rev["amount"]
+        expenses = exp["expenses"]
+        net = revenue - expenses
+        cumulative += net
+        result.append(
+            {
+                "month": rev["month"],
+                "bucket": rev["bucket"],
+                "label": rev["label"],
+                "revenue": revenue,
+                "expenses": expenses,
+                "net": net,
+                "cumulative_net": cumulative,
+            }
+        )
+    return result
+
+
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_expense_by_supplier(
-    organization: Organization, months: int = 3
+    organization: Organization,
+    months: int = 3,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
 ) -> list[dict[str, Any]]:
     """Top fornecedores por despesa paga nos últimos N meses.
 
@@ -1103,14 +1214,17 @@ def compute_expense_by_supplier(
     """
     from apps.financial.infrastructure.models import Expense as ExpenseModel
 
-    today = timezone.now().date()
-    cutoff = _first_of_month_n_ago(today, months)
+    if start is not None and end is not None:
+        janela = {"paid_at__gte": start, "paid_at__lte": end}
+    else:
+        today = timezone.now().date()
+        janela = {"paid_at__gte": _first_of_month_n_ago(today, months)}
     qs = (
         ExpenseModel.objects.filter(
             organization=organization,
             status="PAID",
             paid_at__isnull=False,
-            paid_at__gte=cutoff,
+            **janela,
         )
         .exclude(supplier_name__startswith="Fornecedor #")
         .exclude(supplier_name="")
@@ -1133,7 +1247,11 @@ def compute_expense_by_supplier(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_expense_by_category(
-    organization: Organization, months: int = 3
+    organization: Organization,
+    months: int = 3,
+    *,
+    start: date_cls | None = None,
+    end: date_cls | None = None,
 ) -> list[dict[str, Any]]:
     """Distribuição de despesas pagas por categoria IXC (planejamento) nos últimos N meses.
 
@@ -1143,14 +1261,17 @@ def compute_expense_by_category(
     """
     from apps.financial.infrastructure.models import Expense as ExpenseModel
 
-    today = timezone.now().date()
-    cutoff = _first_of_month_n_ago(today, months)
+    if start is not None and end is not None:
+        janela = {"paid_at__gte": start, "paid_at__lte": end}
+    else:
+        today = timezone.now().date()
+        janela = {"paid_at__gte": _first_of_month_n_ago(today, months)}
     qs = (
         ExpenseModel.objects.filter(
             organization=organization,
             status="PAID",
             paid_at__isnull=False,
-            paid_at__gte=cutoff,
+            **janela,
         )
         .annotate(id_conta_str=KeyTextTransform("id_conta", "raw_extras"))
         .values("id_conta_str")
