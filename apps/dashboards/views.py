@@ -999,10 +999,29 @@ def churn(request: HttpRequest) -> HttpResponse:
     org = org_or_redirect
     months = _get_months(request)
 
-    summary = compute_churn_summary(org)
-    mrr_series = compute_mrr_churn_series(org, months=months)
-    reasons = compute_churn_by_reason(org, months=months)
-    ltv_dist = compute_ltv_distribution(org)
+    # Filtro por plano (#117): é o único recorte de churn que filtra os DOIS
+    # lados da taxa (cancelados e base ativa), então tudo na página continua
+    # significando o que significava — só que dentro do plano escolhido.
+    from apps.customers.infrastructure.models import Contract
+
+    planos = list(
+        Contract.objects.filter(organization=org)
+        .exclude(plan_name="")
+        .values_list("plan_name", flat=True)
+        .distinct()
+        .order_by("plan_name")
+    )
+    plano = request.GET.get("plano", "").strip() or None
+    if plano not in planos:
+        plano = None
+    set_period_extra_params(request, {"plano": plano})
+
+    summary = compute_churn_summary(org, plano=plano)
+    mrr_series = compute_mrr_churn_series(org, months=months, plano=plano)
+    reasons = compute_churn_by_reason(org, months=months, plano=plano)
+    ltv_dist = compute_ltv_distribution(org, plano=plano)
+    # A tabela por plano é o NAVEGADOR do filtro — se ela também filtrasse,
+    # colapsaria numa linha e você perderia a comparação que usa pra escolher.
     plan_detail = compute_churn_plan_detail(org, months=months)
 
     # Derivados para KPI cards
@@ -1039,6 +1058,8 @@ def churn(request: HttpRequest) -> HttpResponse:
         "dashboards/churn.html",
         {
             "summary": summary,
+            "planos": planos,
+            "plano_selecionado": plano,
             "plan_detail": plan_detail_display,
             "overall_rate": overall_rate,
             "reasons": reasons,
