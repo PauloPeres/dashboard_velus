@@ -337,14 +337,27 @@ def cashflow(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100, Fase 2): recebimento e despesa têm data, então
+    # dia/semana faz sentido aqui — ao contrário do DRE (competência mensal) e
+    # do Burn (média mensal), que ficam em meses por decisão.
+    period = _get_period(request)
 
-    cashflow_data = compute_cashflow_series(org, months=months)
-    supplier_data = compute_expense_by_supplier(org, months=months)
-    category_data = compute_expense_by_category(org, months=months)
+    cashflow_data = compute_cashflow_series(
+        org, start=period.start_date, end=period.end_date
+    )
+    supplier_data = compute_expense_by_supplier(
+        org, start=period.start_date, end=period.end_date
+    )
+    category_data = compute_expense_by_category(
+        org, start=period.start_date, end=period.end_date
+    )
 
-    # Pré-formatados — evita bug de |add: string+float no template
+    # Pré-formatados — evita bug de |add: string+float no template.
+    # `last` é o ÚLTIMO BUCKET, que agora pode ser um dia ou uma semana — por
+    # isso o rótulo dos cards vem do próprio bucket, e não mais "último mês"
+    # chumbado no template (#100).
     last = cashflow_data[-1] if cashflow_data else {}
+    ultimo_bucket = last.get("label", "—")
     last_revenue_str = _fmt_brl(last.get("revenue", 0))
     last_expenses_str = _fmt_brl(last.get("expenses", 0))
     last_net_str = _fmt_brl(last.get("net", 0))
@@ -355,6 +368,9 @@ def cashflow(request: HttpRequest) -> HttpResponse:
         "dashboards/cashflow.html",
         {
             "cashflow_data": cashflow_data,
+            "label_receita": f"Receita ({ultimo_bucket})",
+            "label_despesas": f"Despesas ({ultimo_bucket})",
+            "label_saldo": f"Saldo ({ultimo_bucket})",
             "supplier_data": supplier_data,
             "category_data": category_data,
             "last_revenue_str": last_revenue_str,
@@ -364,6 +380,9 @@ def cashflow(request: HttpRequest) -> HttpResponse:
             "cashflow_chart_json": charts.cashflow_waterfall(cashflow_data),
             "supplier_chart_json": charts.expense_by_supplier_bar(supplier_data),
             "category_chart_json": charts.expense_by_category_pie(category_data),
+            "serie_granularidade": time_buckets.GRANULARITY_LABELS[
+                time_buckets.series_granularity(period.start_date, period.end_date)
+            ],
         },
     )
 
