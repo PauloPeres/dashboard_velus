@@ -168,3 +168,93 @@ class TestTecnicosView:
         resp = client.get("/operations/tecnicos/")
         assert resp.status_code == 200
         assert b"Nenhuma OS com t" in resp.content
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestPeriodoEmDias:
+    """Filtro de período em dias na página (#100)."""
+
+    URL = "/operations/tecnicos/"
+
+    def test_barra_tem_presets_em_dias_e_personalizado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(self.URL)
+        assert resp.status_code == 200
+        html = resp.content.decode()
+        assert "setPeriodo('1d')" in html
+        assert "setPeriodo('ontem')" in html
+        assert 'name="de"' in html
+        assert resp.context["period"].key == "30d"
+        assert resp.context["period_warning"] is None
+
+    def test_janela_corta_nos_dois_lados(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        OsLookupCache.objects.create(
+            organization=organization_a,
+            subject_map={"10": "Instalação"},
+            technician_map={"49": "Kainan", "50": "Adelso"},
+        )
+        _make_ticket(organization_a, external_id="1", tech="49", opened_days=0)
+        _make_ticket(organization_a, external_id="2", tech="50", opened_days=1)
+
+        client.force_login(user_a)
+        resp = client.get(f"{self.URL}?periodo=1d")
+        assert resp.context["period"].key == "1d"
+        assert b"Kainan" in resp.content
+        assert b"Adelso" not in resp.content
+
+        resp = client.get(f"{self.URL}?periodo=ontem")
+        assert b"Adelso" in resp.content
+        assert b"Kainan" not in resp.content
+
+    def test_perfil_propagado_no_personalizado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        html = client.get(f"{self.URL}?profile=FIELD").content.decode()
+        assert 'name="profile" value="FIELD"' in html
+
+    def test_cookie_atravessa_a_navegacao(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        client.get(f"{self.URL}?periodo=7d")
+        assert client.get(self.URL).context["period"].key == "7d"
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestGraficoMensalEmJanelaCurta:
+    """O único bloco mensal da página some quando a janela não comporta 2 pontos.
+
+    Decisão do épico #100: em vez de desenhar uma "evolução" de um ponto só, o
+    gráfico sai e a página explica por quê — o resto continua respeitando o
+    período.
+    """
+
+    URL = "/operations/tecnicos/"
+
+    def test_janela_curta_esconde_o_grafico_e_avisa(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(f"{self.URL}?periodo=7d")
+        assert resp.status_code == 200
+        assert resp.context["monthly_visivel"] is False
+        body = resp.content.decode()
+        assert "evolução mês a mês precisa de pelo menos dois meses" in body
+        assert 'id="monthly-chart"' not in body
+
+    def test_janela_longa_mantem_o_grafico(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        resp = client.get(f"{self.URL}?periodo=6m")
+        assert resp.context["monthly_visivel"] is True
+        body = resp.content.decode()
+        assert 'id="monthly-chart"' in body
+        assert "evolução mês a mês precisa" not in body
