@@ -2189,24 +2189,30 @@ def tecnicos(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100): a janela já era montada aqui na view, então é só
+    # passar a vir do filtro em vez de `?months=`.
+    period = _get_period(request)
 
     # Filtro de perfil (rua/interno) — combinável com o recorte temporal.
     profile_f = request.GET.get("profile", "").strip().upper()
     if profile_f not in (PROFILE_FIELD, PROFILE_INTERNAL):
         profile_f = ""
 
+    # Recorte da página que o form de período personalizado precisa preservar.
+    set_period_extra_params(request, {"profile": profile_f})
+
     lookups = load_os_lookups(org)
     subject_to_category = {
         sid: classify_subject(name) for sid, name in lookups.subject_map.items()
     }
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
 
     tickets = list(
-        Ticket.objects.filter(organization=org, opened_at__gte=window_start).values(
+        Ticket.objects.filter(
+            organization=org,
+            opened_at__gte=period.start,
+            opened_at__lte=period.end,
+        ).values(
             "technician_id", "customer_external_id", "subject_id",
             "status", "opened_at", "closed_at",
         )
@@ -2261,17 +2267,30 @@ def tecnicos(request: HttpRequest) -> HttpResponse:
     top_rows = sorted(rows, key=lambda r: r["total"], reverse=True)[:12]
 
     # --- Evolução temporal: produção mês a mês dos top técnicos (filtrados) ---
+    # Este bloco continua MENSAL (é o único da página que é série de meses).
+    # Com uma janela curta ele viraria um ponto só — aí some e a página diz por
+    # quê, em vez de mostrar um gráfico de um dado ponto (#100).
     visible_ids = {r["technician_id"] for r in rows}
-    monthly = compute_technician_monthly(
-        [t for t in tickets if t["technician_id"] in visible_ids],
-        now=now,
-        months=months,
-    )
-    monthly_top = [
-        {**series, "technician": lookups.technician_name(series["technician_id"])}
-        for series in monthly["per_tech"][:6]
-    ]
-    monthly_data = {"labels": monthly["labels"], "per_tech": monthly_top}
+    monthly_meses = period.months
+    monthly_data = None
+    periodo_nota = ""
+    if monthly_meses >= 2:
+        monthly = compute_technician_monthly(
+            [t for t in tickets if t["technician_id"] in visible_ids],
+            now=now,
+            months=monthly_meses,
+        )
+        monthly_top = [
+            {**series, "technician": lookups.technician_name(series["technician_id"])}
+            for series in monthly["per_tech"][:6]
+        ]
+        monthly_data = {"labels": monthly["labels"], "per_tech": monthly_top}
+    else:
+        periodo_nota = (
+            "A evolução mês a mês precisa de pelo menos dois meses de janela — "
+            "com o período escolhido ela sairia com um ponto só, então está "
+            "oculta. O resto da página respeita o período normalmente."
+        )
 
     # --- Recorte por tipo de atendimento: mix de categorias dos top técnicos ---
     cat_keys: list[str] = []
@@ -2305,7 +2324,11 @@ def tecnicos(request: HttpRequest) -> HttpResponse:
             "internal_count": internal_count,
             "production_chart_json": charts.technician_production_bar(top_rows),
             "solution_chart_json": charts.technician_solution_bar(top_rows),
-            "monthly_chart_json": charts.technician_monthly_lines(monthly_data),
+            "monthly_chart_json": (
+                charts.technician_monthly_lines(monthly_data) if monthly_data else ""
+            ),
+            "monthly_visivel": monthly_data is not None,
+            "periodo_nota": periodo_nota,
             "category_chart_json": charts.technician_category_stacked(category_data),
         },
     )
