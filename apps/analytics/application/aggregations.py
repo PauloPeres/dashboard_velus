@@ -2511,6 +2511,62 @@ def _plano_filtro(plano: str | None) -> dict[str, Any]:
     return {"plan_name": plano} if plano else {}
 
 
+CONTROLAVEL_SIM = "sim"
+CONTROLAVEL_NAO = "nao"
+
+
+def motivos_catalogo() -> list[dict[str, Any]]:
+    """Catálogo de motivos de cancelamento, ordenado por rótulo (#117).
+
+    Existe pra a camada de apresentação montar o seletor sem importar o mapa
+    privado `_IXC_MOTIVO_MAP`.
+    """
+    return [
+        {"id": mid, "label": label, "controlavel": ctrl}
+        for mid, (label, ctrl) in sorted(
+            _IXC_MOTIVO_MAP.items(), key=lambda kv: kv[1][0]
+        )
+    ]
+
+
+def motivo_label(mid: str) -> str:
+    """Rótulo legível de um id de motivo (público — ver `motivos_catalogo`)."""
+    return _motivo_label(mid)
+
+
+def motivos_por_controle(controlavel: bool) -> list[str]:
+    """Ids de motivo classificados como controláveis (ou não) pelo mapa IXC."""
+    return [
+        mid for mid, (_, ctrl) in _IXC_MOTIVO_MAP.items() if ctrl is controlavel
+    ]
+
+
+def _motivo_q(motivo: str | None = None, controlavel: str | None = None) -> Q:
+    """Recorte por motivo de cancelamento (#117). Q() vazio = sem recorte.
+
+    O motivo mora em `raw_extras.motivo_cancelamento`, e o IXC grava ora como
+    número, ora como string — por isso cada id é testado nas duas formas.
+
+    **Este recorte filtra só o NUMERADOR.** Contrato ativo não tem motivo de
+    cancelamento, então a base que serve de denominador do churn % não pode ser
+    recortada por aqui: com o filtro ligado, a porcentagem passa a significar
+    "quanto este recorte contribui pro churn total". A página avisa — ver #117.
+    """
+    if motivo:
+        ids = [motivo]
+    elif controlavel in (CONTROLAVEL_SIM, CONTROLAVEL_NAO):
+        ids = motivos_por_controle(controlavel == CONTROLAVEL_SIM)
+    else:
+        return Q()
+
+    q = Q()
+    for mid in ids:
+        q |= Q(raw_extras__motivo_cancelamento=mid)
+        if mid.isdigit():
+            q |= Q(raw_extras__motivo_cancelamento=int(mid))
+    return q
+
+
 def _motivo_label(mid: str) -> str:
     return _IXC_MOTIVO_MAP.get(str(mid), (f"Motivo #{mid}", None))[0]
 
@@ -2521,7 +2577,12 @@ def _motivo_controlavel(mid: str) -> bool | None:
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_mrr_churn_series(
-    organization: Organization, months: int = 12, *, plano: str | None = None
+    organization: Organization,
+    months: int = 12,
+    *,
+    plano: str | None = None,
+    motivo: str | None = None,
+    controlavel: str | None = None,
 ) -> list[dict[str, Any]]:
     """Série mensal de MRR Churn + Logo Churn + MRR Recuperado.
 
@@ -2537,6 +2598,7 @@ def compute_mrr_churn_series(
     from apps.customers.infrastructure.models import Contract
 
     plano_f = _plano_filtro(plano)
+    motivo_q = _motivo_q(motivo, controlavel)
     today = timezone.now().date()
     result = []
 
@@ -2555,7 +2617,7 @@ def compute_mrr_churn_series(
             canceled_at__date__gte=m_start,
             canceled_at__date__lte=m_end,
             **plano_f,
-        ).aggregate(
+        ).filter(motivo_q).aggregate(
             n=Count("id"),
             mrr=Coalesce(Sum("monthly_amount"), _ZERO, output_field=DecimalField()),
         )
@@ -2588,7 +2650,11 @@ def compute_mrr_churn_series(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_churn_by_reason(
-    organization: Organization, months: int = 12, *, plano: str | None = None
+    organization: Organization,
+    months: int = 12,
+    *,
+    plano: str | None = None,
+    controlavel: str | None = None,
 ) -> list[dict[str, Any]]:
     """MRR perdido por motivo de cancelamento (dos últimos N meses).
 
@@ -2604,7 +2670,7 @@ def compute_churn_by_reason(
         organization=organization,
         canceled_at__date__gte=cutoff,
         **_plano_filtro(plano),
-    ).filter(_CANCELED_Q)
+    ).filter(_CANCELED_Q).filter(_motivo_q(controlavel=controlavel))
 
     reasons: dict[str, dict] = {}
     for c in canceled.iterator():
@@ -2635,7 +2701,11 @@ def compute_churn_by_reason(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_ltv_distribution(
-    organization: Organization, *, plano: str | None = None
+    organization: Organization,
+    *,
+    plano: str | None = None,
+    motivo: str | None = None,
+    controlavel: str | None = None,
 ) -> list[dict[str, Any]]:
     """Histograma de LTV — tempo de vida dos contratos cancelados.
 
@@ -2649,7 +2719,7 @@ def compute_ltv_distribution(
         canceled_at__isnull=False,
         activated_at__isnull=False,
         **_plano_filtro(plano),
-    ).filter(_CANCELED_Q).iterator()
+    ).filter(_CANCELED_Q).filter(_motivo_q(motivo, controlavel)).iterator()
 
     buckets: dict[str, dict] = {
         "lt_3":   {"label": "< 3 meses",    "count": 0, "mrr_sum": 0.0},
@@ -2781,7 +2851,11 @@ def compute_churn_plan_detail(
 
 @allow_cross_tenant(reason="aggregations rodam fora de request HTTP")
 def compute_churn_summary(
-    organization: Organization, *, plano: str | None = None
+    organization: Organization,
+    *,
+    plano: str | None = None,
+    motivo: str | None = None,
+    controlavel: str | None = None,
 ) -> dict[str, Any]:
     """KPIs de churn para o topo do dashboard.
 
@@ -2808,9 +2882,15 @@ def compute_churn_summary(
     # Apenas contratos que foram ativados — pré-contratos abandonados não geram MRR.
     # _CANCELED_Q: defensivo contra UNKNOWN c/ canceled_at (bug histórico de re-sync).
     plano_f = _plano_filtro(plano)
-    canceled_qs = Contract.objects.filter(
-        organization=organization, activated_at__isnull=False, **plano_f
-    ).filter(_CANCELED_Q)
+    # `motivo`/`controlavel` recortam APENAS os cancelados: ativação e base não
+    # têm motivo de cancelamento. Ver `_motivo_q`.
+    canceled_qs = (
+        Contract.objects.filter(
+            organization=organization, activated_at__isnull=False, **plano_f
+        )
+        .filter(_CANCELED_Q)
+        .filter(_motivo_q(motivo, controlavel))
+    )
 
     this_month = canceled_qs.filter(
         canceled_at__date__gte=month_first,

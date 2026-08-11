@@ -10,7 +10,7 @@
     <h1 class="text-2xl font-bold text-gray-900">Análise de Churn</h1>
     <p class="text-xs text-gray-400 mt-0.5">Cancelamentos · MRR perdido · Motivos · LTV · Planos em risco</p>
   </div>
-  <div class="flex items-center gap-4">
+  <div class="flex flex-wrap items-center gap-3">
     <div class="relative">
       <select onchange="setParam('plano', this.value)"
         class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 pr-8 appearance-none cursor-pointer text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
@@ -23,6 +23,23 @@
         <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
       </span>
     </div>
+    <div class="relative">
+      <select onchange="setParam('motivo', this.value)"
+        class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 pr-8 appearance-none cursor-pointer text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <option value="" {% if not motivo_selecionado %}selected{% endif %}>Todos os motivos</option>
+        {% for m in motivos_disponiveis %}
+        <option value="{{ m.id }}" {% if m.id == motivo_selecionado %}selected{% endif %}>{{ m.label }}</option>
+        {% endfor %}
+      </select>
+      <span class="pointer-events-none absolute right-2.5 inset-y-0 flex items-center">
+        <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+      </span>
+    </div>
+    <div class="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
+      <button onclick="setParam('controlavel', '')" class="px-2.5 py-1 text-xs rounded-md {% if not controlavel_selecionado %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Todos</button>
+      <button onclick="setParam('controlavel', 'sim')" class="px-2.5 py-1 text-xs rounded-md {% if controlavel_selecionado == 'sim' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Controlável</button>
+      <button onclick="setParam('controlavel', 'nao')" class="px-2.5 py-1 text-xs rounded-md {% if controlavel_selecionado == 'nao' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">Não controlável</button>
+    </div>
     <div class="flex gap-4 text-xs text-gray-500">
       <a href="{% url 'dashboards:contracts' %}" class="text-blue-600 hover:underline">Ver contratos →</a>
       <a href="{% url 'dashboards:revenue' %}" class="text-blue-600 hover:underline">Ver receita →</a>
@@ -32,14 +49,34 @@
 
 {% include "dashboards/_period_header.html" %}
 
-{% if plano_selecionado %}
-<div class="flex flex-wrap items-center gap-2 mb-5 text-xs">
+{% if plano_selecionado or motivo_selecionado or controlavel_selecionado %}
+<div class="flex flex-wrap items-center gap-2 mb-3 text-xs">
+  {% if plano_selecionado %}
   <span class="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
     Plano: <strong>{{ plano_selecionado }}</strong>
+    <button onclick="setParam('plano', '')" class="ml-1 text-blue-500 hover:text-blue-800">×</button>
   </span>
-  <button onclick="setParam('plano', '')" class="text-gray-500 hover:text-gray-700 underline">limpar</button>
-  <span class="text-gray-400">— a página inteira está recortada por este plano, inclusive a base que serve de denominador do churn %.</span>
+  {% endif %}
+  {% if motivo_selecionado %}
+  <span class="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
+    Motivo: <strong>{{ motivo_label_selecionado }}</strong>
+    <button onclick="setParam('motivo', '')" class="ml-1 text-blue-500 hover:text-blue-800">×</button>
+  </span>
+  {% endif %}
+  {% if controlavel_selecionado %}
+  <span class="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
+    {% if controlavel_selecionado == 'sim' %}Só churn controlável{% else %}Só churn não controlável{% endif %}
+    <button onclick="setParam('controlavel', '')" class="ml-1 text-blue-500 hover:text-blue-800">×</button>
+  </span>
+  {% endif %}
+  {% if plano_selecionado and not nota_numerador %}
+  <span class="text-gray-400">— recorte aplicado aos dois lados da taxa, inclusive a base do denominador.</span>
+  {% endif %}
 </div>
+{% endif %}
+
+{% if nota_numerador %}
+{% include "dashboards/_nota_periodo.html" with texto="Recorte por motivo: contrato ativo não tem motivo de cancelamento, então só os CANCELADOS foram filtrados. O churn % abaixo deixa de ser a taxa do recorte e passa a ser quanto ele contribui pro churn total — e os KPIs de MRR recuperado e líquido seguem a base inteira, porque ativação não tem motivo." %}
 {% endif %}
 
 <!-- Alerta: perdendo clientes de ticket alto -->
