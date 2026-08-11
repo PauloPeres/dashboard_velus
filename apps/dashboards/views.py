@@ -1196,16 +1196,19 @@ def os_dashboard(request: HttpRequest) -> HttpResponse:
     if not hasattr(org_or_redirect, "slug"):
         return org_or_redirect
     org = org_or_redirect
-    months = _get_months(request)
+    # Período em dias (#100): a janela já era montada aqui na view, então é só
+    # passar a vir do filtro em vez de `?months=`.
+    period = _get_period(request)
 
     lookups = load_os_lookups(org)
     now = timezone.now()
-    window_start = (now - relativedelta(months=months)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
 
     # OS abertas dentro da janela do período selecionado.
-    qs = Ticket.objects.filter(organization=org, opened_at__gte=window_start)
+    qs = Ticket.objects.filter(
+        organization=org,
+        opened_at__gte=period.start,
+        opened_at__lte=period.end,
+    )
 
     # --- KPIs ---
     total_os = qs.count()
@@ -1270,25 +1273,38 @@ def os_dashboard(request: HttpRequest) -> HttpResponse:
     top_types = type_rows[:12]
 
     # --- Tendência mensal de OS abertas ---
-    trend_series = []
-    for i in range(months):
-        m_start = (now - relativedelta(months=months - 1 - i)).replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
-        if i < months - 1:
-            m_end = (now - relativedelta(months=months - 2 - i)).replace(
+    # Continua MENSAL (é o único bloco de série da página). Com uma janela curta
+    # ela viraria um ponto só, que não é tendência de nada: aí some e a página
+    # explica no lugar (#100).
+    trend_meses = period.months
+    trend_series: list[dict[str, Any]] | None = None
+    periodo_nota = ""
+    if trend_meses >= 2:
+        trend_series = []
+        for i in range(trend_meses):
+            m_start = (now - relativedelta(months=trend_meses - 1 - i)).replace(
                 day=1, hour=0, minute=0, second=0, microsecond=0
             )
-        else:
-            m_end = now
-        opened_m = Ticket.objects.filter(
-            organization=org, opened_at__gte=m_start, opened_at__lt=m_end
-        ).count()
-        trend_series.append({
-            "month": m_start.strftime("%Y-%m"),
-            "label": m_start.strftime("%b/%y"),
-            "opened": opened_m,
-        })
+            if i < trend_meses - 1:
+                m_end = (now - relativedelta(months=trend_meses - 2 - i)).replace(
+                    day=1, hour=0, minute=0, second=0, microsecond=0
+                )
+            else:
+                m_end = now
+            opened_m = Ticket.objects.filter(
+                organization=org, opened_at__gte=m_start, opened_at__lt=m_end
+            ).count()
+            trend_series.append({
+                "month": m_start.strftime("%Y-%m"),
+                "label": m_start.strftime("%b/%y"),
+                "opened": opened_m,
+            })
+    else:
+        periodo_nota = (
+            "A tendência mês a mês precisa de pelo menos dois meses de janela — "
+            "com o período escolhido ela sairia com um ponto só, então está "
+            "oculta. O resto da página respeita o período normalmente."
+        )
 
     # --- Distribuição por status ---
     status_labels = {
@@ -1322,7 +1338,11 @@ def os_dashboard(request: HttpRequest) -> HttpResponse:
             "synced": bool(lookups.subject_map),
             "volume_chart_json": charts.os_volume_by_type(top_types),
             "resolution_chart_json": charts.os_avg_resolution_by_type(top_types),
-            "trend_chart_json": charts.os_monthly_trend(trend_series),
+            "trend_chart_json": (
+                charts.os_monthly_trend(trend_series) if trend_series else ""
+            ),
+            "trend_visivel": trend_series is not None,
+            "periodo_nota": periodo_nota,
             "status_chart_json": charts.os_status_pie(status_dist),
         },
     )
