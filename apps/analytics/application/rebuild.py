@@ -6,6 +6,7 @@ Em fase futura, isolar em tasks Celery agendadas com chunking pra orgs grandes.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -161,6 +162,71 @@ def _parse_late_fee(raw_extras: Any) -> Decimal:
 _FACT_CONTRACT_BATCH = 10_000  # linhas por bulk_create batch
 
 
+def _historico_por_contrato(
+    organization: Organization,
+) -> dict[int, tuple[tuple[date, str, Any], ...]]:
+    """Mudanças de status/valor por contrato, do mais ANTIGO pro mais recente.
+
+    Vem do `simple_history` do Contract. Cada item é `(data, status, valor)` e
+    vale a partir daquela data até a próxima mudança. Só há registro do momento
+    em que o simple_history começou a acumular — antes disso, silêncio, e o
+    chamador cai no status atual (ver `_status_no_dia`).
+    """
+    por_contrato: dict[int, list[tuple[date, str, Any]]] = defaultdict(list)
+    linhas = (
+        Contract.history.model.objects.filter(organization=organization)
+        .order_by("id", "history_date")
+        .values_list("id", "history_date", "status", "monthly_amount")
+    )
+    anterior: dict[int, tuple[str, Any]] = {}
+    for cid, quando, status, valor in linhas.iterator(chunk_size=20000):
+        chave = (status, valor)
+        if anterior.get(cid) == chave:
+            continue  # nada mudou no que interessa aqui
+        anterior[cid] = chave
+        por_contrato[cid].append((quando.date(), status, valor))
+    return {cid: tuple(v) for cid, v in por_contrato.items()}
+
+
+def _status_no_dia(
+    contract: Any,
+    mudancas: tuple[tuple[date, str, Any], ...],
+    dia: date,
+) -> tuple[str, Any]:
+    """Status e mensalidade vigentes num dia.
+
+    Com histórico, usa a última mudança até aquele dia. Sem histórico (dia
+    anterior ao início do simple_history), assume o status ATUAL do contrato —
+    é chute, mas é o chute honesto: não temos registro do passado, e inventar
+    uma transição seria repetir o erro que a #122 corrigiu.
+
+    A exceção que importa é o cancelamento, e ela é tratada por quem chama: o
+    laço nem chega nos dias a partir de `canceled_at`, então contrato cancelado
+    não contamina o passado em que ele estava vivo.
+    """
+    vigente: tuple[str, Any] | None = None
+    for quando, status, valor in mudancas:
+        if quando > dia:
+            break
+        vigente = (status, valor)
+    if vigente is None:
+        # Sem registro pra este dia. O laço só chega aqui em dias ANTERIORES ao
+        # cancelamento, então um contrato hoje cancelado estava vivo neste dia —
+        # cair no status atual devolveria CANCELED e recriaria o bug da #122.
+        # Não sabemos se estava ACTIVE ou BLOCKED; ACTIVE é a suposição neutra.
+        if contract.status in _ACTIVE_STATUSES:
+            return contract.status, contract.monthly_amount_net
+        return "ACTIVE", contract.monthly_amount_net
+    status, valor = vigente
+    if status not in _ACTIVE_STATUSES:
+        # Mesmo caso, agora vindo do histórico: o registro diz cancelado, mas
+        # este dia é anterior ao cancelamento.
+        status = "ACTIVE"
+    # `monthly_amount` do histórico é o bruto; addons/descontos não são
+    # historizados, então o líquido de hoje é a melhor aproximação.
+    return status, contract.monthly_amount_net if valor is None else valor
+
+
 def _rebuild_fact_contract_status_daily(
     organization: Organization, since_date: date | None = None
 ) -> int:
@@ -169,6 +235,24 @@ def _rebuild_fact_contract_status_daily(
     Idempotente via UniqueConstraint (org, contract, date).
     Usa bulk_create com update_conflicts pra ser ~100x mais rápido do que
     update_or_create individual (crítico pra ISPs com 8k+ contratos × 400 dias).
+
+    **Contrato cancelado é ativo ATÉ o dia do cancelamento (#122).** Até esta
+    issue, o rebuild escrevia o status de hoje em todos os dias do passado —
+    então um contrato cancelado em julho aparecia como cancelado também em
+    janeiro, e nunca constava da base de janeiro. O efeito medido em produção
+    era uma base que só crescia (2.324 → 3.389 em 12 meses) com **zero** saídas
+    em 10 meses seguidos: viés de sobrevivência puro, em cima do qual estavam
+    todos os gráficos de evolução.
+
+    O que dá pra reconstruir com honestidade, e o que não dá:
+
+    - **Cancelamento**: dá. `canceled_at` vem do IXC e bate com a realidade
+      (~2,4%/mês de churn medido). Os dias anteriores ao cancelamento voltam a
+      contar como base ativa.
+    - **Bloqueio**: só de `HistoricalContract` pra frente (simple_history, que
+      começou a acumular em ago/2026). Antes disso não existe registro de quando
+      o contrato esteve bloqueado — e inventar seria repetir o erro. Nos dias
+      sem histórico, contrato vivo mantém o status atual.
     """
     today = timezone.now().date()
     start_default = today - timedelta(days=400)  # ~13 meses ringbuffer
@@ -188,6 +272,7 @@ def _rebuild_fact_contract_status_daily(
         return len(records)
 
     contracts = Contract.objects.filter(organization=organization)
+    historico = _historico_por_contrato(organization)
     for contract in contracts.iterator():
         contract_start = contract.activated_at.date() if contract.activated_at else start_default
         # Cap no início do ringbuffer pra não gerar anos de snapshots
@@ -195,25 +280,28 @@ def _rebuild_fact_contract_status_daily(
         if since_date and since_date > contract_start:
             contract_start = since_date
 
-        contract_end = contract.canceled_at.date() if contract.canceled_at else today
+        cancel_date = contract.canceled_at.date() if contract.canceled_at else None
+        # O último dia em que o contrato ainda contava como base é a VÉSPERA do
+        # cancelamento. A partir do dia do cancelamento ele simplesmente deixa de
+        # ter linha — é a ausência que faz a série mostrar a saída.
+        contract_end = (cancel_date - timedelta(days=1)) if cancel_date else today
         if contract_end > today:
             contract_end = today
-        if contract_start > today:
+        if contract_start > today or contract_end < contract_start:
             continue
 
-        is_active = contract.status in _ACTIVE_STATUSES
-        # Status snapshot — usamos o status atual (simplificação MVP).
-        # Refinamento futuro: ler de simple_history pra status histórico real.
+        mudancas = historico.get(contract.id, ())
         d = contract_start
         while d <= contract_end:
+            status, valor = _status_no_dia(contract, mudancas, d)
             batch.append(
                 FactContractStatusDaily(
                     organization=organization,
                     contract=contract,
                     date=d,
-                    status=contract.status,
-                    monthly_amount=contract.monthly_amount_net,
-                    is_active=is_active,
+                    status=status,
+                    monthly_amount=valor,
+                    is_active=status in _ACTIVE_STATUSES,
                 )
             )
             d += timedelta(days=1)

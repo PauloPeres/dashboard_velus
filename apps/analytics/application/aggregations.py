@@ -4871,9 +4871,6 @@ _CHURN_RECOMMENDATIONS: dict[str, str] = {
         "Verificar conexão: cliente offline com contrato ativo — checar "
         "equipamento e rede."
     ),
-    "PLAN_DOWNGRADE": (
-        "Entender o downgrade: sondar insatisfação e oferecer plano de retenção."
-    ),
     "BANDWIDTH_DROP": (
         "Investigar queda de uso: possível migração para concorrente — fazer "
         "contato proativo."

@@ -3,17 +3,27 @@
 Avalia, por cliente, sinais de risco de cancelamento derivados dos dados já
 sincronizados (sem ML, sem fontes novas) e persiste em `ChurnRiskScore`:
 
-    1. Contrato bloqueado há ≥ 30 dias consecutivos        peso 40
-    2. Atraso recorrente (≥ 3 faturas vencidas em 6 meses)  peso 25
-    3. Chamados de suporte frequentes (≥ 3 em 30d, só tipos
-       de problema técnico/rede/suporte — exclui rotina)    peso 20
-    4. Downgrade de plano (valor mensal caiu vs anterior)   peso 20
-    5. Offline com contrato ativo                           peso 15
-    6. Queda brusca de consumo de banda (≥ 70% em 30d)      peso 15
-    7. Insatisfação nas conversas (léxico PT-BR × likert)   peso 15
+    1. Contrato bloqueado (peso 40) — lift medido 3,8× a 5,2×
+    2. Atraso recorrente, ≥3 faturas vencidas em 6 meses (25) — 1,4× a 2,3×
+    3. Chamados frequentes, ≥3 em 30 dias (20) — 1,6× a 2,1×
+    4. Offline com contrato ativo (15) — não medido
+    5. Queda brusca de consumo de banda, ≥70% em 30d (15) — não medido
+    6. Insatisfação nas conversas (15) — não medido
+    7. Alta probabilidade prevista pelo modelo ML (30) — não medido
 
 Score = soma dos pesos disparados (capado em 100). Nível:
     HIGH ≥ 50 · MEDIUM ≥ 25 · LOW > 0
+
+Os lifts vêm do `churn_backtest` (#125), em janelas independentes. "Não medido"
+quer dizer que o sinal depende de dado sem história reconstrutível — não que
+esteja validado.
+
+**Downgrade de plano saiu na #126.** Ele era o sinal mais frequente da base (361
+clientes) e media lift 0,42× e 0,27× — abaixo do acaso em todas as janelas e em
+todos os limiares de queda testados (qualquer queda, >10%, >20%, >30%). A
+leitura mais provável é causal e inverte a premissa: quem reduz o plano está
+escolhendo FICAR mais barato em vez de sair. Vira candidato a sinal de retenção,
+nunca de risco — mas isso precisa da sua própria validação.
 
 Idempotente: clientes em risco têm 1 linha upsertada; clientes que saíram do
 risco têm a linha removida. Puramente analítico — alimenta alertas no
@@ -33,10 +43,9 @@ from django.utils import timezone
 
 from apps.analytics.infrastructure.models import (
     ChurnRiskScore,
+    FactChurnRiskDaily,
     FactContractStatusDaily,
 )
-from apps.helpdesk.application.os_classification import churn_relevant_subject_ids
-from apps.helpdesk.application.os_lookups import load_os_lookups
 from apps.shared.decorators import allow_cross_tenant
 from apps.tenancy.models import Organization
 
@@ -48,7 +57,6 @@ _ZERO = Decimal("0.00")
 W_BLOCKED = 40
 W_LATE_PAYMENTS = 25
 W_FREQUENT_TICKETS = 20
-W_DOWNGRADE = 20
 W_OFFLINE = 15
 W_BANDWIDTH_DROP = 15
 W_DISSATISFACTION = 15  # tom negativo nas conversas + nota likert baixa (#50)
@@ -81,6 +89,9 @@ DISSATISFACTION_MIN = 0.5
 LEVEL_HIGH_MIN = 50
 LEVEL_MEDIUM_MIN = 25
 
+# Profundidade do histórico diário de score (#123) — mesma do fact de contratos.
+HISTORICO_DIAS = 400
+
 
 def _level_for(score: int) -> str:
     if score >= LEVEL_HIGH_MIN:
@@ -109,8 +120,6 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
     mrr: dict[int, Decimal] = defaultdict(lambda: _ZERO)
     active_customers: set[int] = set()
     blocked_contract_customer: dict[int, int] = {}
-    # (source_type, external_id) → customer_id — base pro sinal de downgrade.
-    contract_keys: dict[tuple[str, str], int] = {}
 
     # ── Receita em risco + população relevante ──────────────────────────
     # Só contratos ACTIVE/BLOCKED geram MRR — base pra "receita em risco".
@@ -122,7 +131,6 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
         if c.customer_id is None:
             continue
         mrr[c.customer_id] += c.monthly_amount_net
-        contract_keys[(c.source_type, c.external_id)] = c.customer_id
         if c.status == "ACTIVE":
             active_customers.add(c.customer_id)
         elif c.status == "BLOCKED":
@@ -157,22 +165,27 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
             "weight": W_LATE_PAYMENTS,
         })
 
-    # ── Sinal 3: chamados de suporte frequentes (≥ 3 nos últimos 30 dias) ─
-    # Conta só chamados que indicam insatisfação com o serviço (problema
-    # técnico/rede/suporte). Instalação, troca de equipamento, financeiro e
-    # titularidade são rotina e não sinalizam churn — antes inflavam o número.
+    # ── Sinal 3: chamados frequentes (≥ 3 nos últimos 30 dias) ──────────
+    # Conta TODOS os assuntos (#124). A versão anterior restringia à categoria
+    # SUPPORT, na hipótese de que só chamado técnico sinaliza insatisfação e
+    # que instalação/equipamento/financeiro seriam rotina.
+    #
+    # Medido em produção, a hipótese estava errada — e invertida. Em duas
+    # janelas independentes de 120 dias, o recorte SUPPORT ficou ABAIXO do
+    # acaso (lift 0,48× e 0,57×): o cliente que abre chamado técnico cancela
+    # MENOS que a base. Contando todos os assuntos, o sinal fica acima do acaso
+    # nas duas (2,06× e 1,57×) e cobre 12–14% dos cancelamentos, contra ~0%.
+    #
+    # Composições intermediárias (SUPPORT+EQUIPMENT+LIFECYCLE) chegaram a 5,3×
+    # numa janela e 1,1× na outra, com n≈30–50 — variação típica de amostra
+    # pequena. Escolher por causa do 5,3× seria escolher ruído; sem filtro é a
+    # única versão estável nas duas janelas, e a de maior cobertura.
     ticket_cutoff = now - timedelta(days=TICKETS_WINDOW_DAYS)
-    lookups = load_os_lookups(organization)
-    relevant_subject_ids = churn_relevant_subject_ids(lookups.subject_map)
-    ticket_qs = Ticket.objects.filter(
-        organization=organization, opened_at__gte=ticket_cutoff
-    )
-    if relevant_subject_ids is not None:
-        # Org com lookups sincronizados: restringe a assuntos de suporte.
-        ticket_qs = ticket_qs.filter(subject_id__in=relevant_subject_ids)
-    # Sem lookups (None): mantém comportamento antigo (conta todos) — fallback.
     ticket_rows = (
-        ticket_qs.values("customer_id")
+        Ticket.objects.filter(
+            organization=organization, opened_at__gte=ticket_cutoff
+        )
+        .values("customer_id")
         .annotate(n=Count("id"))
         .filter(n__gte=TICKETS_MIN)
     )
@@ -182,8 +195,8 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
             continue
         signals[cid].append({
             "code": "FREQUENT_TICKETS",
-            "label": "Chamados de suporte frequentes",
-            "detail": f"{row['n']} chamados de suporte nos últimos 30 dias",
+            "label": "Chamados frequentes",
+            "detail": f"{row['n']} chamados nos últimos 30 dias",
             "weight": W_FREQUENT_TICKETS,
         })
 
@@ -204,16 +217,13 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
                 "weight": W_OFFLINE,
             })
 
-    # ── Sinal 5: downgrade de plano (valor mensal caiu vs versão anterior) ─
-    _apply_downgrade_signal(organization, contract_keys, signals)
-
-    # ── Sinal 6: queda brusca de consumo de banda ───────────────────────
+    # ── Sinal 5: queda brusca de consumo de banda ───────────────────────
     _apply_bandwidth_drop_signal(organization, today, active_customers, signals)
 
-    # ── Sinal 7: insatisfação nas conversas (léxico × likert) ───────────
+    # ── Sinal 6: insatisfação nas conversas (léxico × likert) ───────────
     _apply_dissatisfaction_signal(organization, set(mrr.keys()), signals)
 
-    # ── Sinal 8: ML — alta probabilidade prevista de churn ──────────────
+    # ── Sinal 7: ML — alta probabilidade prevista de churn ──────────────
     # Complementar às regras: pode flagar clientes ativos sem sinal de regra.
     ml_probs = _apply_ml_signal(organization, active_customers, signals)
 
@@ -249,15 +259,59 @@ def compute_churn_risk_scores(organization: Organization) -> dict[str, Any]:
         .delete()
     )
 
+    historico = _persistir_historico(organization, today)
+
     summary = {
         "at_risk": len(signals),
         "high": counts["HIGH"],
         "medium": counts["MEDIUM"],
         "low": counts["LOW"],
         "deleted": deleted,
+        "historico": historico,
     }
     _logger.info("churn_risk_computed", org=organization.slug, **summary)
     return summary
+
+
+def _persistir_historico(organization: Organization, dia: Any) -> int:
+    """Copia os scores de hoje pro histórico diário (#123).
+
+    Roda depois do upsert/delete do `ChurnRiskScore`, então grava exatamente a
+    foto que ficou valendo. Recomputar no mesmo dia sobrescreve a linha do dia
+    em vez de duplicar; dias anteriores nunca são tocados.
+
+    Só os clientes EM RISCO viram linha. A população de comparação (quem não
+    tinha sinal nenhum) sai de `Contract`, que já tem a história de ativação e
+    cancelamento — não faz sentido gravar 3 mil linhas por dia de gente sem
+    risco pra reconstruir o que já se sabe.
+    """
+    linhas = [
+        FactChurnRiskDaily(
+            organization=organization,
+            customer_id=s.customer_id,
+            date=dia,
+            score=s.score,
+            level=s.level,
+            signals=s.signals,
+            monthly_amount=s.monthly_amount,
+            ml_probability=s.ml_probability,
+        )
+        for s in ChurnRiskScore.objects.filter(organization=organization).iterator()
+    ]
+    if linhas:
+        FactChurnRiskDaily.objects.bulk_create(
+            linhas,
+            update_conflicts=True,
+            unique_fields=["organization", "customer", "date"],
+            update_fields=["score", "level", "signals", "monthly_amount", "ml_probability"],
+            batch_size=2000,
+        )
+
+    # Ringbuffer: mesma profundidade do FactContractStatusDaily.
+    FactChurnRiskDaily.objects.filter(
+        organization=organization, date__lt=dia - timedelta(days=HISTORICO_DIAS)
+    ).delete()
+    return len(linhas)
 
 
 def _apply_blocked_signal(
@@ -314,56 +368,6 @@ def _apply_blocked_signal(
         })
 
 
-def _apply_downgrade_signal(
-    organization: Organization,
-    contract_keys: dict[tuple[str, str], int],
-    signals: dict[int, list[dict[str, Any]]],
-) -> None:
-    """Dispara o sinal de downgrade comparando a versão SCD2 atual do contrato
-    com a versão imediatamente anterior em DimContract.
-
-    Downgrade = monthly_amount da versão `current` < monthly_amount da versão
-    anterior (maior `valid_from` entre as não-current). Reduzir o plano é um
-    sinal clássico de cliente prestes a sair.
-    """
-    from apps.analytics.infrastructure.models import DimContract
-
-    if not contract_keys:
-        return
-
-    external_ids = {ext for (_src, ext) in contract_keys}
-    # Agrupa versões por (source_type, external_id), ordenadas por valid_from.
-    versions: dict[tuple[str, str], list[DimContract]] = defaultdict(list)
-    for dim in (
-        DimContract.objects.filter(
-            organization=organization, external_id__in=external_ids
-        )
-        .only("source_type", "external_id", "monthly_amount", "current", "valid_from")
-        .order_by("valid_from")
-    ):
-        versions[(dim.source_type, dim.external_id)].append(dim)
-
-    for key, customer_id in contract_keys.items():
-        history = versions.get(key)
-        if not history or len(history) < 2:
-            continue
-        current = next((d for d in history if d.current), history[-1])
-        prior = [d for d in history if d is not current]
-        if not prior:
-            continue
-        # Versão anterior = a de maior valid_from entre as restantes.
-        previous = max(prior, key=lambda d: d.valid_from)
-        if current.monthly_amount >= previous.monthly_amount:
-            continue
-        signals[customer_id].append({
-            "code": "PLAN_DOWNGRADE",
-            "label": "Downgrade de plano",
-            "detail": (
-                f"Plano reduziu de R$ {previous.monthly_amount} "
-                f"para R$ {current.monthly_amount}"
-            ),
-            "weight": W_DOWNGRADE,
-        })
 
 
 def _apply_bandwidth_drop_signal(

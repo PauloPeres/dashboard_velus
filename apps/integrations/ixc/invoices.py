@@ -96,10 +96,27 @@ class IxcInvoiceSource:
 
     @staticmethod
     def _build_since_filter(since: datetime) -> dict[str, str]:
+        """Filtro do incremental — por ÚLTIMA ATUALIZAÇÃO, não por emissão (#132).
+
+        Filtrar por `data_emissao` só traz fatura **nova**. Tudo que acontece
+        depois da emissão — pagamento, cancelamento, mudança de status — não
+        mexe nessa data e por isso nunca voltava. Como o recebimento é
+        justamente um evento posterior à emissão, o caixa ia ficando pra trás em
+        silêncio.
+
+        Medido contra a API em 11/08, mesma janela (o dia desde as 06h):
+
+        - `data_emissao >= ...`  → **0** registros
+        - `ultima_atualizacao >= ...` → **231** registros, sendo **210** de
+          faturas emitidas em meses anteriores e já pagas (191 só de julho)
+
+        `ultima_atualizacao` acompanha a baixa (bate com `baixa_data`), que é o
+        evento que interessa pro caixa.
+        """
         from zoneinfo import ZoneInfo
         sp = since.astimezone(ZoneInfo("America/Sao_Paulo"))
         return {
-            "qtype": "fn_areceber.data_emissao",
+            "qtype": "fn_areceber.ultima_atualizacao",
             "query": sp.strftime("%Y-%m-%d %H:%M:%S"),
             "oper": ">=",
         }

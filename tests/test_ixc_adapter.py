@@ -1730,3 +1730,49 @@ class TestIxcBandwidthToDto:
         dtos = list(source.list_bandwidth_usage())
         assert len(dtos) == 1
         assert dtos[0].external_id == "2"
+
+
+class TestFiltroIncrementalDeFaturas:
+    """O incremental precisa pegar PAGAMENTO, não só emissão — issue #132.
+
+    Filtrar por `data_emissao` só traz fatura nova. Pagamento, cancelamento e
+    mudança de status acontecem DEPOIS da emissão e não mexem nessa data, então
+    nunca voltavam pro sync. Como recebimento é, por definição, um evento
+    posterior à emissão, o caixa foi ficando pra trás em silêncio — seis semanas
+    até alguém notar.
+
+    Medido contra a API na mesma janela: `data_emissao` trouxe 0 registros e
+    `ultima_atualizacao` trouxe 231, sendo 210 de faturas antigas já pagas.
+    """
+
+    def test_filtra_por_ultima_atualizacao(self) -> None:
+        from datetime import UTC, datetime
+
+        from apps.integrations.ixc.invoices import IxcInvoiceSource
+
+        since = datetime(2026, 8, 11, 9, 0, tzinfo=UTC)
+        filtro = IxcInvoiceSource._build_since_filter(since)
+        assert filtro["qtype"] == "fn_areceber.ultima_atualizacao"
+        assert filtro["oper"] == ">="
+
+    def test_nao_filtra_mais_por_emissao(self) -> None:
+        """Guarda contra a regressão que custou seis semanas de caixa."""
+        from datetime import UTC, datetime
+
+        from apps.integrations.ixc.invoices import IxcInvoiceSource
+
+        filtro = IxcInvoiceSource._build_since_filter(
+            datetime(2026, 8, 11, 9, 0, tzinfo=UTC)
+        )
+        assert "data_emissao" not in filtro["qtype"]
+
+    def test_converte_para_o_fuso_de_sao_paulo(self) -> None:
+        from datetime import UTC, datetime
+
+        from apps.integrations.ixc.invoices import IxcInvoiceSource
+
+        # 09:00 UTC = 06:00 em São Paulo.
+        filtro = IxcInvoiceSource._build_since_filter(
+            datetime(2026, 8, 11, 9, 0, tzinfo=UTC)
+        )
+        assert filtro["query"] == "2026-08-11 06:00:00"
