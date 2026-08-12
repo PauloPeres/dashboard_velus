@@ -428,14 +428,37 @@ def _run_sync(
 # (nosso sistema nunca remove fisicamente — só marca `deleted_at`).
 #
 # Só PAYMENTS e EXPENSES têm soft-delete (repos com `soft_delete_missing`).
-_RECONCILABLE = frozenset({Capability.PAYMENTS, Capability.EXPENSES})
+_RECONCILABLE = frozenset(
+    {Capability.PAYMENTS, Capability.EXPENSES, Capability.INVOICES}
+)
 
 # Capabilities cuja reconciliação RE-UPSERTA cada registro do pull completo —
 # necessário pra capturar mudanças in-place (ex.: Expense cancelada, status C)
 # que o incremental, filtrado por data de emissão, não reprocessa. PAYMENTS
 # fica de fora: volume alto e sem campo de status; re-salvar tudo toda noite
 # explodiria as tabelas de history. Pra Payment só a detecção por ausência importa.
-_RECONCILE_REUPSERT = frozenset({Capability.EXPENSES})
+_RECONCILE_REUPSERT = frozenset({Capability.EXPENSES, Capability.INVOICES})
+
+# Capabilities reconciliadas por JANELA em vez de pull completo (#132).
+#
+# INVOICES entrou na reconciliação porque era a única fonte de dinheiro sem rede:
+# despesas e pagamentos já tinham, faturas não — e foi exatamente aí que se
+# perderam seis semanas de caixa quando o incremental parou.
+#
+# A janela é obrigatória aqui, por dois motivos:
+#
+# 1. Volume: ~111 mil faturas contra ~10 mil despesas, e o re-upsert regrava
+#    tudo (o próprio PAYMENTS ficou fora da lista de re-upsert por volume, pra
+#    não explodir as tabelas de history). Puxar só o que foi ATUALIZADO na
+#    janela dá o mesmo conserto por uma fração do custo — e, com o filtro
+#    corrigido na #134, é exatamente o conjunto que pode ter escapado do
+#    incremental.
+# 2. `InvoiceRepository` NÃO implementa `soft_delete_missing`. Sem janela, o
+#    laço cairia no ramo de apagar-por-ausência e quebraria. Tirar INVOICES
+#    daqui exige implementar isso antes.
+_RECONCILE_WINDOW: dict[Capability, timedelta] = {
+    Capability.INVOICES: timedelta(days=180),
+}
 
 
 @shared_task(name="apps.sync.tasks.dispatch_reconciliation_for_all_orgs")
@@ -521,6 +544,8 @@ def _run_reconciliation(
 
     port_call, repo_factory, _ = _DISPATCH[capability]
     reupsert = capability in _RECONCILE_REUPSERT
+    janela = _RECONCILE_WINDOW.get(capability)
+    since = timezone.now() - janela if janela else None
 
     total_seen = 0
     per_source_summary: list[dict[str, Any]] = []
@@ -545,7 +570,7 @@ def _run_reconciliation(
                 seen_external_ids: set[str] = set()
                 skipped = 0
 
-                for dto in port_call(source, None):  # since=None → pull completo
+                for dto in port_call(source, since):  # None = pull completo
                     seen_external_ids.add(dto.external_id)
                     if reupsert:
                         try:
@@ -561,10 +586,20 @@ def _run_reconciliation(
                                 slog.error("reconcile_too_many_skips", skipped=skipped)
                                 raise
 
-                result = repository.soft_delete_missing(
-                    seen_external_ids=seen_external_ids,
-                    source_type=source_type,
-                )
+                if janela is None:
+                    result = repository.soft_delete_missing(
+                        seen_external_ids=seen_external_ids,
+                        source_type=source_type,
+                    )
+                else:
+                    # Com janela NÃO dá pra apagar por ausência: o que ficou de
+                    # fora pode simplesmente não ter sido atualizado no período.
+                    # Aqui a reconciliação é conserto, não detecção de sumiço.
+                    result = {
+                        "seen": len(seen_external_ids),
+                        "soft_deleted": 0,
+                        "janela_dias": janela.days,
+                    }
 
                 job.status = SyncStatus.COMPLETED
                 job.records_processed = len(seen_external_ids)
