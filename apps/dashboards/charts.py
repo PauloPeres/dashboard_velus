@@ -2355,3 +2355,64 @@ def mensagens_por_categoria_bar(
         },
     )
     return _to_json(fig)
+
+
+def os_carga_por_pessoa(rows: list[dict[str, Any]]) -> str:
+    """Barras horizontais empilhadas — OS abertas por pessoa, por faixa de idade.
+
+    Empilhado em vez de barra única porque o total sozinho não distingue quem
+    tem muita OS de hoje (carga real) de quem herdou um backlog parado — e a
+    ação para cada caso é oposta: uma pede reforço, a outra pede faxina.
+    """
+    ordenado = list(reversed(rows))
+    nomes = [r["nome"] for r in ordenado]
+    faixas = (
+        ("recente", "Até 7 dias", "#2563eb"),
+        ("atencao", "8 a 30 dias", "#10b981"),
+        ("atrasada", "31 a 90 dias", "#f59e0b"),
+        ("backlog", "Mais de 90 dias", "#dc2626"),
+    )
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                name=label,
+                x=[r[chave] for r in ordenado],
+                y=nomes,
+                orientation="h",
+                marker={"color": cor},
+                hovertemplate=f"<b>%{{y}}</b><br>{label}: %{{x}} OS<extra></extra>",
+            )
+            for chave, label, cor in faixas
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "margin": {"l": 200, "r": 20, "t": 30, "b": 50},
+            "xaxis": {"title": "OS abertas"},
+            "legend": {"orientation": "h", "y": -0.2},
+        },
+    )
+    return _to_json(fig)
+
+
+def os_backlog_por_tipo(rows: list[dict[str, Any]]) -> str:
+    """Barras horizontais — tipos de OS que compõem o backlog parado."""
+    ordenado = list(reversed(rows))
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=[r["n"] for r in ordenado],
+                y=[r["nome"] for r in ordenado],
+                orientation="h",
+                marker={"color": "#dc2626"},
+                hovertemplate="<b>%{y}</b><br>%{x} OS paradas<extra></extra>",
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "margin": {"l": 240, "r": 20, "t": 30, "b": 50},
+            "xaxis": {"title": "OS abertas há mais de 90 dias"},
+        },
+    )
+    return _to_json(fig)

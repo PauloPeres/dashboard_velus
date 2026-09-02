@@ -7962,3 +7962,166 @@ def _eixo_de_buckets(
 
 def _pct(parte: int, total: int) -> float:
     return round(100 * parte / total, 1) if total else 0.0
+
+
+# =============================================================================
+# OS — carga atual: fila aberta por pessoa, backlog e SLA de agenda
+# =============================================================================
+
+# Fronteira entre fila viva e backlog parado. 90 dias não é arbitrário: acima
+# disso a base da Velus é quase toda pendência administrativa pós-cancelamento
+# (retirada de equipamento, verificação financeira, SPC), que não disputa a
+# agenda do técnico de hoje e por isso não pode somar no mesmo número.
+OS_BACKLOG_DIAS = 90
+
+_OS_FAIXAS: tuple[tuple[str, str, int | None], ...] = (
+    ("recente", "Até 7 dias", 7),
+    ("atencao", "8 a 30 dias", 30),
+    ("atrasada", "31 a 90 dias", OS_BACKLOG_DIAS),
+    ("backlog", "Mais de 90 dias", None),
+)
+
+
+def compute_os_carga_atual(
+    organization: Organization,
+    *,
+    agora: datetime | None = None,
+) -> dict[str, Any]:
+    """Foto de AGORA das OS abertas: por pessoa, por idade e SLA de agenda.
+
+    Não responde ao filtro de período de propósito — é estoque, não fluxo. "OS
+    abertas no mês passado" não é uma pergunta respondível: uma OS aberta em
+    março e ainda aberta hoje pertence ao presente, não a março.
+
+    **SLA aqui é derivado da agenda**, não lido da fonte: o IXC tem os campos
+    (`status_sla`, `data_prazo_limite`), mas a Velus não os preenche —
+    `status_sla` nunca assume valor de atraso e o prazo limite existe em 7 das
+    959 OS abertas. O que sobra de compromisso datado e confiável é a data
+    agendada: passou e a OS não fechou, a Velus prometeu e não foi.
+    """
+    from apps.helpdesk.application.os_lookups import load_os_lookups
+    from apps.helpdesk.infrastructure.models import Ticket
+
+    now = agora or timezone.now()
+    lookups = load_os_lookups(organization)
+
+    abertas = Ticket.objects.filter(organization=organization).exclude(
+        status=Ticket.Status.CLOSED.value
+    )
+
+    por_pessoa: dict[str, dict[str, Any]] = {}
+    backlog_por_tipo: Counter[str] = Counter()
+    fila_por_tipo: Counter[str] = Counter()
+    por_status: Counter[str] = Counter()
+    faixas_totais: Counter[str] = Counter()
+
+    total = 0
+    sla_vencidas = 0
+    sla_no_prazo = 0
+    sem_agenda = 0
+
+    campos = (
+        "technician_id",
+        "subject_id",
+        "status",
+        "opened_at",
+        "scheduled_at",
+    )
+    for tecnico_id, assunto_id, status, opened_at, scheduled_at in abertas.values_list(
+        *campos
+    ).iterator(chunk_size=2000):
+        total += 1
+        por_status[status] += 1
+
+        faixa = _os_faixa_idade(opened_at, now)
+        faixas_totais[faixa] += 1
+
+        # SLA de agenda: sem data agendada não há promessa a cumprir, então a OS
+        # não conta como cumprida NEM como estourada — vira sua própria
+        # categoria, senão o percentual mentiria pra um lado ou pro outro.
+        if scheduled_at is None:
+            sem_agenda += 1
+            venceu = False
+        elif scheduled_at < now:
+            sla_vencidas += 1
+            venceu = True
+        else:
+            sla_no_prazo += 1
+            venceu = False
+
+        nome = lookups.technician_name(tecnico_id)
+        linha = por_pessoa.setdefault(
+            nome,
+            {
+                "nome": nome,
+                "total": 0,
+                "sla_vencidas": 0,
+                **{chave: 0 for chave, _, _ in _OS_FAIXAS},
+            },
+        )
+        linha["total"] += 1
+        linha[faixa] += 1
+        if venceu:
+            linha["sla_vencidas"] += 1
+
+        assunto = lookups.subject_name(assunto_id)
+        if faixa == "backlog":
+            backlog_por_tipo[assunto] += 1
+        else:
+            fila_por_tipo[assunto] += 1
+
+    backlog = faixas_totais["backlog"]
+    fila_viva = total - backlog
+
+    pessoas = sorted(por_pessoa.values(), key=lambda p: -p["total"])
+    for pessoa in pessoas:
+        pessoa["fila_viva"] = pessoa["total"] - pessoa["backlog"]
+        # Fila inteiramente parada e sem nada recente: ou a pessoa saiu, ou a
+        # fila dela foi abandonada. Nos dois casos o "total" dela não é carga
+        # de trabalho de ninguém, e a tela precisa poder dizer isso.
+        pessoa["fila_parada"] = pessoa["total"] > 0 and pessoa["fila_viva"] == 0
+
+    return {
+        "gerado_em": now,
+        "total": total,
+        "fila_viva": fila_viva,
+        "backlog": backlog,
+        "pct_backlog": _pct(backlog, total),
+        "por_status": [
+            {"status": status, "n": n} for status, n in por_status.most_common()
+        ],
+        "faixas": [
+            {"chave": chave, "label": label, "n": faixas_totais[chave]}
+            for chave, label, _ in _OS_FAIXAS
+        ],
+        "sla": {
+            "vencidas": sla_vencidas,
+            "no_prazo": sla_no_prazo,
+            "sem_agenda": sem_agenda,
+            # Base = OS com agenda. As sem agenda ficam fora da conta em vez de
+            # entrarem como "no prazo" — não há prazo pra cumprir.
+            "pct_vencidas": _pct(sla_vencidas, sla_vencidas + sla_no_prazo),
+        },
+        "por_pessoa": pessoas,
+        "backlog_por_tipo": [
+            {"nome": nome, "n": n} for nome, n in backlog_por_tipo.most_common(12)
+        ],
+        "fila_por_tipo": [
+            {"nome": nome, "n": n} for nome, n in fila_por_tipo.most_common(12)
+        ],
+    }
+
+
+def _os_faixa_idade(opened_at: datetime | None, now: datetime) -> str:
+    """Faixa etária da OS aberta. Sem data de abertura cai no backlog.
+
+    Uma OS sem `opened_at` não tem como provar que é recente; tratá-la como
+    recente inflaria a fila viva — o balde conservador é o certo.
+    """
+    if opened_at is None:
+        return "backlog"
+    dias = (now - opened_at).days
+    for chave, _label, teto in _OS_FAIXAS:
+        if teto is None or dias <= teto:
+            return chave
+    return "backlog"

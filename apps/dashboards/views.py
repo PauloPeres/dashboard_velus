@@ -79,6 +79,7 @@ from apps.analytics.application.aggregations import (
     compute_mrr_churn_series,
     compute_mrr_series,
     compute_net_adds_series,
+    compute_os_carga_atual,
     compute_offline_active_customers,
     compute_people_expenses,
     compute_pipeline_aging,
@@ -1443,10 +1444,23 @@ def os_dashboard(request: HttpRequest) -> HttpResponse:
         for s in status_qs
     ]
 
+    # Carga de AGORA — quem tem o quê aberto hoje. Não passa pelo período:
+    # é estoque, e uma OS aberta em março que segue aberta pertence ao presente.
+    carga = compute_os_carga_atual(org, agora=now)
+
     return render(
         request,
         "dashboards/os.html",
         {
+            "carga": carga,
+            "carga_pessoa_chart_json": charts.os_carga_por_pessoa(
+                carga["por_pessoa"]
+            ),
+            "carga_backlog_chart_json": (
+                charts.os_backlog_por_tipo(carga["backlog_por_tipo"])
+                if carga["backlog_por_tipo"]
+                else ""
+            ),
             "total_os": total_os,
             "distinct_types": distinct_types,
             "solution_rate": solution_rate,
