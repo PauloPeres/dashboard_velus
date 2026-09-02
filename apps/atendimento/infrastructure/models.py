@@ -129,6 +129,59 @@ class Etiqueta(TenantModel):
         return f"{self.nome} ({self.source_type}:{self.external_id})"
 
 
+class CanalComunicacao(TenantModel):
+    """Canal/numero por onde a conversa entra (catalogo `canal-comunicacao`).
+
+    Espelha `Departamento`/`Etiqueta`: catalogo barato (~dezenas) que resolve o
+    id opaco que a mensagem carrega em `canalComunicacao` pra um nome legivel
+    ("WhatsApp Cloud 0800 319-9986"). E a unidade de **custo**: cada canal e um
+    numero/integracao faturado separado pelo BSP, entao volume por canal e o
+    recorte que liga conversa a fatura.
+    """
+
+    source_type = models.CharField(
+        max_length=32,
+        choices=SourceType.choices,
+        help_text=_("Sistema externo que originou este registro."),
+    )
+    external_id = models.CharField(
+        max_length=128,
+        help_text=_("ID do canal no sistema externo (opaco — string)."),
+    )
+    nome = models.CharField(max_length=255, blank=True, default="")
+    # `canal` = midia (Whatsapp, Instagram, Messenger...); `integracao` = quem
+    # provê (facebook = Cloud API, dialog360 = BSP antigo). Os dois juntos
+    # definem a tarifa, por isso ficam em colunas proprias.
+    canal = models.CharField(max_length=64, blank=True, default="")
+    integracao = models.CharField(max_length=64, blank=True, default="")
+    status = models.CharField(
+        max_length=8, blank=True, default="",
+        help_text=_("Status na fonte: A = ativo, I = inativo."),
+    )
+
+    raw_extras = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        verbose_name = _("Canal de comunicação")
+        verbose_name_plural = _("Canais de comunicação")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "source_type", "external_id"],
+                name="unique_atendimento_canal_per_source",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "source_type"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.nome} ({self.source_type}:{self.external_id})"
+
+    @property
+    def is_ativo(self) -> bool:
+        return self.status.upper() == "A"
+
+
 class Atendimento(TenantModel):
     """Atendimento/conversa omnichannel vindo de uma fonte externa (Opa! Suite, ...).
 
@@ -189,6 +242,20 @@ class Atendimento(TenantModel):
         max_length=16, choices=Status.choices, default=Status.UNKNOWN
     )
     canal = models.CharField(max_length=64, blank=True, default="")
+    # Id do canal/numero especifico (`canal_id` na fonte). `canal` acima e a
+    # midia generica ("whatsapp") e hoje e constante em 100% da base — ele nao
+    # distingue o 0800 do numero comercial, que e o recorte de custo. Por isso
+    # o id opaco vira coluna propria, resolvida pelo catalogo CanalComunicacao.
+    canal_external_id = models.CharField(
+        max_length=128, blank=True, default="", db_index=True
+    )
+    # De onde a conversa nasceu. Hoje so a fonte distingue "" (cliente chamou
+    # direto) de "anuncioWhatsapp" (Click-to-WhatsApp); `origem_ref` guarda o id
+    # do anuncio da Meta, que liga volume de atendimento a custo de midia.
+    origem_tipo = models.CharField(
+        max_length=64, blank=True, default="", db_index=True
+    )
+    origem_ref = models.CharField(max_length=128, blank=True, default="")
     protocol = models.CharField(max_length=128, blank=True, default="")
 
     motivos = models.JSONField(default=list, blank=True)
@@ -263,7 +330,19 @@ class Mensagem(TenantModel):
         max_length=16, choices=Direction.choices, default=Direction.UNKNOWN
     )
     tipo = models.CharField(max_length=64, blank=True, default="")
+    # Vazio nas mensagens vindas do backfill de volume: la a gente ingere
+    # so metadado, de proposito — 671k textos de cliente seriam PII nova no
+    # dashboard sem nenhuma pergunta que dependesse deles. O drill-down segue
+    # buscando o texto sob demanda em `get_or_fetch_messages`.
     texto = models.TextField(blank=True, default="")
+    canal_external_id = models.CharField(
+        max_length=128, blank=True, default="", db_index=True,
+        help_text=_("Canal/numero por onde a mensagem passou (`canalComunicacao`)."),
+    )
+    # None = a fonte nao informou (mensagem do cliente, ou registro antigo).
+    # True = enviada fora da janela de 24h -> exige template pago no WhatsApp,
+    # e portanto e o proxy direto do que e faturado pelo BSP.
+    fora_janela_24h = models.BooleanField(null=True, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
 
     raw_extras = models.JSONField(default=dict, blank=True)
@@ -282,6 +361,10 @@ class Mensagem(TenantModel):
                 fields=["organization", "source_type", "atendimento_external_id"]
             ),
             models.Index(fields=["organization", "sent_at"]),
+            # Recorte da pagina de Mensagens: serie temporal ja fatiada por
+            # canal/direcao sem varrer a tabela inteira.
+            models.Index(fields=["organization", "sent_at", "direction"]),
+            models.Index(fields=["organization", "canal_external_id", "sent_at"]),
         ]
 
     def __str__(self) -> str:

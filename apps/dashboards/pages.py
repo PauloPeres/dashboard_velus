@@ -30,6 +30,7 @@ PAGES: list[dict[str, str]] = [
     {"key": "tecnicos", "label": "Técnicos", "url": "dashboards:tecnicos", "section": "Operações"},
     {"key": "atendimento", "label": "Atendimento", "url": "dashboards:atendimento", "section": "Operações"},
     {"key": "atendimento_tendencias", "label": "Tendências de Atendimento", "url": "dashboards:atendimento_tendencias", "section": "Operações"},
+    {"key": "mensagens", "label": "Mensagens & Canais", "url": "dashboards:mensagens", "section": "Operações"},
     {"key": "atendimento_conversao", "label": "Conversão & Churn", "url": "dashboards:atendimento_conversao", "section": "Operações"},
     {"key": "conversas_ruins", "label": "Conversas Ruins", "url": "dashboards:conversas_ruins", "section": "Operações"},
     {"key": "qa_supervisor", "label": "QA de Atendimento", "url": "dashboards:qa_supervisor", "section": "Operações"},

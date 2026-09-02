@@ -102,6 +102,27 @@ class EtiquetaDTO:
 
 
 @dataclass(frozen=True)
+class CanalComunicacaoDTO:
+    """Canal/numero de comunicacao configurado na fonte — catalogo id -> nome.
+
+    A mensagem so traz o canal como id opaco (`canalComunicacao`); o nome, a
+    midia e a integracao vem deste catalogo (barato, ~dezenas de registros),
+    igual aos catalogos de departamento/etiqueta/motivo.
+    """
+
+    external_id: str
+    nome: str = ""
+    canal: str = ""
+    integracao: str = ""
+    status: str = ""
+    raw_extras: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.external_id:
+            raise ValueError("CanalComunicacaoDTO.external_id nao pode ser vazio")
+
+
+@dataclass(frozen=True)
 class AtendimentoDTO:
     """Representacao neutra de um atendimento/conversa de qualquer fonte externa."""
 
@@ -129,6 +150,13 @@ class AtendimentoDTO:
     rating: int | None = None  # nota humana likert 1-5 (so vem em GET populado)
     closed_at: datetime | None = None
 
+    # Canal/numero especifico por onde a conversa entrou (id opaco, resolvido
+    # pelo catalogo de canais) e como ela nasceu (`anuncioWhatsapp` + id do
+    # anuncio, nas vindas de Click-to-WhatsApp).
+    canal_external_id: str = ""
+    origem_tipo: str = ""
+    origem_ref: str = ""
+
     raw_extras: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -150,6 +178,9 @@ class MensagemDTO:
     tipo: str  # texto, menuInterativo, ...
     texto: str
     sent_at: datetime | None
+    canal_external_id: str = ""
+    # None = a fonte nao informou (mensagem recebida / registro antigo).
+    fora_janela_24h: bool | None = None
     raw_extras: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

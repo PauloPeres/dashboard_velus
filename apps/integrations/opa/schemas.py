@@ -180,6 +180,27 @@ class OpaAtendimentoSchema(_OpaBase):
     def departamento_external_id(self) -> str:
         return _id_of(self.setor)
 
+    # `canal_id` e `origem` chegam como extras (nao declarados) — sao lidos do
+    # `model_extra` de proposito, pra `raw_extras` continuar carregando os dois
+    # crus como sempre carregou; aqui so os promovemos a coluna.
+    @property
+    def canal_external_id(self) -> str:
+        return _to_str((self.model_extra or {}).get("canal_id"))
+
+    @property
+    def origem_tipo(self) -> str:
+        origem = (self.model_extra or {}).get("origem")
+        return _to_str(origem.get("tipo")) if isinstance(origem, dict) else ""
+
+    @property
+    def origem_ref(self) -> str:
+        """Id do anuncio na origem (Click-to-WhatsApp) — vazio nas demais."""
+        origem = (self.model_extra or {}).get("origem")
+        if not isinstance(origem, dict):
+            return ""
+        dados = origem.get("dados")
+        return _to_str(dados.get("id")) if isinstance(dados, dict) else ""
+
     @property
     def motivo_ids(self) -> list[str]:
         """Ids opacos (idMotivo) dos motivos aplicados no atendimento.
@@ -256,9 +277,19 @@ class OpaMensagemSchema(_OpaBase):
     mensagem: str = Field(default="")
     tipo: str = Field(default="")
     tipoDestinatario: str = Field(default="", validation_alias=AliasChoices("tipoDestinatario", "tipo_destinatario"))
+    canalComunicacao: str = Field(
+        default="",
+        validation_alias=AliasChoices("canalComunicacao", "canal_comunicacao"),
+    )
+    # Ausente em mensagens recebidas e em registros antigos — por isso `None`
+    # (nao informado) e diferente de `False` (dentro da janela).
+    envioForaJanela24h: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices("envioForaJanela24h", "envio_fora_janela_24h"),
+    )
     data: datetime | None = Field(default=None)
 
-    @field_validator("id", "id_rota", "mensagem", "tipo", "tipoDestinatario", mode="before")
+    @field_validator("id", "id_rota", "mensagem", "tipo", "tipoDestinatario", "canalComunicacao", mode="before")
     @classmethod
     def _coerce_str(cls, v: Any) -> str:
         return _to_str(v)
@@ -279,6 +310,28 @@ class OpaMensagemSchema(_OpaBase):
         if dest == "clientes_users":
             return "AGENT"
         return "SYSTEM"
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})
+
+
+class OpaCanalSchema(_OpaBase):
+    """Registro de `canal-comunicacao` — o numero/perfil por onde a conversa entra.
+
+    `canal` e a midia (Whatsapp, Instagram, Messenger) e `integracao` o provedor
+    (facebook = Cloud API, dialog360 = BSP antigo); juntos definem a tarifa.
+    """
+
+    id: str = Field(validation_alias=AliasChoices("_id", "id"))
+    nome: str = Field(default="")
+    canal: str = Field(default="")
+    integracao: str = Field(default="")
+    status: str = Field(default="")
+
+    @field_validator("id", "nome", "canal", "integracao", "status", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
 
     def get_extras(self) -> dict[str, Any]:
         return dict(self.model_extra or {})

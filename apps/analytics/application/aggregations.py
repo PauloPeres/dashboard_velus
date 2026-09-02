@@ -7620,3 +7620,345 @@ def compute_cto_summary(organization: Organization) -> dict[str, Any]:
         "by_project": by_project,
         "top_ctos": top_ctos,
     }
+
+
+# =============================================================================
+# Mensagens & Canais — volume, direção, tipo, canal e origem
+# =============================================================================
+
+# Rótulos dos tipos crus da Opa!. O que não estiver aqui aparece com o nome cru
+# (é preferível "menuInterativo" a "Outro": um tipo novo na fonte tem que
+# aparecer, não se esconder num balde genérico).
+_MENSAGEM_TIPO_LABELS: dict[str, str] = {
+    "texto": "Texto",
+    "midia": "Mídia (foto, áudio, arquivo)",
+    "menuInterativo": "Menu interativo (bot)",
+    "template": "Template (HSM)",
+    "localizacao": "Localização",
+    "contato": "Contato",
+    "": "Sem tipo",
+}
+
+# Origens de conversa, como a fonte as nomeia.
+_ORIGEM_LABELS: dict[str, str] = {
+    "": "Cliente chamou direto",
+    "anuncioWhatsapp": "Anúncio Click-to-WhatsApp",
+}
+
+
+def compute_mensagens_volume(
+    organization: Organization,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    granularity: str = "week",
+    canal_external_id: str | None = None,
+    departamento_id: int | None = None,
+    top_n: int = 12,
+) -> dict[str, Any]:
+    """Volume de mensagens por direção, tipo, canal, departamento e motivo.
+
+    Responde "quanto se fala, quem fala e por onde entra" — a pergunta de custo
+    e de capacidade, separada da pergunta de qualidade que as outras abas de
+    atendimento já respondem.
+
+    Duas escolhas de recorte que mudam a leitura dos números:
+
+    - **A mensagem é atribuída ao período em que foi enviada** (`sent_at`), não
+      ao da abertura da conversa. Uma conversa aberta dia 30 que se arrasta até
+      dia 2 tem mensagens nos dois meses — que é o comportamento certo pra
+      custo, porque é assim que o BSP fatura.
+    - **A média é por conversa COM mensagem ingerida**, não por conversa
+      existente. Enquanto o backfill não cobre a janela inteira, dividir pelo
+      total de conversas daria uma média artificialmente baixa; `cobertura`
+      devolve a fração real pra tela poder avisar em vez de mentir.
+    """
+    from apps.atendimento.infrastructure.models import (
+        Atendimento,
+        CanalComunicacao,
+        Mensagem,
+    )
+
+    if granularity not in _TENDENCIA_GRANULARIDADES:
+        granularity = "week"
+
+    now = timezone.now()
+    window_end = end or now
+    window_start = start or (now - relativedelta(months=6))
+
+    mensagens = Mensagem.objects.filter(
+        organization=organization,
+        sent_at__gte=window_start,
+        sent_at__lte=window_end,
+        sent_at__isnull=False,
+    )
+    if canal_external_id:
+        mensagens = mensagens.filter(canal_external_id=canal_external_id)
+    if departamento_id is not None:
+        mensagens = mensagens.filter(atendimento__departamento_id=departamento_id)
+
+    # --- Totais por direção ------------------------------------------------
+    por_direcao = {
+        row["direction"]: row["n"]
+        for row in mensagens.values("direction").annotate(n=Count("id"))
+    }
+    n_agente = por_direcao.get(Mensagem.Direction.AGENT.value, 0)
+    n_cliente = por_direcao.get(Mensagem.Direction.CLIENT.value, 0)
+    n_sistema = por_direcao.get(Mensagem.Direction.SYSTEM.value, 0)
+    n_sistema += por_direcao.get(Mensagem.Direction.UNKNOWN.value, 0)
+    total = n_agente + n_cliente + n_sistema
+
+    # --- Série temporal por direção ----------------------------------------
+    buckets = _eixo_de_buckets(window_start, window_end, granularity)
+    serie_por_bucket: dict[date_cls, dict[str, int]] = defaultdict(
+        lambda: {"agente": 0, "cliente": 0}
+    )
+    for sent_at, direction in mensagens.values_list("sent_at", "direction").iterator(
+        chunk_size=5000
+    ):
+        bucket = _bucket_start(timezone.localtime(sent_at).date(), granularity)
+        chave = "agente" if direction == Mensagem.Direction.AGENT.value else "cliente"
+        serie_por_bucket[bucket][chave] += 1
+
+    serie = {
+        "labels": [_bucket_label(b, granularity) for b in buckets],
+        "agente": [serie_por_bucket[b]["agente"] for b in buckets],
+        "cliente": [serie_por_bucket[b]["cliente"] for b in buckets],
+    }
+
+    # --- Por tipo ----------------------------------------------------------
+    por_tipo = [
+        {
+            "tipo": row["tipo"],
+            "label": _MENSAGEM_TIPO_LABELS.get(row["tipo"], row["tipo"] or "Sem tipo"),
+            "n": row["n"],
+            "pct": _pct(row["n"], total),
+        }
+        for row in mensagens.values("tipo").annotate(n=Count("id")).order_by("-n")
+    ]
+
+    # --- Por canal ---------------------------------------------------------
+    catalogo = {
+        c.external_id: c
+        for c in CanalComunicacao.objects.filter(organization=organization)
+    }
+    por_canal = []
+    for row in (
+        mensagens.values("canal_external_id").annotate(n=Count("id")).order_by("-n")
+    ):
+        canal = catalogo.get(row["canal_external_id"])
+        por_canal.append(
+            {
+                "external_id": row["canal_external_id"],
+                "nome": canal.nome if canal else (row["canal_external_id"] or "—"),
+                "midia": canal.canal if canal else "",
+                "integracao": canal.integracao if canal else "",
+                "ativo": canal.is_ativo if canal else None,
+                "n": row["n"],
+                "pct": _pct(row["n"], total),
+            }
+        )
+
+    # --- Custo: enviadas fora da janela de 24h -----------------------------
+    # A fonte só marca o flag no que ela envia, então a base do percentual é o
+    # que a Velus mandou — não o total, que incluiria mensagens de cliente e
+    # diluiria o número pra menos da metade do real.
+    fora_janela = mensagens.filter(fora_janela_24h=True).count()
+
+    # --- Por conversa: departamento, motivo, origem ------------------------
+    por_atendimento = dict(
+        mensagens.exclude(atendimento__isnull=True)
+        .values_list("atendimento_id")
+        .annotate(n=Count("id"))
+        .values_list("atendimento_id", "n")
+    )
+    agregado = _agregar_mensagens_por_conversa(
+        organization, por_atendimento, top_n=top_n
+    )
+
+    # --- Cobertura: quanto da janela o backfill já cobre --------------------
+    conversas_na_janela = Atendimento.objects.filter(
+        organization=organization,
+        opened_at__gte=window_start,
+        opened_at__lte=window_end,
+    ).count()
+    conversas_com_mensagem = len(por_atendimento)
+
+    return {
+        "window_start": window_start,
+        "window_end": window_end,
+        "granularity": granularity,
+        "total": total,
+        "n_agente": n_agente,
+        "n_cliente": n_cliente,
+        "n_sistema": n_sistema,
+        "pct_agente": _pct(n_agente, total),
+        "pct_cliente": _pct(n_cliente, total),
+        # Quantas mensagens a Velus manda pra cada uma que recebe. Acima de ~2
+        # é bot/menu falando sozinho, não conversa.
+        "razao_resposta": round(n_agente / n_cliente, 2) if n_cliente else None,
+        "media_por_conversa": (
+            round(total / conversas_com_mensagem, 1) if conversas_com_mensagem else None
+        ),
+        "serie": serie,
+        "por_tipo": por_tipo,
+        "por_canal": por_canal,
+        "fora_janela": fora_janela,
+        "pct_fora_janela": _pct(fora_janela, n_agente),
+        "por_departamento": agregado["por_departamento"],
+        "por_motivo": agregado["por_motivo"],
+        "origem": agregado["origem"],
+        "cobertura": {
+            "conversas": conversas_na_janela,
+            "conversas_com_mensagem": conversas_com_mensagem,
+            "pct": _pct(conversas_com_mensagem, conversas_na_janela),
+            # A tela avisa em vez de fingir número fechado. O corte não é
+            # estatístico, é prático: abaixo disso o gráfico de volume desenha
+            # o backfill, não a operação.
+            "parcial": _pct(conversas_com_mensagem, conversas_na_janela) < 90,
+        },
+        "canais_disponiveis": [
+            {"external_id": c.external_id, "nome": c.nome, "ativo": c.is_ativo}
+            for c in sorted(catalogo.values(), key=lambda c: (not c.is_ativo, c.nome))
+        ],
+        "selected_canal": canal_external_id or "",
+    }
+
+
+def _agregar_mensagens_por_conversa(
+    organization: Organization,
+    por_atendimento: dict[int, int],
+    *,
+    top_n: int,
+) -> dict[str, Any]:
+    """Distribui as mensagens já contadas pelos atributos da conversa.
+
+    Departamento sai de FK e caberia em SQL; motivo não — é JSONField com N
+    valores por conversa, e cada motivo tem que receber a conversa inteira
+    (uma conversa com dois motivos conta nos dois). Como a volta ao banco já é
+    necessária pro motivo, os quatro recortes saem da mesma varredura.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento
+
+    if not por_atendimento:
+        return {
+            "por_departamento": [],
+            "por_motivo": [],
+            "origem": {
+                "conversas": 0,
+                "por_tipo": [],
+                "top_anuncios": [],
+            },
+        }
+
+    msgs_por_depto: Counter[str] = Counter()
+    convs_por_depto: Counter[str] = Counter()
+    msgs_por_motivo: Counter[str] = Counter()
+    convs_por_motivo: Counter[str] = Counter()
+    msgs_por_origem: Counter[str] = Counter()
+    convs_por_origem: Counter[str] = Counter()
+    msgs_por_anuncio: Counter[str] = Counter()
+    convs_por_anuncio: Counter[str] = Counter()
+
+    campos = (
+        "id",
+        "departamento__nome",
+        "motivos",
+        "origem_tipo",
+        "origem_ref",
+    )
+    conversas = (
+        Atendimento.objects.filter(
+            organization=organization, id__in=list(por_atendimento)
+        )
+        .values_list(*campos)
+        .iterator(chunk_size=2000)
+    )
+    for at_id, depto, motivos, origem_tipo, origem_ref in conversas:
+        n = por_atendimento.get(at_id, 0)
+        if not n:
+            continue
+
+        nome_depto = depto or "Sem departamento"
+        msgs_por_depto[nome_depto] += n
+        convs_por_depto[nome_depto] += 1
+
+        # Conversa sem motivo aplicado é o caso mais comum na Triagem; ela
+        # precisa aparecer, senão o total do recorte não bate com o geral.
+        for motivo in motivos or ["Sem motivo"]:
+            if motivo:
+                msgs_por_motivo[motivo] += n
+                convs_por_motivo[motivo] += 1
+
+        origem = origem_tipo or ""
+        msgs_por_origem[origem] += n
+        convs_por_origem[origem] += 1
+        if origem_ref:
+            msgs_por_anuncio[origem_ref] += n
+            convs_por_anuncio[origem_ref] += 1
+
+    return {
+        "por_departamento": _linhas_media(
+            msgs_por_depto, convs_por_depto, limite=None
+        ),
+        "por_motivo": _linhas_media(msgs_por_motivo, convs_por_motivo, limite=top_n),
+        "origem": {
+            "conversas": sum(convs_por_origem.values()),
+            "por_tipo": [
+                {
+                    "tipo": tipo,
+                    "label": _ORIGEM_LABELS.get(tipo, tipo),
+                    "mensagens": msgs_por_origem[tipo],
+                    "conversas": convs,
+                    "media": round(msgs_por_origem[tipo] / convs, 1) if convs else 0,
+                }
+                for tipo, convs in convs_por_origem.most_common()
+            ],
+            "top_anuncios": _linhas_media(
+                msgs_por_anuncio, convs_por_anuncio, limite=10
+            ),
+        },
+    }
+
+
+def _linhas_media(
+    mensagens: Counter[str],
+    conversas: Counter[str],
+    *,
+    limite: int | None,
+) -> list[dict[str, Any]]:
+    """Linhas `(nome, mensagens, conversas, média)` ordenadas por volume.
+
+    Ordena por total de mensagens, não pela média: o que interessa é onde o
+    volume está, e a média de uma categoria com três conversas oscila demais
+    pra liderar um ranking.
+    """
+    itens = mensagens.most_common(limite) if limite else mensagens.most_common()
+    total = sum(mensagens.values())
+    return [
+        {
+            "nome": nome,
+            "mensagens": n,
+            "conversas": conversas[nome],
+            "media": round(n / conversas[nome], 1) if conversas[nome] else 0,
+            "pct": _pct(n, total),
+        }
+        for nome, n in itens
+    ]
+
+
+def _eixo_de_buckets(
+    window_start: datetime, window_end: datetime, granularity: str
+) -> list[date_cls]:
+    """Eixo completo da janela — bucket sem dado vira zero, não some do gráfico."""
+    buckets: list[date_cls] = []
+    cursor = _bucket_start(timezone.localtime(window_start).date(), granularity)
+    last = _bucket_start(timezone.localtime(window_end).date(), granularity)
+    while cursor <= last:
+        buckets.append(cursor)
+        cursor = _next_bucket(cursor, granularity)
+    return buckets
+
+
+def _pct(parte: int, total: int) -> float:
+    return round(100 * parte / total, 1) if total else 0.0

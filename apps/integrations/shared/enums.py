@@ -34,6 +34,7 @@ class Capability(models.TextChoices):
         PAYMENTS   → apps.financial.domain.ports.PaymentSourcePort
         TICKETS    → apps.helpdesk.domain.ports.TicketSourcePort
         ATENDIMENTO → apps.atendimento.domain.ports.AtendimentoSourcePort
+        MENSAGENS   → idem (listagem global de mensagens)
         CONNECTIONS → apps.network.domain.ports.ConnectionSourcePort
         BANDWIDTH   → apps.network.domain.ports.BandwidthUsageSourcePort
         EQUIPMENT  → apps.inventory.domain.ports.EquipmentSourcePort
@@ -48,6 +49,10 @@ class Capability(models.TextChoices):
     EXPENSES = "EXPENSES", "Despesas"
     TICKETS = "TICKETS", "Chamados"
     ATENDIMENTO = "ATENDIMENTO", "Atendimentos (Opa! Suite)"
+    # Cursor proprio: as mensagens vem de outra listagem, com outro ritmo e
+    # outro custo que os atendimentos. Compartilhar o checkpoint faria uma
+    # ingestao mover o cursor da outra.
+    MENSAGENS = "MENSAGENS", "Mensagens de atendimento (Opa! Suite)"
     CONNECTIONS = "CONNECTIONS", "Conexões"
     BANDWIDTH = "BANDWIDTH", "Consumo de banda"
     EQUIPMENT = "EQUIPMENT", "Equipamentos em comodato"

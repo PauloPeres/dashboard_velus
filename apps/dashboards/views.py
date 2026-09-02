@@ -75,6 +75,7 @@ from apps.analytics.application.aggregations import (
     compute_lead_origin,
     compute_ltv_distribution,
     compute_mao_de_obra_detail,
+    compute_mensagens_volume,
     compute_mrr_churn_series,
     compute_mrr_series,
     compute_net_adds_series,
@@ -1528,6 +1529,78 @@ def atendimento(request: HttpRequest) -> HttpResponse:
             "motivos_chart_json": charts.atendimento_top_motivos(data["top_motivos"]),
             "deflection_chart_json": charts.bot_deflection_trend(
                 deflection["deflection_trend"]
+            ),
+        },
+    )
+
+
+@login_required
+@never_cache
+def mensagens(request: HttpRequest) -> HttpResponse:
+    """Volume de mensagens: quem fala, de que tipo, por qual canal e a que custo.
+
+    Aba separada das outras cinco de atendimento porque a pergunta é outra: as
+    demais olham a QUALIDADE de uma conversa (nota, motivo, reincidência), esta
+    olha o VOLUME e a origem dele — capacidade de equipe e custo de canal, que
+    é o que a fatura do WhatsApp cobra.
+    """
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    from apps.atendimento.infrastructure.models import Departamento
+
+    org = org_or_redirect
+    period = _get_period(request)
+
+    granularity = request.GET.get("g", "week")
+    if granularity not in ("week", "month"):
+        granularity = "week"
+
+    canal = request.GET.get("canal", "").strip() or None
+
+    departamento_id: int | None = None
+    raw_dep = request.GET.get("departamento", "")
+    if raw_dep.isdigit():
+        departamento_id = int(raw_dep)
+
+    # O form de período personalizado precisa devolver o mesmo recorte (#86).
+    set_period_extra_params(
+        request,
+        {"g": granularity, "canal": canal, "departamento": departamento_id},
+    )
+
+    data = compute_mensagens_volume(
+        org,
+        start=period.start,
+        end=period.end,
+        granularity=granularity,
+        canal_external_id=canal,
+        departamento_id=departamento_id,
+    )
+
+    departamentos = list(
+        Departamento.objects.filter(organization=org).order_by("nome").values("id", "nome")
+    )
+    selected_departamento_nome = next(
+        (d["nome"] for d in departamentos if d["id"] == departamento_id), None
+    )
+
+    return render(
+        request,
+        "dashboards/mensagens.html",
+        {
+            **data,
+            "departamentos": departamentos,
+            "selected_departamento_id": departamento_id,
+            "selected_departamento_nome": selected_departamento_nome,
+            "volume_chart_json": charts.mensagens_volume_stacked(data["serie"]),
+            "tipo_chart_json": charts.mensagens_tipo_pie(data["por_tipo"]),
+            "canal_chart_json": charts.mensagens_canal_bar(data["por_canal"]),
+            "departamento_chart_json": charts.mensagens_por_categoria_bar(
+                data["por_departamento"]
+            ),
+            "motivo_chart_json": charts.mensagens_por_categoria_bar(
+                data["por_motivo"]
             ),
         },
     )

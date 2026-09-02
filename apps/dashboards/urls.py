@@ -29,6 +29,7 @@ urlpatterns = [
     path("operations/os/", views.os_dashboard, name="os_dashboard"),
     path("operations/tecnicos/", views.tecnicos, name="tecnicos"),
     path("operations/atendimento/", views.atendimento, name="atendimento"),
+    path("operations/mensagens/", views.mensagens, name="mensagens"),
     path(
         "operations/atendimento-tendencias/",
         views.atendimento_tendencias,

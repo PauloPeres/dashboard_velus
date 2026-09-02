@@ -2226,3 +2226,132 @@ def cto_by_project_stacked_bar(by_project: list[dict[str, Any]]) -> str:
         },
     )
     return _to_json(fig)
+
+
+# -----------------------------------------------------------------------------
+# Mensagens & Canais
+# -----------------------------------------------------------------------------
+
+# Paleta dos recortes de mensagem. Velus em azul, cliente em cinza-esverdeado:
+# a comparação é "nós vs eles", então as duas cores precisam ser lidas como
+# categorias distintas, não como bom/ruim.
+_COR_AGENTE = "#2563eb"
+_COR_CLIENTE = "#64748b"
+
+
+def mensagens_volume_stacked(serie: dict[str, Any]) -> str:
+    """Barras empilhadas — mensagens da Velus e do cliente por período."""
+    labels = serie["labels"]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                name="Velus (suporte + bot)",
+                x=labels, y=serie["agente"],
+                marker={"color": _COR_AGENTE},
+                hovertemplate="<b>%{x}</b><br>Velus: %{y} mensagens<extra></extra>",
+            ),
+            go.Bar(
+                name="Cliente",
+                x=labels, y=serie["cliente"],
+                marker={"color": _COR_CLIENTE},
+                hovertemplate="<b>%{x}</b><br>Cliente: %{y} mensagens<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "yaxis": {"title": "Mensagens"},
+            "legend": {"orientation": "h", "y": -0.2},
+        },
+    )
+    return _to_json(fig)
+
+
+def mensagens_tipo_pie(data: list[dict[str, Any]]) -> str:
+    """Donut — distribuição por tipo de mensagem."""
+    cores = {
+        "texto": "#2563eb",
+        "midia": "#8b5cf6",
+        "menuInterativo": "#f59e0b",
+        "template": "#dc2626",
+        "localizacao": "#10b981",
+        "contato": "#14b8a6",
+    }
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=[d["label"] for d in data],
+                values=[d["n"] for d in data],
+                hole=0.45,
+                marker={"colors": [cores.get(d["tipo"], "#9ca3af") for d in data]},
+                hovertemplate="<b>%{label}</b><br>%{value} mensagens (%{percent})<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "showlegend": True},
+    )
+    return _to_json(fig)
+
+
+def mensagens_canal_bar(data: list[dict[str, Any]]) -> str:
+    """Barras horizontais — volume por canal/número de origem.
+
+    Canal inativo sai em cinza: ele ainda aparece porque tem histórico, mas o
+    volume dele não é capacidade nem custo futuro.
+    """
+    ordenado = list(reversed(data))
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=[d["n"] for d in ordenado],
+                y=[d["nome"] for d in ordenado],
+                orientation="h",
+                marker={
+                    "color": [
+                        _COR_AGENTE if d.get("ativo") else "#cbd5e1" for d in ordenado
+                    ]
+                },
+                hovertemplate="<b>%{y}</b><br>%{x} mensagens<extra></extra>",
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "margin": {"l": 220, "r": 20, "t": 30, "b": 50},
+            "xaxis": {"title": "Mensagens"},
+        },
+    )
+    return _to_json(fig)
+
+
+def mensagens_por_categoria_bar(
+    rows: list[dict[str, Any]], *, eixo: str = "Mensagens"
+) -> str:
+    """Barras horizontais de volume com a média por conversa no hover.
+
+    As duas leituras juntas de propósito: um motivo pode liderar o volume por
+    ser frequente (muitas conversas curtas) ou por ser custoso (poucas conversas
+    longas) — e a resposta operacional pra cada caso é oposta.
+    """
+    ordenado = list(reversed(rows))
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=[r["mensagens"] for r in ordenado],
+                y=[r["nome"] for r in ordenado],
+                orientation="h",
+                marker={"color": _COR_AGENTE},
+                customdata=[[r["conversas"], r["media"]] for r in ordenado],
+                hovertemplate=(
+                    "<b>%{y}</b><br>%{x} mensagens<br>"
+                    "%{customdata[0]} conversas · %{customdata[1]} msg/conversa"
+                    "<extra></extra>"
+                ),
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "margin": {"l": 220, "r": 20, "t": 30, "b": 50},
+            "xaxis": {"title": eixo},
+        },
+    )
+    return _to_json(fig)
