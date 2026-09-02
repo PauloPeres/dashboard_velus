@@ -1,0 +1,49 @@
+{% comment %}
+  Menu lateral — desenhado a partir de `nav_tree` (context processor `nav`),
+  que por sua vez vem de `pages.PAGES`.
+
+  Este partial não decide NADA: não sabe quais páginas existem, em que ordem,
+  quem pode ver o quê nem qual está ativa. Tudo isso é resolvido em
+  `pages.nav_tree()`. Foi essa separação que faltava quando o menu era HTML
+  solto: registrar uma página no catálogo não a fazia aparecer.
+{% endcomment %}
+{% for no in nav_tree %}
+  {% if no.tipo == "grupo" %}
+  <div class="space-y-0.5">
+    <button
+      onclick="toggleNavGroup('{{ no.slug }}')"
+      class="w-full flex items-center justify-between px-3 py-2 rounded-md focus:outline-none
+             {% if no.aberto %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}"
+    >
+      <span>{{ no.label }}</span>
+      <svg id="nav-group-arrow-{{ no.slug }}"
+           class="w-3.5 h-3.5 flex-shrink-0 transition-transform duration-150"
+           style="{% if no.aberto %}transform:rotate(180deg){% endif %}"
+           fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </button>
+
+    <div id="nav-group-{{ no.slug }}"
+         class="{% if not no.aberto %}hidden{% endif %} ml-1 pl-3 border-l-2 border-gray-100 space-y-0.5">
+      {% for item in no.itens %}
+        {% for link in item.links %}
+        <a href="{{ link.href }}"
+           class="block px-3 py-1.5 rounded-md text-xs
+                  {% if link.ativo %}text-blue-700 font-semibold{% else %}text-gray-500 hover:bg-gray-50 hover:text-gray-900{% endif %}">
+          {{ link.label }}
+        </a>
+        {% endfor %}
+      {% endfor %}
+    </div>
+  </div>
+  {% else %}
+    {% for link in no.links %}
+    <a href="{{ link.href }}"
+       class="flex items-center px-3 py-2 rounded-md
+              {% if no.ativo %}bg-blue-50 text-blue-700 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
+      {{ link.label }}
+    </a>
+    {% endfor %}
+  {% endif %}
+{% endfor %}
