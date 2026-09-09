@@ -7491,49 +7491,42 @@ _CTO_CAPACITY_CUTOFF = 64
 
 
 def _fetch_cto_catalog(organization: Organization) -> dict[str, dict[str, Any]]:
-    """Busca catálogo de CTOs do IXC via rad_caixa_ftth.
+    """Catálogo de CTOs a partir de `NetworkElement` (#142).
 
-    Retorna {cto_id: {capacidade, id_projeto, descricao, id_cidade, bairro, status}}
-    para todas as caixas ativas com capacidade real (campo 'capacidade').
+    Antes isto batia no IXC dentro do render: uma chamada HTTP por pageview e o
+    contexto de analytics importando `apps.integrations`, contra a regra do
+    AGENT.md §1.6. Agora a planta chega pelo sync diário de topologia e aqui só
+    se lê o banco.
+
+    Filtra pela capacidade (>0 e <= _CTO_CAPACITY_CUTOFF) porque acima disso o
+    registro é agregação/OLT, não caixa de atendimento.
+
+    Retorna {cto_id: {capacidade, id_projeto, descricao, id_cidade, bairro, status}}.
     """
-    import structlog
-    _log = structlog.get_logger(__name__)
+    from apps.network.infrastructure.models import NetworkElement
 
-    from apps.tenancy.models import OrganizationDataSource
-    from apps.integrations.ixc.client import IxcHttpClient
-
-    ds = (
-        OrganizationDataSource.objects
-        .filter(organization=organization, source_type="IXC", is_active=True)
-        .first()
-    )
-    if not ds:
-        return {}
-
-    creds = ds.get_credentials()
     catalog: dict[str, dict[str, Any]] = {}
-    try:
-        with IxcHttpClient(
-            base_url=creds["base_url"],
-            user_id=creds["user_id"],
-            api_token=creds["api_token"],
-        ) as client:
-            for raw in client.paginate_ixc("rad_caixa_ftth"):
-                cto_id = str(raw.get("id", ""))
-                cap = int(raw.get("capacidade", 0) or 0)
-                if cap <= 0 or cap > _CTO_CAPACITY_CUTOFF:
-                    continue
-                catalog[cto_id] = {
-                    "capacidade": cap,
-                    "id_projeto": str(raw.get("id_projeto", "0")),
-                    "descricao": raw.get("descricao", ""),
-                    "id_cidade": str(raw.get("id_cidade", "")),
-                    "bairro": raw.get("bairro", ""),
-                    "status": raw.get("status", ""),
-                }
-    except Exception:
-        _log.warning("cto_catalog_fetch_failed", exc_info=True)
-
+    rows = NetworkElement.objects.filter(
+        organization=organization,
+        kind=NetworkElement.Kind.CTO,
+        capacity__gt=0,
+        capacity__lte=_CTO_CAPACITY_CUTOFF,
+    ).values(
+        "external_id", "capacity", "project_external_id", "name",
+        "status", "raw_extras",
+    )
+    for row in rows:
+        extras = row["raw_extras"] or {}
+        catalog[row["external_id"]] = {
+            "capacidade": row["capacity"],
+            "id_projeto": row["project_external_id"] or "0",
+            "descricao": row["name"],
+            # Cidade e bairro seguem em raw_extras: o DTO neutro guarda o
+            # endereço já montado, e estes dois só servem ao rótulo desta tela.
+            "id_cidade": str(extras.get("id_cidade", "")),
+            "bairro": extras.get("bairro", ""),
+            "status": row["status"],
+        }
     return catalog
 
 
@@ -7541,22 +7534,25 @@ def _fetch_cto_catalog(organization: Organization) -> dict[str, dict[str, Any]]:
 def compute_cto_summary(organization: Organization) -> dict[str, Any]:
     """Ocupação de portas de CTOs FTTH, agregada por projeto.
 
-    Capacidade real vem do endpoint rad_caixa_ftth do IXC (campo 'capacidade').
-    Ocupação vem de Connection.raw_extras.id_caixa_ftth (radusuarios).
+    Capacidade real vem da planta sincronizada (`NetworkElement`, kind CTO).
+    Ocupação vem de `Connection.cto_external_id` — coluna desde #143; antes era
+    um `KeyTextTransform` em cima de `raw_extras`, que não usava índice.
     """
     from apps.network.infrastructure.models import Connection
 
-    # 1) Catálogo do IXC com capacidade real
+    # 1) Catálogo da planta, com capacidade real
     catalog = _fetch_cto_catalog(organization)
 
     # 2) Ocupação por CTO a partir das conexões
-    qs = Connection.objects.filter(organization=organization).annotate(
-        cto_id=KeyTextTransform("id_caixa_ftth", "raw_extras"),
-    ).exclude(cto_id__isnull=True).exclude(cto_id="").exclude(cto_id="0")
+    qs = (
+        Connection.objects
+        .filter(organization=organization)
+        .exclude(cto_external_id="")
+    )
 
     cto_occupied: dict[str, int] = {}
-    for row in qs.values("cto_id").annotate(occupied=Count("id")):
-        cto_occupied[row["cto_id"]] = row["occupied"]
+    for row in qs.values("cto_external_id").annotate(occupied=Count("id")):
+        cto_occupied[row["cto_external_id"]] = row["occupied"]
 
     # 3) Montar dados — CTOs do catálogo (inclui as sem conexão = 100% livres)
     proj_agg: dict[str, dict[str, Any]] = defaultdict(
