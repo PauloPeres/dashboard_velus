@@ -26,7 +26,9 @@ class IxcAdapterConfig(AppConfig):
         from .expenses import IxcExpenseSource
         from .invoices import IxcInvoiceSource
         from .leads import IxcLeadSource
+        from .network_elements import IxcNetworkElementSource
         from .opportunities import IxcOpportunitySource
+        from .optical_signal import IxcOpticalSignalSource
         from .payments import IxcPaymentSource
         from .tickets import IxcTicketSource
 
@@ -40,6 +42,8 @@ class IxcAdapterConfig(AppConfig):
             (Capability.TICKETS, IxcTicketSource),
             (Capability.CONNECTIONS, IxcConnectionSource),
             (Capability.BANDWIDTH, IxcBandwidthUsageSource),
+            (Capability.NETWORK_ELEMENTS, IxcNetworkElementSource),
+            (Capability.OPTICAL_SIGNAL, IxcOpticalSignalSource),
             (Capability.EQUIPMENT, IxcEquipmentSource),
             (Capability.LEADS, IxcLeadSource),
             (Capability.OPPORTUNITIES, IxcOpportunitySource),

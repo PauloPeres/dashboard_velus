@@ -23,6 +23,50 @@ def _to_str(v: Any) -> str:
     return str(v) if v is not None else ""
 
 
+def _to_id_str(v: Any) -> str:
+    """Normaliza id de referência do IXC — "0" e "" significam a mesma coisa: sem vínculo.
+
+    O IXC usa "0" como "não relacionado" em toda FK. Deixar o zero passar faria
+    o domínio tratar "sem CTO" como "CTO de id 0" e agrupar clientes de bairros
+    diferentes na mesma caixa fantasma.
+    """
+    raw = _to_str(v).strip()
+    return "" if raw in ("0", "0.0") else raw
+
+
+def _to_coordinate(v: Any) -> float | None:
+    """Coordenada do IXC (string) → float, com 0 virando None.
+
+    Zero não é uma posição: é o campo em branco. Se passasse como 0.0 o ponto
+    cairia no golfo da Guiné e entraria em qualquer cluster geográfico.
+    """
+    if v in (None, ""):
+        return None
+    try:
+        coord = float(str(v).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    return None if coord == 0.0 else coord
+
+
+def _to_ixc_datetime(v: Any) -> datetime | None:
+    """Datas do IXC vêm sem timezone e com o zero-date do MySQL como "vazio"."""
+    if v in (None, "", "0000-00-00 00:00:00", "0000-00-00"):
+        return None
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, str):
+        from zoneinfo import ZoneInfo
+
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                naive = datetime.strptime(v, fmt)
+                return naive.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+            except ValueError:
+                continue
+    return None
+
+
 class IxcCustomerSchema(BaseModel):
     """Schema do registro `cliente` na API IXC.
 
@@ -532,14 +576,42 @@ class IxcRadUserSchema(BaseModel):
         validation_alias=AliasChoices("ultima_conexao", "ultima_conexao_inicial"),
     )
 
+    # Topologia e queda — promovidos a coluna em #143 (antes só chegavam em
+    # `raw_extras` e ninguém lia). São a base do detector de massivas.
+    ultima_conexao_final: datetime | None = Field(default=None)
+    motivo_desconexao: str = Field(default="")
+    id_caixa_ftth: str = Field(default="")
+    ftth_porta: str = Field(default="")
+    id_transmissor: str = Field(default="")
+    id_concentrador: str = Field(default="")
+    latitude: float | None = Field(default=None)
+    longitude: float | None = Field(default=None)
+
     @field_validator(
         "id", "id_cliente", "id_contrato", "login", "ativo", "online",
-        "ip", "nas_ip", "download", "upload",
+        "ip", "nas_ip", "download", "upload", "motivo_desconexao", "ftth_porta",
         mode="before",
     )
     @classmethod
     def _coerce_str(cls, v: Any) -> str:
         return _to_str(v)
+
+    @field_validator(
+        "id_caixa_ftth", "id_transmissor", "id_concentrador", mode="before"
+    )
+    @classmethod
+    def _coerce_id(cls, v: Any) -> str:
+        return _to_id_str(v)
+
+    @field_validator("latitude", "longitude", mode="before")
+    @classmethod
+    def _coerce_coordinate(cls, v: Any) -> float | None:
+        return _to_coordinate(v)
+
+    @field_validator("ultima_conexao_final", mode="before")
+    @classmethod
+    def _parse_disconnection(cls, v: Any) -> datetime | None:
+        return _to_ixc_datetime(v)
 
     @field_validator("bytes_recebidos", "bytes_enviados", mode="before")
     @classmethod
@@ -575,6 +647,27 @@ class IxcRadUserSchema(BaseModel):
     @property
     def is_online(self) -> bool:
         return self.online.upper() == "S"
+
+    @property
+    def has_known_session_state(self) -> bool:
+        """`online` só distingue conectado de caído nos valores "S" e "N".
+
+        Medição em produção (2026-09-08, 8.265 logins): "S" 3.129, "SS" 4.870,
+        "N" 245, "" 21. Nos 3.413 logins ATIVOS o campo é "S" 3.125, "N" 236,
+        "SS" 31, "" 21.
+
+        "SS" NÃO é sessão simultânea: dos 31 ativos com esse valor, nenhum tem
+        IP, 28 nunca conectaram (`ultima_conexao_inicial` zerada) e os 3 que
+        conectaram pararam em 2025 — é o estado de login sem sessão registrada,
+        que é também o que 4.839 dos 4.848 logins inativos carregam. Os 21 com
+        campo vazio têm última conexão em 2021.
+
+        Nenhum dos dois é uma queda de hoje. Tratá-los como OFFLINE colocaria 52
+        clientes fantasma competindo com as ~44 quedas do maior evento real do
+        dia e afundaria a credibilidade do detector — por isso viram UNKNOWN.
+        Não colapse isto de volta em `online != "S"`.
+        """
+        return self.online.upper() in ("S", "N")
 
     def get_extras(self) -> dict[str, Any]:
         return dict(self.model_extra or {})
@@ -872,3 +965,448 @@ class IxcOpportunitySchema(BaseModel):
 
     def get_extras(self) -> dict[str, Any]:
         return dict(self.model_extra or {})
+
+
+# =============================================================================
+# Topologia de rede (#142) — planta física: POP, OLT, porta PON, CTO e cabo
+# =============================================================================
+class IxcCaixaFtthSchema(BaseModel):
+    """Schema do registro `rad_caixa_ftth` — a CTO (caixa de atendimento FTTH).
+
+    1.445 linhas em produção. `id_transmissor` está preenchido em todas elas
+    (1021/272/152 entre as 3 OLTs), então o degrau de OLT pode confiar nele.
+    """
+
+    model_config = ConfigDict(
+        extra="allow", populate_by_name=True, str_strip_whitespace=True
+    )
+
+    id: str = Field(...)
+    descricao: str = Field(default="")
+    capacidade: int = Field(default=0)
+    latitude: float | None = Field(default=None)
+    longitude: float | None = Field(default=None)
+    id_transmissor: str = Field(default="")
+    # Aponta pra porta PON, mas só em 420 das 1.445 caixas — ver comentário em
+    # IxcOnuFibraSchema sobre por que a PON não vem daqui.
+    id_interface: str = Field(default="")
+    id_projeto: str = Field(default="")
+    status: str = Field(default="")
+    tipo: str = Field(default="")
+    cep: str = Field(default="")
+    endereco: str = Field(default="")
+    numero: str = Field(default="")
+    bairro: str = Field(default="")
+    id_cidade: str = Field(default="")
+    obs_caixa_ftth: str = Field(default="")
+
+    @field_validator(
+        "id", "descricao", "id_projeto", "status", "tipo", "cep",
+        "endereco", "numero", "bairro", "id_cidade", "obs_caixa_ftth",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("id_transmissor", "id_interface", mode="before")
+    @classmethod
+    def _coerce_id(cls, v: Any) -> str:
+        return _to_id_str(v)
+
+    @field_validator("capacidade", mode="before")
+    @classmethod
+    def _coerce_int(cls, v: Any) -> int:
+        if v in (None, ""):
+            return 0
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return 0
+
+    @field_validator("latitude", "longitude", mode="before")
+    @classmethod
+    def _coerce_coordinate(cls, v: Any) -> float | None:
+        return _to_coordinate(v)
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})
+
+
+class IxcRadPopSchema(BaseModel):
+    """Schema do registro `radpop` — o POP (ponto de presença). 9 linhas."""
+
+    model_config = ConfigDict(
+        extra="allow", populate_by_name=True, str_strip_whitespace=True
+    )
+
+    id: str = Field(...)
+    pop: str = Field(default="")
+    latitude: float | None = Field(default=None)
+    longitude: float | None = Field(default=None)
+    id_projeto: str = Field(default="")
+    id_cidade: str = Field(default="")
+    endereco: str = Field(default="")
+    numero: str = Field(default="")
+    bairro: str = Field(default="")
+    tp_estacao: str = Field(default="")
+
+    @field_validator(
+        "id", "pop", "id_projeto", "id_cidade", "endereco", "numero",
+        "bairro", "tp_estacao",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("latitude", "longitude", mode="before")
+    @classmethod
+    def _coerce_coordinate(cls, v: Any) -> float | None:
+        return _to_coordinate(v)
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})
+
+
+class IxcRadPopRadioSchema(BaseModel):
+    """Schema do registro `radpop_radio` — a OLT. 3 linhas em produção.
+
+    `extra="ignore"` (e não "allow", como o resto do arquivo) porque este
+    registro carrega as senhas de gerência do equipamento (`senha`, `senha_hw`,
+    `senha_anm`). Guardá-las em `raw_extras` colocaria credencial de acesso à
+    OLT dentro do banco do dashboard — que é read-only e não tem por que sabê-las.
+    """
+
+    model_config = ConfigDict(
+        extra="ignore", populate_by_name=True, str_strip_whitespace=True
+    )
+
+    id: str = Field(...)
+    descricao: str = Field(default="")
+    id_pop: str = Field(default="")
+    ativo: str = Field(default="")
+    modelo: str = Field(default="")
+    fabricante_modelo: str = Field(default="")
+
+    @field_validator(
+        "id", "descricao", "ativo", "modelo", "fabricante_modelo", mode="before"
+    )
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("id_pop", mode="before")
+    @classmethod
+    def _coerce_id(cls, v: Any) -> str:
+        return _to_id_str(v)
+
+
+class IxcPortaPonSchema(BaseModel):
+    """Schema do registro `radpop_radio_porta_fibra` — a porta PON. 307 linhas.
+
+    `id_pop_radio` é a OLT (bate com `radpop_radio.id` e com o `id_transmissor`
+    das caixas e das ONUs: 1, 2 e 3).
+    """
+
+    model_config = ConfigDict(
+        extra="allow", populate_by_name=True, str_strip_whitespace=True
+    )
+
+    id: str = Field(...)
+    id_pop_radio: str = Field(default="")
+    id_slot: str = Field(default="")
+    numero_pon: str = Field(default="")
+    interface: str = Field(default="")
+    potencia_pon: str = Field(default="")
+    potencia_limite: str = Field(default="")
+    quantidade_onus: int = Field(default=0)
+
+    @field_validator(
+        "id", "id_slot", "numero_pon", "interface", "potencia_pon",
+        "potencia_limite",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("id_pop_radio", mode="before")
+    @classmethod
+    def _coerce_id(cls, v: Any) -> str:
+        return _to_id_str(v)
+
+    @field_validator("quantidade_onus", mode="before")
+    @classmethod
+    def _coerce_int(cls, v: Any) -> int:
+        if v in (None, ""):
+            return 0
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return 0
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})
+
+
+class IxcDfElementoSchema(BaseModel):
+    """Schema do registro `df_elemento` filtrado por `tipo=CB` — o cabo. 1.191 linhas.
+
+    Sem geometria: `df_elemento_coordenada` só mapeia elemento → id de
+    coordenada e a tabela de coordenadas não tem endpoint na API
+    (docs/massivas-plano.md §2.3). O cabo entra como rótulo de candidato ao
+    trecho suspeito, nunca como traçado no mapa.
+    """
+
+    model_config = ConfigDict(
+        extra="allow", populate_by_name=True, str_strip_whitespace=True
+    )
+
+    id: str = Field(...)
+    descricao: str = Field(default="")
+    id_tipo_elemento: str = Field(default="")
+    id_projeto: str = Field(default="")
+    tipo: str = Field(default="")
+    observacao: str = Field(default="")
+    ultima_atualizacao: datetime | None = Field(default=None)
+
+    @field_validator(
+        "id", "descricao", "id_tipo_elemento", "id_projeto", "tipo",
+        "observacao",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("ultima_atualizacao", mode="before")
+    @classmethod
+    def _parse_dt(cls, v: Any) -> datetime | None:
+        return _to_ixc_datetime(v)
+
+    def get_extras(self) -> dict[str, Any]:
+        return dict(self.model_extra or {})
+
+
+class IxcOnuFibraSchema(BaseModel):
+    """Schema do registro `radpop_radio_cliente_fibra` — a ONU do cliente.
+
+    É daqui que sai a porta PON do login, e não de `rad_caixa_ftth.id_interface`.
+    Medido em produção (2026-09-08):
+
+    - `rad_caixa_ftth.id_interface`: preenchido em 420 das 1.445 caixas (29%);
+    - `radpop_radio_cliente_fibra.id_radpop_radio_porta`: 4.553 de 4.559 (99,9%).
+
+    E o motivo estrutural, que é o que impede a "simplificação": derivando
+    CTO → PON pelos clientes, 239 das 927 caixas deriváveis (26%) apontam pra
+    mais de uma porta. **PON é propriedade do login, não da caixa** — uma mesma
+    CTO pode ser alimentada por mais de uma PON. Qualquer mapa CTO → PON estaria
+    errado em um quarto dos casos.
+
+    O join `id_login` → `radusuarios.id` foi verificado: casa em 4.081 de 4.081
+    linhas com login e porta preenchidos, cobrindo 3.323 dos 3.413 logins ativos
+    (97,4%) e 3.096 dos 3.125 online (99,1%). Nenhum login aponta pra 2 PONs.
+    """
+
+    model_config = ConfigDict(
+        extra="ignore", populate_by_name=True, str_strip_whitespace=True
+    )
+
+    id: str = Field(...)
+    id_login: str = Field(default="")
+    id_radpop_radio_porta: str = Field(default="")
+    id_caixa_ftth: str = Field(default="")
+    porta_ftth: str = Field(default="")
+    id_transmissor: str = Field(default="")
+    id_contrato: str = Field(default="")
+    onu_tipo: str = Field(default="")
+    latitude: float | None = Field(default=None)
+    longitude: float | None = Field(default=None)
+
+    @field_validator("id", "porta_ftth", "onu_tipo", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator(
+        "id_login", "id_radpop_radio_porta", "id_caixa_ftth", "id_transmissor",
+        "id_contrato",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_id(cls, v: Any) -> str:
+        return _to_id_str(v)
+
+    @field_validator("latitude", "longitude", mode="before")
+    @classmethod
+    def _coerce_coordinate(cls, v: Any) -> float | None:
+        return _to_coordinate(v)
+
+
+def _to_optical_reading(v: Any) -> float | None:
+    """Leitura óptica do IXC (string) → float, com **zero virando None**.
+
+    Esta é a armadilha central do sinal óptico (#148), medida em produção
+    (2026-09-08): `sinal_rx = "0.00"` aparece em 1.391 dos 4.554 registros de
+    ONU e significa **ausência de leitura**, não 0 dBm. Zero dBm seria uma
+    potência absurdamente alta; comparado com a linha de base típica (-24 dB),
+    faria todo cliente que caiu aparecer com "24 dB de perda" e transformaria a
+    tela em gerador de alarme falso.
+
+    Vale igual para temperatura e voltagem: as quatro grandezas vêm zeradas
+    juntas quando a ONU não reportou.
+    """
+    if v in (None, ""):
+        return None
+    try:
+        value = float(str(v).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    return None if value == 0.0 else value
+
+
+def _to_reported_text(v: Any) -> str:
+    """Texto que a OLT reporta, com os sentinelas de "não informou" virando vazio.
+
+    O IXC usa `"-"` para "a OLT não devolveu este campo" — visto tanto em
+    `causa_ultima_queda` (43 de 300 ONUs amostradas) quanto no painel do botão
+    de potência (`Last dying gasp time: -`). Deixá-lo passar faria a UI exibir
+    um traço como se fosse a causa da queda.
+
+    O conteúdo em si **não é interpretado**: `dying-gasp`, `LOS`, `LOSi/LOBi`,
+    `reset` e o que mais a OLT inventar entram literais. Traduzir isso é leitura
+    do time, não do código.
+    """
+    raw = _to_str(v).strip()
+    return "" if raw in ("-", "--") else raw
+
+
+class IxcOnuSignalSchema(BaseModel):
+    """Schema de `radpop_radio_cliente_fibra` na leitura de **sinal óptico** (#148).
+
+    Separado de `IxcOnuFibraSchema` (que existe para derivar a PON do login) por
+    duas razões: são leituras com cadência e propósito diferentes, e aqui as
+    coerções são outras — zero é ausência, não valor.
+
+    `extra="ignore"` com `raw_extras` montado à mão, e não `extra="allow"`: o
+    registro da ONU carrega credenciais de gerência do equipamento
+    (`senha_onu_cliente`, `porta_telnet_onu_cliente`, `script_onu_cliente`, e os
+    templates de comando com senha de roteador do cliente). Nenhuma delas pode
+    vazar para o banco do dashboard — mesmo motivo do schema da OLT (§10.3 do
+    plano de massivas).
+
+    Achado de produção (2026-09-08) que o plano não previa: **`causa_ultima_queda`
+    vem na própria listagem**. Ou seja, a causa da queda não depende do disparo
+    ativo nem de scraping — o caminho barato já a traz. Valores observados em 300
+    ONUs: vazio (213), `-` (43), `dying-gasp` (28), `LOSi/LOBi` (9), `reset` (3),
+    `ONT` (3), `LOS` (1).
+    """
+
+    model_config = ConfigDict(
+        extra="ignore", populate_by_name=True, str_strip_whitespace=True
+    )
+
+    id: str = Field(...)
+    id_login: str = Field(default="")
+
+    sinal_rx: float | None = Field(default=None)
+    sinal_tx: float | None = Field(default=None)
+    temperatura: float | None = Field(default=None)
+    voltagem: float | None = Field(default=None)
+    data_sinal: datetime | None = Field(default=None)
+
+    causa_ultima_queda: str = Field(default="")
+
+    # Contexto de localização física — útil pro técnico e barato de carregar.
+    ponid: str = Field(default="")
+    mac: str = Field(default="")
+    onu_tipo: str = Field(default="")
+
+    @field_validator("id", "ponid", "mac", "onu_tipo", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("id_login", mode="before")
+    @classmethod
+    def _coerce_id(cls, v: Any) -> str:
+        return _to_id_str(v)
+
+    @field_validator("causa_ultima_queda", mode="before")
+    @classmethod
+    def _coerce_cause(cls, v: Any) -> str:
+        return _to_reported_text(v)
+
+    @field_validator(
+        "sinal_rx", "sinal_tx", "temperatura", "voltagem", mode="before"
+    )
+    @classmethod
+    def _coerce_reading(cls, v: Any) -> float | None:
+        return _to_optical_reading(v)
+
+    @field_validator("data_sinal", mode="before")
+    @classmethod
+    def _parse_dt(cls, v: Any) -> datetime | None:
+        return _to_ixc_datetime(v)
+
+    def get_extras(self) -> dict[str, Any]:
+        """Extras montados à mão — ver docstring sobre credenciais de gerência."""
+        return {
+            key: value
+            for key, value in (
+                ("ponid", self.ponid),
+                ("mac", self.mac),
+                ("onu_tipo", self.onu_tipo),
+            )
+            if value
+        }
+
+
+class IxcOnuSignalHistorySchema(BaseModel):
+    """Schema de `radpop_radio_cliente_fibra_historico` — a série do sinal (#148).
+
+    1,93M linhas em produção; a coleta é **diária** (~06:30), então esta série é
+    linha de base e não leitura pós-reparo. Aceita filtro por
+    `qtype=radpop_radio_cliente_fibra_historico.id_cliente_fibra` e já vem
+    ordenada do mais recente para o mais antigo.
+
+    Cobertura não é universal: a ONU 10733, que tem sinal corrente válido,
+    devolve **zero linhas** de histórico. Ausência de série é normal e não é
+    erro — por isso a busca da linha de base degrada em silêncio.
+    """
+
+    model_config = ConfigDict(
+        extra="ignore", populate_by_name=True, str_strip_whitespace=True
+    )
+
+    id: str = Field(...)
+    id_cliente_fibra: str = Field(default="")
+
+    sinal_rx: float | None = Field(default=None)
+    sinal_tx: float | None = Field(default=None)
+    temperatura: float | None = Field(default=None)
+    voltagem: float | None = Field(default=None)
+    data_sinal: datetime | None = Field(default=None)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("id_cliente_fibra", mode="before")
+    @classmethod
+    def _coerce_id(cls, v: Any) -> str:
+        return _to_id_str(v)
+
+    @field_validator(
+        "sinal_rx", "sinal_tx", "temperatura", "voltagem", mode="before"
+    )
+    @classmethod
+    def _coerce_reading(cls, v: Any) -> float | None:
+        return _to_optical_reading(v)
+
+    @field_validator("data_sinal", mode="before")
+    @classmethod
+    def _parse_dt(cls, v: Any) -> datetime | None:
+        return _to_ixc_datetime(v)

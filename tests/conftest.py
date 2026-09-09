@@ -25,12 +25,18 @@ from apps.integrations.fake.customers import FakeCustomerSource
 from apps.integrations.fake.equipment import FakeEquipmentSource
 from apps.integrations.fake.invoices import FakeInvoiceSource, FakePaymentSource
 from apps.integrations.fake.leads import FakeLeadSource
+from apps.integrations.fake.network_elements import FakeNetworkElementSource
 from apps.integrations.fake.opportunities import FakeOpportunitySource
+from apps.integrations.fake.optical_signal import FakeOpticalSignalSource
 from apps.integrations.fake.tickets import FakeTicketSource
 from apps.integrations.shared.enums import Capability, SourceType
 from apps.inventory.domain.dto import EquipmentDTO
 from apps.sales.domain.dto import LeadDTO, OpportunityDTO
-from apps.network.domain.dto import BandwidthUsageDTO, ConnectionDTO
+from apps.network.domain.dto import (
+    BandwidthUsageDTO,
+    ConnectionDTO,
+    NetworkElementDTO,
+)
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import (
     Organization,
@@ -53,7 +59,9 @@ def _clean_state_around_test() -> Iterator[None]:
     FakePaymentSource.reset_seed()
     FakeTicketSource.reset_seed()
     FakeConnectionSource.reset_seed()
+    FakeOpticalSignalSource.reset_seed()
     FakeBandwidthUsageSource.reset_seed()
+    FakeNetworkElementSource.reset_seed()
     FakeEquipmentSource.reset_seed()
     FakeLeadSource.reset_seed()
     FakeOpportunitySource.reset_seed()
@@ -69,6 +77,7 @@ def _clean_state_around_test() -> Iterator[None]:
         FakeTicketSource.reset_seed()
         FakeConnectionSource.reset_seed()
         FakeBandwidthUsageSource.reset_seed()
+        FakeNetworkElementSource.reset_seed()
         FakeEquipmentSource.reset_seed()
         FakeLeadSource.reset_seed()
         FakeOpportunitySource.reset_seed()
@@ -414,6 +423,78 @@ datasource_fake_payments_a = _make_datasource_factory(Capability.PAYMENTS)
 datasource_fake_tickets_a = _make_datasource_factory(Capability.TICKETS)
 datasource_fake_connections_a = _make_datasource_factory(Capability.CONNECTIONS)
 datasource_fake_bandwidth_a = _make_datasource_factory(Capability.BANDWIDTH)
+datasource_fake_network_elements_a = _make_datasource_factory(
+    Capability.NETWORK_ELEMENTS
+)
+datasource_fake_optical_signal_a = _make_datasource_factory(Capability.OPTICAL_SIGNAL)
 datasource_fake_equipment_a = _make_datasource_factory(Capability.EQUIPMENT)
 datasource_fake_leads_a = _make_datasource_factory(Capability.LEADS)
 datasource_fake_opportunities_a = _make_datasource_factory(Capability.OPPORTUNITIES)
+
+
+@pytest.fixture
+def sample_network_element_dtos() -> list[NetworkElementDTO]:
+    """Um recorte mínimo de planta: POP → OLT → PON → 2 CTOs, mais um cabo.
+
+    Os valores imitam o formato real do IXC (ids string, capacidade 8/16,
+    coordenadas de Sorocaba) pra os testes exercitarem o mesmo shape do produção.
+    """
+    return [
+        NetworkElementDTO(
+            external_id="14",
+            kind="POP",
+            name="Portal do Pirapora",
+            latitude=-23.65522240656321,
+            longitude=-47.66720479335792,
+            project_external_id="7",
+            status="P",
+        ),
+        NetworkElementDTO(
+            external_id="3",
+            kind="OLT",
+            name="OLT HUAWEI SOROCABA CAJURU DO SUL",
+            parent_external_id="14",
+            parent_kind="POP",
+            status="S",
+        ),
+        NetworkElementDTO(
+            external_id="449",
+            kind="PON",
+            name="0/2/15",
+            parent_external_id="3",
+            parent_kind="OLT",
+        ),
+        NetworkElementDTO(
+            external_id="1606",
+            kind="CTO",
+            name="CTO AV-SJOAO",
+            latitude=-23.54215200653725,
+            longitude=-47.45837508403606,
+            parent_external_id="3",
+            parent_kind="OLT",
+            capacity=8,
+            address="Av. São João, 1064 - Jardim Icatu",
+            project_external_id="7",
+            status="A",
+            raw_extras={"bairro": "Jardim Icatu", "id_cidade": "3906"},
+        ),
+        NetworkElementDTO(
+            external_id="1607",
+            kind="CTO",
+            name="CTO CENTRO",
+            latitude=-23.5,
+            longitude=-47.45,
+            parent_external_id="3",
+            parent_kind="OLT",
+            capacity=16,
+            project_external_id="7",
+            status="A",
+            raw_extras={"bairro": "Centro", "id_cidade": "3906"},
+        ),
+        NetworkElementDTO(
+            external_id="680",
+            kind="CABLE",
+            name="48 FO - 560 M",
+            project_external_id="1",
+        ),
+    ]

@@ -34,10 +34,15 @@ from apps.integrations.shared.enums import Capability, SourceType
 from apps.integrations.shared.registry import registry
 from apps.inventory.domain.dto import EquipmentDTO
 from apps.inventory.infrastructure.repositories import EquipmentRepository
-from apps.network.domain.dto import BandwidthUsageDTO, ConnectionDTO
+from apps.network.domain.dto import (
+    BandwidthUsageDTO,
+    ConnectionDTO,
+    NetworkElementDTO,
+)
 from apps.network.infrastructure.repositories import (
     BandwidthUsageRepository,
     ConnectionRepository,
+    NetworkElementRepository,
 )
 from apps.sales.domain.dto import LeadDTO, OpportunityDTO
 from apps.sales.infrastructure.repositories import (
@@ -154,6 +159,16 @@ def _bandwidth_port_call(
     return source.list_bandwidth_usage(since=since)
 
 
+def _network_element_port_call(
+    source: Any, since: datetime | None
+) -> Iterator[NetworkElementDTO]:
+    # `since` é ignorado de propósito: a planta é pequena e os endpoints de
+    # topologia do IXC não têm last-modified confiável (o `ultima_atualizacao`
+    # das caixas vem zerado). Pull completo diário, upsert idempotente.
+    del since
+    return source.list_network_elements()
+
+
 def _equipment_port_call(source: Any, since: datetime | None) -> Iterator[EquipmentDTO]:
     return source.list_equipment(since=since)
 
@@ -187,6 +202,9 @@ _DISPATCH: dict[
     Capability.TICKETS: (_ticket_port_call, TicketRepository, _repo_upsert),
     Capability.CONNECTIONS: (_connection_port_call, ConnectionRepository, _repo_upsert),
     Capability.BANDWIDTH: (_bandwidth_port_call, BandwidthUsageRepository, _repo_upsert),
+    Capability.NETWORK_ELEMENTS: (
+        _network_element_port_call, NetworkElementRepository, _repo_upsert,
+    ),
     Capability.EQUIPMENT: (_equipment_port_call, EquipmentRepository, _repo_upsert),
     Capability.LEADS: (_lead_port_call, LeadRepository, _repo_upsert),
     Capability.OPPORTUNITIES: (_opportunity_port_call, OpportunityRepository, _repo_upsert),

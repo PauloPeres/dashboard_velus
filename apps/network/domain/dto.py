@@ -34,11 +34,81 @@ class ConnectionDTO:
 
     last_connection_at: datetime | None = None
 
+    # Topologia e queda — promovidos de `raw_extras` em #143. Deixaram de ser
+    # detalhe de fonte no dia em que o detector de massivas passou a agrupar
+    # queda por CTO/OLT e por proximidade: viraram campo essencial do domínio.
+    cto_external_id: str = ""
+    cto_port: str = ""
+    # A PON vem do registro da ONU (radpop_radio_cliente_fibra), não da caixa —
+    # ver IxcOnuFibraSchema: PON é propriedade do login, não da CTO.
+    pon_external_id: str = ""
+    # Id do registro da ONU na origem — a mesma leitura que traz a PON já o
+    # entrega de graça. Não é enfeite: é a chave que o disparo de medição de
+    # potência exige (#148), e sem ela medir um cliente custaria uma listagem
+    # inteira só pra descobrir qual ONU é a dele.
+    onu_external_id: str = ""
+    transmitter_external_id: str = ""
+    concentrator_external_id: str = ""
+    latitude: float | None = None
+    longitude: float | None = None
+    disconnect_reason: str = ""
+    last_disconnection_at: datetime | None = None
+
     raw_extras: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.external_id:
             raise ValueError("ConnectionDTO.external_id não pode ser vazio")
+
+
+@dataclass(frozen=True)
+class OpticalSignalDTO:
+    """Leitura óptica de uma ONU — potência, causa da queda e estado na OLT (#148).
+
+    Neutro de propósito: o domínio quer "qual era o sinal deste login e o que a
+    OLT disse", não o nome dos campos do IXC.
+
+    Duas ausências que o adapter é obrigado a traduzir antes de chegar aqui,
+    porque confundi-las com valor é o que transforma a tela em gerador de alarme
+    falso (medido em produção 2026-09-08):
+
+    - **`signal_rx = None` é ausência de leitura, não 0 dBm.** O IXC devolve
+      `0.00` em 1.391 dos 4.554 registros de ONU, e ~30% das ONUs simplesmente
+      não reportam sinal. Zero dBm seria um sinal absurdamente forte; comparado
+      com uma base de -24 dB, produziria "24 dB de perda" para todo cliente que
+      caiu;
+    - **`measured_at = None` é "nunca medido".** O IXC carrega o zero-date do
+      MySQL (`0000-00-00 00:00:00`) como sentinela.
+
+    `last_drop_cause` vazio é **"a OLT não informou"**, não "sem causa" — e o
+    domínio não interpreta o texto. `dying-gasp` sugere que a ONU perdeu
+    energia, mas essa leitura é do time, não do código: aqui se guarda o que a
+    OLT disse, literalmente.
+    """
+
+    onu_external_id: str
+    login_external_id: str = ""
+
+    signal_rx: float | None = None
+    signal_tx: float | None = None
+    measured_at: datetime | None = None
+    temperature: float | None = None
+    voltage: float | None = None
+
+    run_state: str = ""
+    last_drop_cause: str = ""
+    last_up_at: datetime | None = None
+
+    raw_extras: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.onu_external_id:
+            raise ValueError("OpticalSignalDTO.onu_external_id não pode ser vazio")
+
+    @property
+    def has_signal(self) -> bool:
+        """Leitura de potência utilizável — o que sustenta comparação antes/depois."""
+        return self.signal_rx is not None and self.measured_at is not None
 
 
 @dataclass(frozen=True)
@@ -68,3 +138,57 @@ class BandwidthUsageDTO:
     def __post_init__(self) -> None:
         if not self.external_id:
             raise ValueError("BandwidthUsageDTO.external_id não pode ser vazio")
+
+
+# Tipos de elemento de rede reconhecidos pelo domínio. Tupla de strings (e não
+# Enum) porque o DTO é neutro e atravessa a fronteira do adapter; quem restringe
+# o vocabulário no banco é o model.
+NETWORK_ELEMENT_KINDS: tuple[str, ...] = ("CTO", "POP", "PON", "OLT", "CABLE")
+
+
+@dataclass(frozen=True)
+class NetworkElementDTO:
+    """Elemento da planta de rede — caixa FTTH, POP, porta PON, OLT ou cabo.
+
+    O que importa pro domínio é `kind` mais a ligação com o pai
+    (`parent_kind`/`parent_external_id`): é ela que permite subir a hierarquia
+    POP → OLT → PON → CTO quando várias quedas coincidem no tempo.
+
+    `latitude`/`longitude` podem faltar — cabo nunca tem geometria acessível
+    (docs/massivas-plano.md §2.3). Por isso são `None` e não 0.0: um par (0, 0)
+    cairia no golfo da Guiné e entraria em cluster geográfico com tudo.
+
+    Identidade composta na persistência: `(organization, source_type, kind,
+    external_id)`. `kind` entra na chave porque os ids são sequências por tabela
+    na origem — a CTO 12 não é o POP 12.
+    """
+
+    external_id: str
+    kind: str  # ver NETWORK_ELEMENT_KINDS
+
+    name: str = ""
+    latitude: float | None = None
+    longitude: float | None = None
+
+    parent_external_id: str = ""
+    parent_kind: str = ""
+
+    capacity: int | None = None
+    address: str = ""
+    project_external_id: str = ""
+    status: str = ""
+
+    raw_extras: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.external_id:
+            raise ValueError("NetworkElementDTO.external_id não pode ser vazio")
+        if self.kind not in NETWORK_ELEMENT_KINDS:
+            raise ValueError(
+                f"NetworkElementDTO.kind inválido: {self.kind!r} "
+                f"(esperado um de {NETWORK_ELEMENT_KINDS})"
+            )
+
+    @property
+    def has_position(self) -> bool:
+        return self.latitude is not None and self.longitude is not None

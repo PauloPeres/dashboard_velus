@@ -27,7 +27,9 @@ class FakeAdapterConfig(AppConfig):
         from .expenses import FakeExpenseSource
         from .invoices import FakeInvoiceSource, FakePaymentSource
         from .leads import FakeLeadSource
+        from .network_elements import FakeNetworkElementSource
         from .opportunities import FakeOpportunitySource
+        from .optical_signal import FakeOpticalSignalSource
         from .tickets import FakeTicketSource
 
         # Idempotência: AppConfig.ready() pode rodar 2x em dev reload.
@@ -40,6 +42,8 @@ class FakeAdapterConfig(AppConfig):
             (Capability.TICKETS, FakeTicketSource),
             (Capability.CONNECTIONS, FakeConnectionSource),
             (Capability.BANDWIDTH, FakeBandwidthUsageSource),
+            (Capability.NETWORK_ELEMENTS, FakeNetworkElementSource),
+            (Capability.OPTICAL_SIGNAL, FakeOpticalSignalSource),
             (Capability.EQUIPMENT, FakeEquipmentSource),
             (Capability.LEADS, FakeLeadSource),
             (Capability.OPPORTUNITIES, FakeOpportunitySource),

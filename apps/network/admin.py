@@ -10,7 +10,15 @@ from simple_history.admin import SimpleHistoryAdmin
 
 from apps.shared.context import set_current_organization
 
-from .infrastructure.models import BandwidthUsage, Connection
+from .infrastructure.models import (
+    BandwidthUsage,
+    Connection,
+    ConnectionDropEvent,
+    ConnectionPollState,
+    NetworkElement,
+    OutageAffectedLogin,
+    OutageEvent,
+)
 
 
 class _TenantAdminMixin:
@@ -53,3 +61,52 @@ class BandwidthUsageAdmin(_TenantAdminMixin, SimpleHistoryAdmin):
     )
     readonly_fields = ("created_at", "updated_at")
     autocomplete_fields = ("customer",)
+
+
+@admin.register(NetworkElement)
+class NetworkElementAdmin(_TenantAdminMixin, admin.ModelAdmin):
+    list_display = (
+        "kind", "external_id", "name", "parent_kind", "parent_external_id",
+        "capacity", "project_external_id", "status", "updated_at",
+    )
+    list_filter = ("source_type", "kind", "project_external_id", "status")
+    search_fields = ("external_id", "name", "address", "parent_external_id")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(ConnectionDropEvent)
+class ConnectionDropEventAdmin(_TenantAdminMixin, admin.ModelAdmin):
+    list_display = (
+        "login", "dropped_at", "restored_at", "reason",
+        "cto_external_id", "cto_port", "pon_external_id", "monthly_amount",
+    )
+    list_filter = ("reason", "dropped_at")
+    search_fields = ("login", "cto_external_id", "customer__name")
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("customer",)
+    date_hierarchy = "dropped_at"
+
+
+@admin.register(OutageEvent)
+class OutageEventAdmin(_TenantAdminMixin, admin.ModelAdmin):
+    list_display = (
+        "started_at", "ended_at", "scope", "element_label",
+        "suspected_segment_label", "confidence",
+        "affected_count", "restored_count", "mrr_at_risk",
+    )
+    list_filter = ("scope", "confidence")
+    search_fields = ("element_external_id", "element_label", "suspected_segment_label")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(OutageAffectedLogin)
+class OutageAffectedLoginAdmin(_TenantAdminMixin, admin.ModelAdmin):
+    list_display = ("login", "outage", "dropped_at", "restored_at", "monthly_amount")
+    search_fields = ("login",)
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(ConnectionPollState)
+class ConnectionPollStateAdmin(_TenantAdminMixin, admin.ModelAdmin):
+    list_display = ("organization", "baseline_at", "last_poll_at", "last_success_at")
+    readonly_fields = ("created_at", "updated_at")
