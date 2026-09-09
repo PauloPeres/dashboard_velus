@@ -27,6 +27,112 @@
 </div>
 {% endif %}
 
+<!-- =====================================================================
+     Carga atual: quem tem o quê aberto AGORA, SLA de agenda e backlog.
+     Fica antes da análise por tipo porque é a pergunta operacional do dia —
+     e não responde ao filtro de período (é estoque, não fluxo).
+     ===================================================================== -->
+<div class="flex items-center gap-2 mb-3">
+  <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Carga atual</h2>
+  {% include "dashboards/_badge_agora.html" with titulo="OS abertas neste momento — este bloco inteiro ignora o filtro de período. Uma OS aberta em março que continua aberta pertence a hoje, não a março." %}
+</div>
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+  {% include "dashboards/_kpi_card.html" with label="OS abertas agora" value=carga.total|intcomma agora=True tooltip="Todas as OS que não estão fechadas: abertas, agendadas, em execução e encaminhadas." %}
+
+  {% include "dashboards/_kpi_card.html" with label="Fila viva (até 90 dias)" value=carga.fila_viva|intcomma agora=True subtitle="É esta a carga que disputa a agenda de hoje" tooltip="OS abertas há 90 dias ou menos. Separada do backlog porque somar as duas faz a fila parecer várias vezes maior do que a equipe realmente tem pela frente." %}
+
+  {% include "dashboards/_kpi_card.html" with label="Backlog parado (+90 dias)" value=carga.backlog|intcomma agora=True value_color="text-red-600" subtitle=carga.pct_backlog|stringformat:"s"|add:"% do total em aberto" tooltip="OS abertas há mais de 90 dias. Na prática é pendência administrativa acumulada, não trabalho agendável." %}
+
+  {% include "dashboards/_kpi_card.html" with label="Agenda vencida" value=carga.sla.vencidas|intcomma agora=True value_color="text-red-600" subtitle=carga.sla.pct_vencidas|stringformat:"s"|add:"% das OS com agenda marcada" tooltip="OS cuja data agendada já passou e que ainda não foram fechadas — a Velus marcou e não cumpriu. É o SLA possível: o IXC tem campos de SLA, mas a Velus não os preenche (status_sla nunca marca atraso e o prazo limite existe em pouquíssimas OS)." %}
+</div>
+
+<!-- SLA de agenda, aberto -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-center gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">SLA de agenda</h2>
+    {% include "dashboards/_badge_agora.html" %}
+  </div>
+  <p class="text-xs text-gray-400 mb-4 leading-relaxed">
+    Derivado da data agendada, não lido do IXC: <code class="bg-gray-100 px-1 rounded">status_sla</code> nunca assume
+    valor de atraso na base da Velus e <code class="bg-gray-100 px-1 rounded">data_prazo_limite</code> está preenchido em
+    uma fração mínima das OS. OS sem agenda marcada ficam fora da conta — não há prazo a cumprir.
+  </p>
+  <div class="grid grid-cols-3 gap-4">
+    <div class="rounded-lg border border-red-200 bg-red-50 p-4">
+      <p class="text-xs text-red-700">Agenda vencida</p>
+      <p class="text-2xl font-bold text-red-700">{{ carga.sla.vencidas|intcomma }}</p>
+    </div>
+    <div class="rounded-lg border border-green-200 bg-green-50 p-4">
+      <p class="text-xs text-green-700">Agenda ainda no prazo</p>
+      <p class="text-2xl font-bold text-green-700">{{ carga.sla.no_prazo|intcomma }}</p>
+    </div>
+    <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+      <p class="text-xs text-gray-500">Sem agenda marcada</p>
+      <p class="text-2xl font-bold text-gray-700">{{ carga.sla.sem_agenda|intcomma }}</p>
+    </div>
+  </div>
+</div>
+
+<!-- Por pessoa -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-center gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">OS abertas por pessoa</h2>
+    {% include "dashboards/_badge_agora.html" %}
+  </div>
+  <p class="text-xs text-gray-400 mb-3">
+    Empilhado por idade da OS. Barra quase toda vermelha é fila herdada, não carga de trabalho — pede faxina, não reforço.
+  </p>
+  <div id="os-carga-pessoa-chart" style="height:420px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+
+  <div class="overflow-x-auto mt-5">
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100">
+          <th class="text-left font-medium py-2 pr-4">Pessoa</th>
+          <th class="text-right font-medium py-2 px-4">Abertas</th>
+          <th class="text-right font-medium py-2 px-4">Fila viva</th>
+          <th class="text-right font-medium py-2 px-4">Backlog +90d</th>
+          <th class="text-right font-medium py-2 pl-4">Agenda vencida</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for p in carga.por_pessoa %}
+        <tr class="hover:bg-gray-50">
+          <td class="py-2 pr-4 text-gray-800">
+            {{ p.nome }}
+            {% if p.fila_parada %}
+            <span class="ml-1 text-[10px] font-medium bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">fila parada</span>
+            {% endif %}
+          </td>
+          <td class="py-2 px-4 text-right tabular-nums text-gray-900 font-medium">{{ p.total|intcomma }}</td>
+          <td class="py-2 px-4 text-right tabular-nums text-gray-700">{{ p.fila_viva|intcomma }}</td>
+          <td class="py-2 px-4 text-right tabular-nums {% if p.backlog %}text-red-600{% else %}text-gray-400{% endif %}">{{ p.backlog|intcomma }}</td>
+          <td class="py-2 pl-4 text-right tabular-nums {% if p.sla_vencidas %}text-red-600{% else %}text-gray-400{% endif %}">{{ p.sla_vencidas|intcomma }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="py-8 text-center text-gray-500">Nenhuma OS aberta.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Backlog por tipo -->
+{% if carga.backlog_por_tipo %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-center gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">O que compõe o backlog parado</h2>
+    {% include "dashboards/_badge_agora.html" %}
+  </div>
+  <p class="text-xs text-gray-400 mb-3">
+    Tipos das OS abertas há mais de 90 dias. Se o topo for pendência administrativa (retirada de equipamento,
+    verificação financeira, SPC), o gargalo é de processo — não de técnico em campo.
+  </p>
+  <div id="os-carga-backlog-chart" style="height:360px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+</div>
+{% endif %}
+
 <!-- KPI Cards -->
 <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Indicadores</h2>
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -189,7 +295,11 @@
 {{ status_chart_json|json_script:"os-status-data" }}
 {% if trend_visivel %}{{ trend_chart_json|json_script:"os-trend-data" }}{% endif %}
 {{ resolution_chart_json|json_script:"os-resolution-data" }}
+{{ carga_pessoa_chart_json|json_script:"os-carga-pessoa-data" }}
+{% if carga.backlog_por_tipo %}{{ carga_backlog_chart_json|json_script:"os-carga-backlog-data" }}{% endif %}
 <script>
+  renderChart("os-carga-pessoa-chart", "os-carga-pessoa-data");
+  {% if carga.backlog_por_tipo %}renderChart("os-carga-backlog-chart", "os-carga-backlog-data");{% endif %}
   renderChart("os-volume-chart", "os-volume-data");
   renderChart("os-status-chart", "os-status-data");
   {% if trend_visivel %}renderChart("os-trend-chart", "os-trend-data");{% endif %}

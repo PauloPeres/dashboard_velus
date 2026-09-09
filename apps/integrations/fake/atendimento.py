@@ -9,6 +9,7 @@ from typing import Any
 from apps.atendimento.domain.dto import (
     AtendenteRefDTO,
     AtendimentoDTO,
+    CanalComunicacaoDTO,
     ClienteRefDTO,
     DepartamentoDTO,
     EtiquetaDTO,
@@ -18,12 +19,16 @@ from apps.atendimento.domain.dto import (
 from apps.integrations.shared.enums import Capability, SourceType
 
 _seed_departamentos: list[DepartamentoDTO] = []
+_seed_canais: list[CanalComunicacaoDTO] = []
 _seed_clientes: list[ClienteRefDTO] = []
 _seed_atendentes: list[AtendenteRefDTO] = []
 _seed_etiquetas: list[EtiquetaDTO] = []
 _seed_motivos: list[MotivoDTO] = []
 _seed_atendimentos: list[AtendimentoDTO] = []
 _seed_mensagens: dict[str, list[MensagemDTO]] = {}
+# Fila da listagem global (ordem de insercao) — espelha o `atendimento/mensagem`
+# sem `id_rota`, que e o que o backfill de volume consome.
+_seed_mensagens_global: list[MensagemDTO] = []
 
 
 class FakeAtendimentoSource:
@@ -38,6 +43,8 @@ class FakeAtendimentoSource:
         self._motivos = list(_seed_motivos)
         self._atendimentos = list(_seed_atendimentos)
         self._mensagens = {k: list(v) for k, v in _seed_mensagens.items()}
+        self._canais = list(_seed_canais)
+        self._mensagens_global = list(_seed_mensagens_global)
 
     # -- Seed control ---------------------------------------------------------
     @classmethod
@@ -45,16 +52,21 @@ class FakeAtendimentoSource:
         cls,
         *,
         departamentos: list[DepartamentoDTO] | None = None,
+        canais: list[CanalComunicacaoDTO] | None = None,
         clientes: list[ClienteRefDTO] | None = None,
         atendentes: list[AtendenteRefDTO] | None = None,
         etiquetas: list[EtiquetaDTO] | None = None,
         motivos: list[MotivoDTO] | None = None,
         atendimentos: list[AtendimentoDTO] | None = None,
         mensagens: dict[str, list[MensagemDTO]] | None = None,
+        mensagens_global: list[MensagemDTO] | None = None,
     ) -> None:
-        global _seed_departamentos, _seed_clientes, _seed_atendentes
+        global _seed_departamentos, _seed_clientes, _seed_atendentes, _seed_canais
         global _seed_etiquetas, _seed_motivos, _seed_atendimentos, _seed_mensagens
+        global _seed_mensagens_global
         _seed_departamentos = list(departamentos or [])
+        _seed_canais = list(canais or [])
+        _seed_mensagens_global = list(mensagens_global or [])
         _seed_clientes = list(clientes or [])
         _seed_atendentes = list(atendentes or [])
         _seed_etiquetas = list(etiquetas or [])
@@ -64,9 +76,12 @@ class FakeAtendimentoSource:
 
     @classmethod
     def reset_seed(cls) -> None:
-        global _seed_departamentos, _seed_clientes, _seed_atendentes
+        global _seed_departamentos, _seed_clientes, _seed_atendentes, _seed_canais
         global _seed_etiquetas, _seed_motivos, _seed_atendimentos, _seed_mensagens
+        global _seed_mensagens_global
         _seed_departamentos = []
+        _seed_canais = []
+        _seed_mensagens_global = []
         _seed_clientes = []
         _seed_atendentes = []
         _seed_etiquetas = []
@@ -77,6 +92,9 @@ class FakeAtendimentoSource:
     # -- Port -----------------------------------------------------------------
     def list_departamentos(self) -> Iterator[DepartamentoDTO]:
         yield from self._departamentos
+
+    def list_canais(self) -> Iterator[CanalComunicacaoDTO]:
+        yield from self._canais
 
     def list_clientes(self) -> Iterator[ClienteRefDTO]:
         yield from self._clientes
@@ -115,3 +133,29 @@ class FakeAtendimentoSource:
         atendimento_external_id: str,
     ) -> Iterator[MensagemDTO]:
         yield from self._mensagens.get(atendimento_external_id, [])
+
+    def list_mensagens_global(
+        self,
+        *,
+        start_skip: int = 0,
+        page_size: int = 100,
+        max_pages: int | None = None,
+    ) -> Iterator[tuple[int, MensagemDTO]]:
+        limite = (
+            None if max_pages is None else start_skip + max_pages * page_size
+        )
+        for offset, dto in enumerate(self._mensagens_global):
+            if offset < start_skip:
+                continue
+            if limite is not None and offset >= limite:
+                return
+            yield offset, dto
+
+    def find_skip_for_date(
+        self, target: datetime, *, ceiling: int = 4_000_000  # noqa: ARG002
+    ) -> int:
+        """Varredura linear: a lista do fake é pequena, não vale bissectar."""
+        for offset, dto in enumerate(self._mensagens_global):
+            if dto.sent_at is not None and dto.sent_at >= target:
+                return offset
+        return len(self._mensagens_global)

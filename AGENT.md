@@ -76,6 +76,9 @@ Código em **inglês**, UI/templates em **português**. Glossário:
 | Premissa                   | Assumption             |
 | Receita Recorrente Mensal  | MonthlyRecurringRevenue (MRR) |
 | Cancelamento / Churn       | Churn                  |
+| Elemento de rede (CTO/POP/PON/OLT/cabo) | NetworkElement |
+| Queda (de conexão)         | ConnectionDropEvent    |
+| Massiva (queda coletiva)   | Outage                 |
 
 Quando aparecer um termo novo de negócio, **adicione aqui antes de codar**.
 

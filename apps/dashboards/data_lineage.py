@@ -65,6 +65,25 @@ LINEAGE: dict[str, list[dict[str, str]]] = {
         {"source": _OPA, "detail": _D_OPA},
         {"source": _INT, "detail": "QA/LLM externo (Gemini) sobre mensagens redigidas."},
     ],
+    "massivas": [
+        {
+            "source": _IXC,
+            "detail": (
+                "IXC (radusuarios: status, ultima_conexao_final, CTO/porta/OLT, "
+                "coordenadas; rad_caixa_ftth/radpop: planta) via poll de 3 min → "
+                "network_connection, network_connectiondropevent, "
+                "network_networkelement."
+            ),
+        },
+        {
+            "source": _INT,
+            "detail": (
+                "Detector de massivas (agrupamento por janela + topologia) → "
+                "network_outageevent. Escopo e trecho suspeito são INFERÊNCIA de "
+                "topologia, não leitura do IXC — a API não expõe geometria de cabo."
+            ),
+        },
+    ],
     "network": [{"source": _IXC, "detail": "IXC (rede/CTOs/banda) → network_* e snapshots."}],
     "sales": [{"source": _IXC, "detail": "IXC (leads/oportunidades) → sales_lead, sales_opportunity."}],
     "customers": [{"source": _IXC, "detail": _D_IXC_CUST}],

@@ -1,0 +1,138 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Massiva · Velus{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+  <a href="{% url 'dashboards:massivas' %}" class="text-xs text-blue-600 hover:underline">← Quedas &amp; Massivas</a>
+</div>
+
+<!-- ===================================================================
+     Cabeçalho: o destaque é o trecho suspeito quando existe; o elemento em
+     escopo nunca aparece sem a fração ao lado.
+     =================================================================== -->
+<div class="bg-white rounded-xl shadow-sm border {% if outage.is_open %}border-red-300{% else %}border-gray-200{% endif %} p-5 mb-6">
+  <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+    <div class="min-w-0">
+      {% if outage.tem_trecho %}
+      <p class="text-[10px] uppercase tracking-wider text-amber-700 font-semibold mb-0.5">Trecho suspeito</p>
+      <h1 class="text-2xl font-bold text-gray-900 leading-snug">{{ outage.trecho_suspeito }}</h1>
+      <p class="text-sm text-gray-500 mt-1">Escopo {{ outage.scope_label }} · {{ outage.elemento_frase }}{% if outage.referencia %} · {{ outage.referencia }}{% endif %}</p>
+      {% else %}
+      <p class="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-0.5">Escopo {{ outage.scope_label }}</p>
+      <h1 class="text-2xl font-bold text-gray-900 leading-snug">{{ outage.elemento_frase }}</h1>
+      {% if outage.referencia %}<p class="text-sm text-gray-500 mt-1">{{ outage.referencia }}</p>{% endif %}
+      {% endif %}
+
+      {% if outage.ressalva_escopo %}
+      <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2 leading-relaxed max-w-2xl">
+        {{ outage.ressalva_escopo }}
+      </p>
+      {% endif %}
+
+      <p class="text-xs text-gray-400 mt-2 leading-relaxed max-w-2xl">
+        Começou às {{ outage.started_at|date:"d/m H:i" }}
+        {% if outage.ended_at %}· encerrada às {{ outage.ended_at|date:"d/m H:i" }} ({{ outage.duracao_min|intcomma }} min){% else %}· <span class="text-red-600 font-medium">aberta</span>{% endif %}
+        · confiança {{ outage.confidence_label }}
+        · mensalidade dos afetados R$ {{ outage.mrr_at_risk|floatformat:2|intcomma }}.
+        O escopo é <strong>inferência de topologia</strong>, não leitura do IXC: o que a API entrega é
+        quem caiu e onde cada login está pendurado.
+      </p>
+    </div>
+    <div class="shrink-0 lg:text-right">
+      <p class="text-3xl font-bold text-red-600 tabular-nums">{{ outage.ainda_fora|intcomma }}</p>
+      <p class="text-xs text-gray-500">ainda fora de {{ outage.affected_count|intcomma }}</p>
+      <div class="w-40 h-1.5 bg-gray-100 rounded-full mt-2 overflow-hidden lg:ml-auto">
+        <div class="h-full bg-emerald-500" style="width: {{ outage.restored_pct }}%"></div>
+      </div>
+      <p class="text-xs text-emerald-700 mt-1">{{ outage.restored_pct }}% já voltou</p>
+    </div>
+  </div>
+</div>
+
+<div class="rounded-lg border p-3 mb-6 text-xs leading-relaxed
+            {% if poll.ok %}bg-gray-50 border-gray-200 text-gray-500{% else %}bg-amber-50 border-amber-300 text-amber-800{% endif %}">
+  {{ poll.mensagem }}
+</div>
+
+{% include "dashboards/_massivas_mapa.html" %}
+
+{% include "dashboards/_massivas_causas.html" %}
+
+<!-- Clientes afetados -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+  <div class="p-5 pb-3">
+    <h2 class="text-sm font-semibold text-gray-700">Clientes afetados</h2>
+    <p class="text-xs text-gray-400 mt-0.5 leading-relaxed">
+      Topologia congelada no instante da queda — se o cliente mudar de caixa depois, esta linha
+      continua dizendo onde ele estava quando caiu.
+      {% if sinal_disponivel %}
+      Leitura óptica de base disponível em {{ sinal_cobertura.com_base|intcomma }} de
+      {{ sinal_cobertura.total|intcomma }} clientes; ~30% das ONUs não reportam sinal.
+      {% else %}
+      As colunas de sinal óptico ainda não estão preenchidas nesta base — elas chegam com a coleta
+      de potência por cliente e até lá exibem "sem leitura".
+      {% endif %}
+    </p>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-gray-50 border-t border-gray-200">
+        <tr>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Contrato</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Plano</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Telefone</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">CTO / porta</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Caiu às</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Voltou às</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Sinal antes</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Sinal depois</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for l in linhas %}
+        <tr class="hover:bg-gray-50 {% if l.sinal.degradado %}bg-amber-50{% endif %}">
+          <td class="px-4 py-3 font-medium text-gray-900">{{ l.nome }}</td>
+          <td class="px-4 py-3 text-gray-600 tabular-nums">{{ l.contrato }}</td>
+          <td class="px-4 py-3 text-gray-600">{{ l.plano }}</td>
+          <td class="px-4 py-3 text-gray-600 tabular-nums">{{ l.telefone }}</td>
+          <td class="px-4 py-3 text-gray-600">{{ l.cto }} <span class="text-gray-400">/ {{ l.porta }}</span></td>
+          <td class="px-4 py-3 text-gray-600 whitespace-nowrap">{{ l.dropped_at|date:"d/m H:i" }}</td>
+          <td class="px-4 py-3 whitespace-nowrap {% if l.voltou %}text-emerald-700{% else %}text-red-600{% endif %}">
+            {% if l.voltou %}{{ l.restored_at|date:"d/m H:i" }}{% else %}ainda fora{% endif %}
+          </td>
+          {% comment %}
+          §2.8: nulo/ausente é "sem leitura", nunca 0,00 dBm — no IXC o zero É a
+          ausência, e exibi-lo faria todo cliente caído parecer 24 dB pior. Cada
+          leitura vem com o carimbo de tempo porque a base é da varredura das
+          ~06:30 e pode ter 18h.
+          {% endcomment %}
+          <td class="px-4 py-3 whitespace-nowrap {% if l.sinal.antes_str == "sem leitura" %}text-gray-400 italic{% else %}text-gray-700 tabular-nums{% endif %}">
+            {{ l.sinal.antes_str }}
+            {% if l.sinal.antes_em %}<span class="block text-[10px] text-gray-400">medido {{ l.sinal.antes_em|date:"d/m H:i" }}</span>{% endif %}
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap {% if l.sinal.depois_str == "sem leitura" %}text-gray-400 italic{% else %}tabular-nums{% endif %} {% if l.sinal.degradado %}text-amber-800 font-semibold{% else %}text-gray-700{% endif %}">
+            {{ l.sinal.depois_str }}
+            {% if l.sinal.delta_str %}<span class="text-[10px]">({{ l.sinal.delta_str }})</span>{% endif %}
+            {% if l.sinal.degradado %}
+            <span class="block text-[10px] text-amber-800" title="Retorno mais de {{ degradacao_db|floatformat:0 }} dB pior que a base — cheiro de fusão mal feita.">
+              pior que a base — revisar fusão
+            </span>
+            {% endif %}
+            {% if l.sinal.depois_em %}<span class="block text-[10px] text-gray-400">medido {{ l.sinal.depois_em|date:"d/m H:i" }}</span>{% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="9" class="px-6 py-8 text-center text-gray-500">
+            Nenhum cliente ligado a esta massiva.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

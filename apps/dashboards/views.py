@@ -20,7 +20,7 @@ from django.http import (
     HttpResponseForbidden,
     HttpResponseRedirect,
 )
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import urlencode
@@ -75,9 +75,11 @@ from apps.analytics.application.aggregations import (
     compute_lead_origin,
     compute_ltv_distribution,
     compute_mao_de_obra_detail,
+    compute_mensagens_volume,
     compute_mrr_churn_series,
     compute_mrr_series,
     compute_net_adds_series,
+    compute_os_carga_atual,
     compute_offline_active_customers,
     compute_people_expenses,
     compute_pipeline_aging,
@@ -102,6 +104,15 @@ from apps.analytics.application.network_snapshots import compute_network_history
 from apps.shared.context import get_current_organization
 
 from . import charts
+from .massivas import (
+    BUCKET_MINUTES,
+    SIGNAL_DEGRADATION_DB,
+    TIMELINE_HOURS,
+    compute_historico,
+    compute_massiva_detalhe,
+    compute_massivas_agora,
+    poll_snapshot,
+)
 from .period import TZ, Period, get_period, set_period_extra_params
 
 
@@ -1442,10 +1453,23 @@ def os_dashboard(request: HttpRequest) -> HttpResponse:
         for s in status_qs
     ]
 
+    # Carga de AGORA — quem tem o quê aberto hoje. Não passa pelo período:
+    # é estoque, e uma OS aberta em março que segue aberta pertence ao presente.
+    carga = compute_os_carga_atual(org, agora=now)
+
     return render(
         request,
         "dashboards/os.html",
         {
+            "carga": carga,
+            "carga_pessoa_chart_json": charts.os_carga_por_pessoa(
+                carga["por_pessoa"]
+            ),
+            "carga_backlog_chart_json": (
+                charts.os_backlog_por_tipo(carga["backlog_por_tipo"])
+                if carga["backlog_por_tipo"]
+                else ""
+            ),
             "total_os": total_os,
             "distinct_types": distinct_types,
             "solution_rate": solution_rate,
@@ -1528,6 +1552,78 @@ def atendimento(request: HttpRequest) -> HttpResponse:
             "motivos_chart_json": charts.atendimento_top_motivos(data["top_motivos"]),
             "deflection_chart_json": charts.bot_deflection_trend(
                 deflection["deflection_trend"]
+            ),
+        },
+    )
+
+
+@login_required
+@never_cache
+def mensagens(request: HttpRequest) -> HttpResponse:
+    """Volume de mensagens: quem fala, de que tipo, por qual canal e a que custo.
+
+    Aba separada das outras cinco de atendimento porque a pergunta é outra: as
+    demais olham a QUALIDADE de uma conversa (nota, motivo, reincidência), esta
+    olha o VOLUME e a origem dele — capacidade de equipe e custo de canal, que
+    é o que a fatura do WhatsApp cobra.
+    """
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    from apps.atendimento.infrastructure.models import Departamento
+
+    org = org_or_redirect
+    period = _get_period(request)
+
+    granularity = request.GET.get("g", "week")
+    if granularity not in ("week", "month"):
+        granularity = "week"
+
+    canal = request.GET.get("canal", "").strip() or None
+
+    departamento_id: int | None = None
+    raw_dep = request.GET.get("departamento", "")
+    if raw_dep.isdigit():
+        departamento_id = int(raw_dep)
+
+    # O form de período personalizado precisa devolver o mesmo recorte (#86).
+    set_period_extra_params(
+        request,
+        {"g": granularity, "canal": canal, "departamento": departamento_id},
+    )
+
+    data = compute_mensagens_volume(
+        org,
+        start=period.start,
+        end=period.end,
+        granularity=granularity,
+        canal_external_id=canal,
+        departamento_id=departamento_id,
+    )
+
+    departamentos = list(
+        Departamento.objects.filter(organization=org).order_by("nome").values("id", "nome")
+    )
+    selected_departamento_nome = next(
+        (d["nome"] for d in departamentos if d["id"] == departamento_id), None
+    )
+
+    return render(
+        request,
+        "dashboards/mensagens.html",
+        {
+            **data,
+            "departamentos": departamentos,
+            "selected_departamento_id": departamento_id,
+            "selected_departamento_nome": selected_departamento_nome,
+            "volume_chart_json": charts.mensagens_volume_stacked(data["serie"]),
+            "tipo_chart_json": charts.mensagens_tipo_pie(data["por_tipo"]),
+            "canal_chart_json": charts.mensagens_canal_bar(data["por_canal"]),
+            "departamento_chart_json": charts.mensagens_por_categoria_bar(
+                data["por_departamento"]
+            ),
+            "motivo_chart_json": charts.mensagens_por_categoria_bar(
+                data["por_motivo"]
             ),
         },
     )
@@ -2979,5 +3075,138 @@ def access_management(request: HttpRequest) -> HttpResponse:
             "groups": groups,
             "members": members,
             "saved": request.GET.get("ok") == "1",
+        },
+    )
+
+
+# =============================================================================
+# Quedas & Massivas (#146) — a tela do rompimento em curso
+# =============================================================================
+def _massivas_contexto_agora(org: Any, *, now: datetime) -> dict[str, Any]:
+    """Bloco que o HTMX recarrega sozinho: foto do poll + KPIs + abertas."""
+    dados = compute_massivas_agora(org, now=now)
+    maior = dados["maior_massiva"]
+    return {
+        "poll": poll_snapshot(org, now=now),
+        "clientes_fora": dados["clientes_fora"],
+        "massivas_abertas": dados["massivas_abertas"],
+        # Rótulo deliberadamente NÃO é "MRR": este dashboard tem uma aba de MRR
+        # pra valer e o número seria lido lado a lado com ela como receita
+        # perdida. É a mensalidade de quem está fora há vinte minutos.
+        "mensalidade_afetada_str": _fmt_brl(float(dados["mensalidade_afetada"])),
+        "maior_massiva": maior,
+        "linhas": dados["linhas"],
+        # Causa da OLT é o painel principal (#148); o motivo do RADIUS ficou
+        # secundário — ele não separa massiva de queda individual.
+        "causas_onu": dados["causas_onu"],
+        "motivos": dados["motivos"],
+        "_dados": dados,
+    }
+
+
+@login_required
+@never_cache
+def massivas(request: HttpRequest) -> HttpResponse:
+    """Quedas & Massivas — quem está fora agora, onde e quem já voltou."""
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+    now = timezone.now()
+
+    ctx = _massivas_contexto_agora(org, now=now)
+    dados = ctx.pop("_dados")
+
+    return render(
+        request,
+        "dashboards/massivas.html",
+        {
+            **ctx,
+            "mapa": dados["mapa"],
+            "mapa_chart_json": charts.outage_map(dados["mapa"]),
+            "mapa_nota": (
+                "Verde é retorno registrado nas últimas "
+                f"{dados['janela_retorno_horas']}h — {dados['clientes_que_voltaram']} "
+                "cliente(s). Durante um reparo o mapa esverdeia; passe o mouse "
+                "para ver a hora da queda e do retorno."
+            ),
+            "timeline_chart_json": charts.outage_timeline(dados["timeline"]),
+            "timeline_horas": TIMELINE_HOURS,
+            "bucket_minutos": BUCKET_MINUTES,
+            # Carimbo próprio do que NÃO acompanha o auto-refresh: mapa e linha
+            # do tempo são desenhados uma vez, no load. Sem a hora ao lado deles,
+            # um mapa velho encostado numa lista viva mente por omissão.
+            "desenhado_as": now,
+            "historico": compute_historico(org),
+            "refresh_url": reverse("dashboards:massivas_abertas"),
+        },
+    )
+
+
+@login_required
+@never_cache
+def massivas_abertas(request: HttpRequest) -> HttpResponse:
+    """Partial do auto-refresh (HTMX) — só o bloco de tempo real.
+
+    O mapa e a linha do tempo ficam de fora de propósito: recarregá-los a cada
+    minuto redesenharia o Plotly debaixo do dedo de quem está lendo o mapa
+    durante o reparo.
+    """
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    ctx = _massivas_contexto_agora(org, now=timezone.now())
+    ctx.pop("_dados")
+    return render(
+        request,
+        "dashboards/_massivas_abertas.html",
+        {**ctx, "refresh_url": reverse("dashboards:massivas_abertas")},
+    )
+
+
+@login_required
+@never_cache
+def massiva_detalhe(request: HttpRequest, outage_id: int) -> HttpResponse:
+    """Detalhe de uma massiva: recorte no mapa + tabela de clientes."""
+    from apps.network.infrastructure.models import OutageEvent
+
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    # Queryset já escopado na org (defesa em profundidade além do TenantManager).
+    outage = get_object_or_404(
+        OutageEvent.objects.filter(organization=org), pk=outage_id
+    )
+    detalhe = compute_massiva_detalhe(org, outage)
+
+    return render(
+        request,
+        "dashboards/massiva_detalhe.html",
+        {
+            "outage": detalhe["cabecalho"],
+            "linhas": detalhe["linhas"],
+            "sinal_disponivel": detalhe["sinal_disponivel"],
+            "sinal_cobertura": detalhe["sinal_cobertura"],
+            "mapa": detalhe["mapa"],
+            "mapa_chart_json": charts.outage_map(detalhe["mapa"]),
+            # No detalhe o vermelho é a extensão da massiva, não só quem segue
+            # fora — quem já voltou continua no mapa pra o recorte não encolher
+            # durante o reparo e sumir no post-mortem.
+            "mapa_nota": (
+                "Todos os clientes desta massiva estão no mapa: vermelho quem "
+                "segue fora, verde quem já voltou (com a hora do retorno no "
+                "rótulo do ponto)."
+            ),
+            "desenhado_as": timezone.now(),
+            "poll": poll_snapshot(org, now=timezone.now()),
+            "degradacao_db": SIGNAL_DEGRADATION_DB,
+            # Distribuição de causa DESTA massiva: é o recorte que responde
+            # "mando viatura ou é falta de luz no bairro?".
+            "causas_onu": detalhe["causas_onu"],
+            "motivos": detalhe["motivos"],
         },
     )

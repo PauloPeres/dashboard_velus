@@ -1,0 +1,278 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Mensagens &amp; Canais · Velus{% endblock %}
+
+{% block content %}
+<!-- Cabeçalho -->
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Mensagens &amp; Canais</h1>
+    <p class="text-xs text-gray-400 mt-0.5">Quanto se fala, quem fala, de que tipo e por qual número — o volume que vira custo de canal e carga de equipe</p>
+  </div>
+
+  <div class="flex flex-wrap items-center gap-2">
+    <!-- Filtro de canal -->
+    <div class="relative">
+      <select
+        onchange="setParam('canal', this.value)"
+        class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 pr-8
+               appearance-none cursor-pointer text-gray-700
+               focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400
+               hover:border-gray-300 transition-colors"
+      >
+        <option value="" {% if not selected_canal %}selected{% endif %}>Todos os canais</option>
+        {% for c in canais_disponiveis %}
+        <option value="{{ c.external_id }}" {% if c.external_id == selected_canal %}selected{% endif %}>
+          {{ c.nome }}{% if not c.ativo %} (inativo){% endif %}
+        </option>
+        {% endfor %}
+      </select>
+      <span class="pointer-events-none absolute right-2.5 inset-y-0 flex items-center">
+        <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </span>
+    </div>
+
+    <!-- Filtro de departamento -->
+    <div class="relative">
+      <select
+        onchange="setParam('departamento', this.value)"
+        class="text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 pr-8
+               appearance-none cursor-pointer text-gray-700
+               focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400
+               hover:border-gray-300 transition-colors"
+      >
+        <option value="" {% if not selected_departamento_id %}selected{% endif %}>Todos os departamentos</option>
+        {% for d in departamentos %}
+        <option value="{{ d.id }}" {% if d.id == selected_departamento_id %}selected{% endif %}>{{ d.nome }}</option>
+        {% endfor %}
+      </select>
+      <span class="pointer-events-none absolute right-2.5 inset-y-0 flex items-center">
+        <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </span>
+    </div>
+  </div>
+</div>
+
+{% include "dashboards/_period_header.html" %}
+
+{% comment %}
+Aviso de cobertura: as mensagens vêm de um backfill que pode não ter alcançado
+a janela inteira. Sem este aviso, um gráfico de volume ralo pareceria queda de
+demanda quando é só dado que ainda não entrou — o erro mais caro que esta
+página poderia induzir.
+{% endcomment %}
+{% if cobertura.parcial %}
+<div class="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+  <p class="text-sm font-semibold text-amber-900">Cobertura parcial: {{ cobertura.pct }}% das conversas do período têm mensagens ingeridas</p>
+  <p class="text-xs text-amber-800 mt-1 leading-relaxed">
+    {{ cobertura.conversas_com_mensagem|intcomma }} de {{ cobertura.conversas|intcomma }} conversas.
+    Os números abaixo descrevem <strong>só essa fatia</strong> — proporções (quem fala, tipo, canal) já são
+    representativas, mas os <strong>totais absolutos estão subestimados</strong> e a série temporal desenha o
+    avanço do backfill, não a demanda. Rode
+    <code class="bg-amber-100 px-1 rounded">backfill_opa_mensagens</code> para fechar a janela.
+  </p>
+</div>
+{% endif %}
+
+<!-- KPIs -->
+<h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Indicadores</h2>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+  {% include "dashboards/_kpi_card.html" with label="Mensagens no período" value=total|intcomma tooltip="Todas as mensagens trocadas na janela, contadas pela data de envio — não pela data de abertura da conversa." %}
+
+  {% include "dashboards/_kpi_card.html" with label="Enviadas pela Velus" value=n_agente|intcomma subtitle=pct_agente|stringformat:"s"|add:"% do total · inclui os bots Gi e Felipe" tooltip="Mensagens que saíram do nosso lado: atendente humano e bot de autoatendimento juntos — a fonte não separa os dois na mensagem." %}
+
+  {% include "dashboards/_kpi_card.html" with label="Enviadas pelo cliente" value=n_cliente|intcomma subtitle=pct_cliente|stringformat:"s"|add:"% do total" tooltip="Mensagens recebidas dos clientes." %}
+
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+    <p class="text-sm text-gray-500 mb-1 flex items-center gap-1">
+      Razão de resposta
+      <span class="relative inline-block group/tip shrink-0">
+        <span class="w-3.5 h-3.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full inline-flex items-center justify-center text-gray-400 hover:text-gray-600 cursor-help font-bold leading-none select-none">?</span>
+        <span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 leading-relaxed whitespace-normal text-left">
+          Quantas mensagens a Velus manda para cada uma que recebe. Muito acima de 2 costuma ser
+          menu de bot falando sozinho, não conversa — vale olhar a fatia de "menu interativo" ao lado.
+          <span class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></span>
+        </span>
+      </span>
+    </p>
+    <p class="text-2xl font-bold text-gray-900">{% if razao_resposta %}{{ razao_resposta }}×{% else %}—{% endif %}</p>
+    <p class="text-xs text-gray-500 mt-1 leading-snug">
+      {% if media_por_conversa %}{{ media_por_conversa }} mensagens por conversa{% else %}sem conversas no período{% endif %}
+    </p>
+  </div>
+</div>
+
+<!-- Custo: janela de 24h -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex flex-wrap items-baseline justify-between gap-2">
+    <h2 class="text-sm font-semibold text-gray-700">Mensagens fora da janela de 24h</h2>
+    <span class="text-2xl font-bold text-gray-900">{{ fora_janela|intcomma }}</span>
+  </div>
+  <p class="text-xs text-gray-400 mt-1 leading-relaxed">
+    {{ pct_fora_janela }}% do que a Velus enviou no período. É <strong>este</strong> número que anda junto da fatura, não o
+    volume total: dentro da janela de 24h a conversa é livre, fora dela o envio exige template pago.
+    Para virar reais, falta cruzar com a tarifa cobrada pelo BSP.
+  </p>
+</div>
+
+<!-- Volume no tempo -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Volume de mensagens no tempo</h2>
+    <div class="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
+      <button onclick="setParam('g', 'week')"
+        class="px-3 py-1.5 text-sm rounded-md transition-colors
+               {% if granularity == 'week' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">
+        Semanal
+      </button>
+      <button onclick="setParam('g', 'month')"
+        class="px-3 py-1.5 text-sm rounded-md transition-colors
+               {% if granularity == 'month' %}bg-blue-600 text-white font-medium{% else %}text-gray-600 hover:bg-gray-50{% endif %}">
+        Mensal
+      </button>
+    </div>
+  </div>
+  <p class="text-xs text-gray-400 mb-3">Empilhado por quem enviou. A altura da barra é a carga total do período.</p>
+  <div id="msg-volume-chart" style="height:340px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+</div>
+
+<!-- Tipo + Canal -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <h2 class="text-sm font-semibold text-gray-700">Tipo de mensagem</h2>
+    <p class="text-xs text-gray-400 mb-3">Menu interativo é bot; template é envio ativo (o que costuma ser tarifado).</p>
+    <div id="msg-tipo-chart" style="height:320px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <h2 class="text-sm font-semibold text-gray-700">Volume por canal</h2>
+    <p class="text-xs text-gray-400 mb-3">Cada número é faturado separado. Canais em cinza estão inativos na fonte — só têm histórico.</p>
+    <div id="msg-canal-chart" style="height:320px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+</div>
+
+<!-- Departamento + Motivo -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <h2 class="text-sm font-semibold text-gray-700">Volume por departamento</h2>
+    <p class="text-xs text-gray-400 mb-3">Onde a carga de conversa está. Passe o mouse para ver a média por conversa.</p>
+    <div id="msg-depto-chart" style="height:320px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <h2 class="text-sm font-semibold text-gray-700">Volume por motivo</h2>
+    <p class="text-xs text-gray-400 mb-3">Quais procedimentos consomem mais mensagens. Uma conversa com dois motivos conta nos dois.</p>
+    <div id="msg-motivo-chart" style="height:320px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+</div>
+
+<!-- Tabela de motivos: volume vs média -->
+{% if por_motivo %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <h2 class="text-sm font-semibold text-gray-700">Motivos que mais custam conversa</h2>
+  <p class="text-xs text-gray-400 mb-3">
+    As duas colunas contam histórias diferentes: <strong>total</strong> alto com <strong>média</strong> baixa é
+    procedimento frequente e curto (candidato a automação); média alta é procedimento difícil (candidato a
+    treinamento ou a mudança de processo), mesmo que apareça pouco.
+  </p>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100">
+          <th class="text-left font-medium py-2 pr-4">Motivo</th>
+          <th class="text-right font-medium py-2 px-4">Mensagens</th>
+          <th class="text-right font-medium py-2 px-4">% do total</th>
+          <th class="text-right font-medium py-2 px-4">Conversas</th>
+          <th class="text-right font-medium py-2 pl-4">Msg/conversa</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for m in por_motivo %}
+        <tr class="hover:bg-gray-50">
+          <td class="py-2 pr-4 text-gray-800">{{ m.nome }}</td>
+          <td class="py-2 px-4 text-right tabular-nums text-gray-900 font-medium">{{ m.mensagens|intcomma }}</td>
+          <td class="py-2 px-4 text-right tabular-nums text-gray-500">{{ m.pct }}%</td>
+          <td class="py-2 px-4 text-right tabular-nums text-gray-500">{{ m.conversas|intcomma }}</td>
+          <td class="py-2 pl-4 text-right tabular-nums text-gray-900">{{ m.media }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Origem da conversa -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <h2 class="text-sm font-semibold text-gray-700">De onde a conversa nasceu</h2>
+  <p class="text-xs text-gray-400 mb-3">
+    Conversas abertas por clique em anúncio (Click-to-WhatsApp) chegam com o id do anúncio da Meta — é a ponte
+    entre volume de atendimento e gasto de mídia.
+  </p>
+
+  {% if origem.por_tipo %}
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100">
+          <th class="text-left font-medium py-2 pr-4">Origem</th>
+          <th class="text-right font-medium py-2 px-4">Conversas</th>
+          <th class="text-right font-medium py-2 px-4">Mensagens</th>
+          <th class="text-right font-medium py-2 pl-4">Msg/conversa</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for o in origem.por_tipo %}
+        <tr class="hover:bg-gray-50">
+          <td class="py-2 pr-4 text-gray-800">{{ o.label }}</td>
+          <td class="py-2 px-4 text-right tabular-nums text-gray-900 font-medium">{{ o.conversas|intcomma }}</td>
+          <td class="py-2 px-4 text-right tabular-nums text-gray-500">{{ o.mensagens|intcomma }}</td>
+          <td class="py-2 pl-4 text-right tabular-nums text-gray-900">{{ o.media }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-sm text-gray-400 py-4">Sem conversas com mensagens no período.</p>
+  {% endif %}
+
+  {% if origem.top_anuncios %}
+  <div class="mt-5 pt-4 border-t border-gray-100">
+    <h3 class="text-sm font-semibold text-gray-700 mb-2">Anúncios que mais geraram conversa</h3>
+    <ul class="divide-y divide-gray-100 text-sm">
+      {% for a in origem.top_anuncios %}
+      <li class="py-2 flex flex-wrap items-baseline justify-between gap-2">
+        <code class="text-xs text-gray-500">{{ a.nome }}</code>
+        <span class="text-gray-700">
+          <strong>{{ a.conversas|intcomma }}</strong> conversas ·
+          {{ a.mensagens|intcomma }} mensagens ·
+          {{ a.media }} msg/conversa
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ volume_chart_json|json_script:"msg-volume-data" }}
+{{ tipo_chart_json|json_script:"msg-tipo-data" }}
+{{ canal_chart_json|json_script:"msg-canal-data" }}
+{{ departamento_chart_json|json_script:"msg-depto-data" }}
+{{ motivo_chart_json|json_script:"msg-motivo-data" }}
+<script>
+  renderChart("msg-volume-chart", "msg-volume-data");
+  renderChart("msg-tipo-chart", "msg-tipo-data");
+  renderChart("msg-canal-chart", "msg-canal-data");
+  renderChart("msg-depto-chart", "msg-depto-data");
+  renderChart("msg-motivo-chart", "msg-motivo-data");
+</script>
+{% endblock %}

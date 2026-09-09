@@ -1,0 +1,132 @@
+{% load humanize %}
+{% comment %}
+Bloco de tempo real da aba Quedas & Massivas (#146): de quando é a foto, os
+KPIs de agora, a lista de massivas abertas e o painel de motivos.
+
+Está num partial porque é ele — e só ele — que o HTMX recarrega sozinho. Mapa e
+linha do tempo ficam fora: redesenhar o Plotly a cada minuto tiraria o mapa
+debaixo do dedo de quem está lendo durante o reparo.
+{% endcomment %}
+<div id="massivas-agora"
+     hx-get="{{ refresh_url }}"
+     {% comment %}
+     3 min = a cadência do poll (§7). A 60s, duas de cada três chamadas
+     trariam exatamente a mesma foto.
+     {% endcomment %}
+     hx-trigger="every 180s"
+     hx-target="this"
+     hx-swap="outerHTML">
+
+  {% comment %}
+  Regra 4: a tela declara de quando é a foto. Silêncio aqui seria lido como
+  "ninguém caiu" — que é exatamente o erro que a ferramenta existe pra evitar.
+  {% endcomment %}
+  <div class="rounded-lg border p-3 mb-6 flex items-start gap-2
+              {% if poll.ok %}bg-gray-50 border-gray-200{% else %}bg-amber-50 border-amber-300{% endif %}">
+    <span class="text-xs font-semibold uppercase tracking-wider mt-0.5
+                 {% if poll.ok %}text-gray-400{% else %}text-amber-700{% endif %}">
+      {% if poll.ok %}Foto{% else %}Atenção{% endif %}
+    </span>
+    <div class="text-xs leading-relaxed {% if poll.ok %}text-gray-500{% else %}text-amber-800{% endif %}">
+      {{ poll.mensagem }}
+      {% if poll.observando %}
+      <span class="text-gray-400">
+        · observando desde {{ poll.baseline_at|date:"d/m H:i" }} — quedas anteriores a isso
+        não são evento (a primeira leitura de um login é linha de base).
+      </span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    {% include "dashboards/_kpi_card.html" with label="Clientes fora agora" value=clientes_fora|intcomma agora=True value_color="text-red-600" tooltip="Quedas ainda abertas (sem retorno registrado). Inclui quem caiu sozinho, fora de qualquer massiva." %}
+
+    {% include "dashboards/_kpi_card.html" with label="Massivas abertas" value=massivas_abertas|intcomma agora=True tooltip="Agrupamentos de quedas simultâneas que o detector fechou por topologia ou proximidade. Zero é o estado normal." %}
+
+    {% comment %}
+    O rótulo evita "MRR" de propósito: a aba de Receita tem o MRR de verdade, e
+    lado a lado este número seria lido como perda. É mensalidade de gente que
+    está fora há vinte minutos — tooltip não segura número em slide, rótulo sim.
+    {% endcomment %}
+    {% include "dashboards/_kpi_card.html" with label="Mensalidade dos afetados" value=mensalidade_afetada_str agora=True tooltip="Soma da mensalidade dos contratos com queda aberta dentro de massivas. Mede o tamanho do impacto agora — não é receita perdida nem baixa de MRR." %}
+
+    {% if maior_massiva %}
+    {% include "dashboards/_kpi_card.html" with label="Maior massiva" value=maior_massiva.affected_count|intcomma agora=True subtitle=maior_massiva.destaque tooltip="A massiva aberta com mais clientes. O rótulo traz a fração afetada do elemento em escopo: escopo alto com fração baixa é um trecho abaixo do elemento, não o elemento inteiro." %}
+    {% else %}
+    {% include "dashboards/_kpi_card.html" with label="Maior massiva" value="—" agora=True subtitle="nenhuma massiva aberta" %}
+    {% endif %}
+  </div>
+
+  <!-- ===================================================================
+       Massivas abertas. Regra do plano §8: o escopo nunca aparece sozinho —
+       ou o destaque é o trecho suspeito, ou é o elemento COM a fração.
+       =================================================================== -->
+  <div class="flex items-center gap-2 mb-3">
+    <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Massivas abertas</h2>
+    {% include "dashboards/_badge_agora.html" %}
+  </div>
+
+  {% for l in linhas %}
+  <div class="bg-white rounded-xl shadow-sm border {% if l.confidence == "ALTA" %}border-red-300{% else %}border-gray-200{% endif %} p-5 mb-4">
+    <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+      <div class="min-w-0">
+        {% if l.tem_trecho %}
+        <p class="text-[10px] uppercase tracking-wider text-amber-700 font-semibold mb-0.5">Trecho suspeito</p>
+        <p class="text-lg font-bold text-gray-900 leading-snug">{{ l.trecho_suspeito }}</p>
+        <p class="text-sm text-gray-500 mt-1">
+          Escopo {{ l.scope_label }} · {{ l.elemento_frase }}{% if l.referencia %} · {{ l.referencia }}{% endif %}
+        </p>
+        {% else %}
+        <p class="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-0.5">Escopo {{ l.scope_label }}</p>
+        <p class="text-lg font-bold text-gray-900 leading-snug">{{ l.elemento_frase }}</p>
+        {% comment %}
+        "OLT 1 — 2%" diz quanto, não diz pra onde ir. A referência vem do
+        cadastro (nome/endereço do POP pai) e só aparece quando o cadastro
+        fecha — sem derivação, nada de inventar lugar.
+        {% endcomment %}
+        {% if l.referencia %}<p class="text-sm text-gray-500 mt-1">{{ l.referencia }}</p>{% endif %}
+        {% endif %}
+
+        {% if l.ressalva_escopo %}
+        <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2 leading-relaxed">
+          {{ l.ressalva_escopo }}
+        </p>
+        {% endif %}
+
+        <p class="text-xs text-gray-400 mt-2">
+          Começou às {{ l.started_at|date:"d/m H:i" }} ·
+          confiança <span class="font-medium text-gray-600">{{ l.confidence_label }}</span> ·
+          mensalidade dos afetados R$ {{ l.mrr_at_risk|floatformat:2|intcomma }}
+        </p>
+      </div>
+
+      <div class="shrink-0 lg:text-right">
+        <p class="text-2xl font-bold text-red-600 tabular-nums">{{ l.ainda_fora|intcomma }}</p>
+        <p class="text-xs text-gray-500">ainda fora de {{ l.affected_count|intcomma }}</p>
+        <div class="w-40 h-1.5 bg-gray-100 rounded-full mt-2 overflow-hidden lg:ml-auto">
+          <div class="h-full bg-emerald-500" style="width: {{ l.restored_pct }}%"></div>
+        </div>
+        <p class="text-xs text-emerald-700 mt-1">{{ l.restored_pct }}% já voltou</p>
+        <a href="{% url 'dashboards:massiva_detalhe' l.id %}"
+           class="inline-block mt-3 text-xs text-blue-600 hover:underline">Ver clientes afetados →</a>
+      </div>
+    </div>
+  </div>
+  {% empty %}
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+    <p class="text-sm text-gray-700 font-medium">Nenhuma massiva aberta agora.</p>
+    <p class="text-xs text-gray-500 mt-1 leading-relaxed">
+      Este é o estado normal da tela — ela só tem o que mostrar durante um rompimento.
+      {% if clientes_fora %}
+      Há {{ clientes_fora|intcomma }} cliente{{ clientes_fora|pluralize }} fora agora sem formar
+      massiva: queda isolada fica registrada, mas não vira evento coletivo.
+      {% endif %}
+      {% if not poll.ok %}
+      Atenção à idade da foto acima: a lista vazia pode ser falta de leitura, não ausência de queda.
+      {% endif %}
+    </p>
+  </div>
+  {% endfor %}
+
+  {% include "dashboards/_massivas_causas.html" %}
+</div>

@@ -19,6 +19,7 @@ import structlog
 from celery import shared_task
 from django.utils import timezone
 
+from apps.atendimento.application.mensagens_backfill import run_mensagens_backfill
 from apps.atendimento.application.sync import run_opa_sync
 from apps.integrations.opa.atendimento import OpaAtendimentoSource
 from apps.integrations.shared.enums import Capability, SourceType
@@ -31,6 +32,10 @@ _logger = structlog.get_logger(__name__)
 
 # Janela de carga quando ainda não há checkpoint (1ª execução pós-deploy).
 _DEFAULT_WINDOW_DAYS = 90
+# Mensagens são ~30x mais numerosas que atendimentos: sem checkpoint, uma janela
+# de 90 dias no beat seriam ~2.800 chamadas de uma vez. A carga histórica tem
+# comando próprio; aqui a janela é curta de propósito.
+_DEFAULT_MESSAGE_WINDOW_DAYS = 7
 
 
 @shared_task(
@@ -45,8 +50,9 @@ _DEFAULT_WINDOW_DAYS = 90
 def sync_opa_for_all_orgs() -> dict[str, int]:
     """Roda o sync Opa! incremental para toda org com datasource OPA ativo.
 
-    Mensagens ficam de fora (caras: 1 chamada por atendimento) — o agendado só
-    mantém atendimentos/departamentos/vínculos atualizados.
+    Inclui o incremental de mensagens, que roda pela listagem global (~30
+    chamadas/dia). O que segue de fora é o `list_mensagens` por atendimento —
+    esse sim caro (1 chamada por conversa) e restrito ao drill-down.
     """
     return _sync_opa_for_all_orgs()
 
@@ -62,6 +68,7 @@ def _sync_opa_for_all_orgs() -> dict[str, int]:
 
     n_orgs = 0
     n_atendimentos = 0
+    n_mensagens = 0
     for cfg in configs:
         org = cfg.organization
         n_orgs += 1
@@ -114,6 +121,14 @@ def _sync_opa_for_all_orgs() -> dict[str, int]:
                     atendimentos=result.atendimentos,
                     customers_linked=result.customers_linked,
                 )
+
+                # Mensagens: cursor próprio (capability MENSAGENS) e falha
+                # isolada — o volume é um extra, não pode derrubar o sync de
+                # atendimentos, que é o que as outras cinco abas leem.
+                try:
+                    n_mensagens += _sync_mensagens(org, source, log)
+                except Exception as exc:
+                    log.warning("opa_beat_mensagens_failed", error=str(exc))
             except Exception as exc:
                 job.status = SyncStatus.FAILED
                 job.error_message = f"{type(exc).__name__}: {exc}"[:1000]
@@ -124,4 +139,47 @@ def _sync_opa_for_all_orgs() -> dict[str, int]:
         finally:
             reset_current_organization(token)
 
-    return {"orgs": n_orgs, "atendimentos": n_atendimentos}
+    return {
+        "orgs": n_orgs,
+        "atendimentos": n_atendimentos,
+        "mensagens": n_mensagens,
+    }
+
+
+def _sync_mensagens(org, source, log) -> int:
+    """Incremental do volume de mensagens a partir do checkpoint MENSAGENS.
+
+    Sem checkpoint, pega só a janela padrão em vez de varrer anos de história:
+    a carga inicial é trabalho do comando `backfill_opa_mensagens`, que sabe
+    fatiar e retomar. Um beat noturno não é lugar de tarefa de horas.
+    """
+    checkpoint, _ = SyncCheckpoint.objects.get_or_create(
+        organization=org,
+        source_type=SourceType.OPA.value,
+        capability=Capability.MENSAGENS.value,
+    )
+    since = checkpoint.last_processed_at or (
+        timezone.now() - timedelta(days=_DEFAULT_MESSAGE_WINDOW_DAYS)
+    )
+
+    result = run_mensagens_backfill(org, source, since=since)
+
+    # Rodada vazia não avança o cursor (#132): sem mensagem nova, `ultima_data`
+    # é None e o checkpoint fica onde estava, pra próxima rodada tentar de novo
+    # o mesmo trecho em vez de pular por cima de uma fonte quebrada.
+    if result.ultima_data is not None:
+        checkpoint.last_processed_at = result.ultima_data
+        checkpoint.consecutive_empty_runs = 0
+        checkpoint.save(
+            update_fields=[
+                "last_processed_at",
+                "consecutive_empty_runs",
+                "updated_at",
+            ]
+        )
+    else:
+        checkpoint.consecutive_empty_runs += 1
+        checkpoint.save(update_fields=["consecutive_empty_runs", "updated_at"])
+
+    log.info("opa_beat_mensagens_synced", mensagens=result.mensagens)
+    return result.mensagens

@@ -2226,3 +2226,284 @@ def cto_by_project_stacked_bar(by_project: list[dict[str, Any]]) -> str:
         },
     )
     return _to_json(fig)
+
+
+# -----------------------------------------------------------------------------
+# Mensagens & Canais
+# -----------------------------------------------------------------------------
+
+# Paleta dos recortes de mensagem. Velus em azul, cliente em cinza-esverdeado:
+# a comparação é "nós vs eles", então as duas cores precisam ser lidas como
+# categorias distintas, não como bom/ruim.
+_COR_AGENTE = "#2563eb"
+_COR_CLIENTE = "#64748b"
+
+
+def mensagens_volume_stacked(serie: dict[str, Any]) -> str:
+    """Barras empilhadas — mensagens da Velus e do cliente por período."""
+    labels = serie["labels"]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                name="Velus (suporte + bot)",
+                x=labels, y=serie["agente"],
+                marker={"color": _COR_AGENTE},
+                hovertemplate="<b>%{x}</b><br>Velus: %{y} mensagens<extra></extra>",
+            ),
+            go.Bar(
+                name="Cliente",
+                x=labels, y=serie["cliente"],
+                marker={"color": _COR_CLIENTE},
+                hovertemplate="<b>%{x}</b><br>Cliente: %{y} mensagens<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "yaxis": {"title": "Mensagens"},
+            "legend": {"orientation": "h", "y": -0.2},
+        },
+    )
+    return _to_json(fig)
+
+
+def mensagens_tipo_pie(data: list[dict[str, Any]]) -> str:
+    """Donut — distribuição por tipo de mensagem."""
+    cores = {
+        "texto": "#2563eb",
+        "midia": "#8b5cf6",
+        "menuInterativo": "#f59e0b",
+        "template": "#dc2626",
+        "localizacao": "#10b981",
+        "contato": "#14b8a6",
+    }
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=[d["label"] for d in data],
+                values=[d["n"] for d in data],
+                hole=0.45,
+                marker={"colors": [cores.get(d["tipo"], "#9ca3af") for d in data]},
+                hovertemplate="<b>%{label}</b><br>%{value} mensagens (%{percent})<extra></extra>",
+            )
+        ],
+        layout={**_LAYOUT_BASE, "showlegend": True},
+    )
+    return _to_json(fig)
+
+
+def mensagens_canal_bar(data: list[dict[str, Any]]) -> str:
+    """Barras horizontais — volume por canal/número de origem.
+
+    Canal inativo sai em cinza: ele ainda aparece porque tem histórico, mas o
+    volume dele não é capacidade nem custo futuro.
+    """
+    ordenado = list(reversed(data))
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=[d["n"] for d in ordenado],
+                y=[d["nome"] for d in ordenado],
+                orientation="h",
+                marker={
+                    "color": [
+                        _COR_AGENTE if d.get("ativo") else "#cbd5e1" for d in ordenado
+                    ]
+                },
+                hovertemplate="<b>%{y}</b><br>%{x} mensagens<extra></extra>",
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "margin": {"l": 220, "r": 20, "t": 30, "b": 50},
+            "xaxis": {"title": "Mensagens"},
+        },
+    )
+    return _to_json(fig)
+
+
+def mensagens_por_categoria_bar(
+    rows: list[dict[str, Any]], *, eixo: str = "Mensagens"
+) -> str:
+    """Barras horizontais de volume com a média por conversa no hover.
+
+    As duas leituras juntas de propósito: um motivo pode liderar o volume por
+    ser frequente (muitas conversas curtas) ou por ser custoso (poucas conversas
+    longas) — e a resposta operacional pra cada caso é oposta.
+    """
+    ordenado = list(reversed(rows))
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=[r["mensagens"] for r in ordenado],
+                y=[r["nome"] for r in ordenado],
+                orientation="h",
+                marker={"color": _COR_AGENTE},
+                customdata=[[r["conversas"], r["media"]] for r in ordenado],
+                hovertemplate=(
+                    "<b>%{y}</b><br>%{x} mensagens<br>"
+                    "%{customdata[0]} conversas · %{customdata[1]} msg/conversa"
+                    "<extra></extra>"
+                ),
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "margin": {"l": 220, "r": 20, "t": 30, "b": 50},
+            "xaxis": {"title": eixo},
+        },
+    )
+    return _to_json(fig)
+
+
+def os_carga_por_pessoa(rows: list[dict[str, Any]]) -> str:
+    """Barras horizontais empilhadas — OS abertas por pessoa, por faixa de idade.
+
+    Empilhado em vez de barra única porque o total sozinho não distingue quem
+    tem muita OS de hoje (carga real) de quem herdou um backlog parado — e a
+    ação para cada caso é oposta: uma pede reforço, a outra pede faxina.
+    """
+    ordenado = list(reversed(rows))
+    nomes = [r["nome"] for r in ordenado]
+    faixas = (
+        ("recente", "Até 7 dias", "#2563eb"),
+        ("atencao", "8 a 30 dias", "#10b981"),
+        ("atrasada", "31 a 90 dias", "#f59e0b"),
+        ("backlog", "Mais de 90 dias", "#dc2626"),
+    )
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                name=label,
+                x=[r[chave] for r in ordenado],
+                y=nomes,
+                orientation="h",
+                marker={"color": cor},
+                hovertemplate=f"<b>%{{y}}</b><br>{label}: %{{x}} OS<extra></extra>",
+            )
+            for chave, label, cor in faixas
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "margin": {"l": 200, "r": 20, "t": 30, "b": 50},
+            "xaxis": {"title": "OS abertas"},
+            "legend": {"orientation": "h", "y": -0.2},
+        },
+    )
+    return _to_json(fig)
+
+
+def os_backlog_por_tipo(rows: list[dict[str, Any]]) -> str:
+    """Barras horizontais — tipos de OS que compõem o backlog parado."""
+    ordenado = list(reversed(rows))
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=[r["n"] for r in ordenado],
+                y=[r["nome"] for r in ordenado],
+                orientation="h",
+                marker={"color": "#dc2626"},
+                hovertemplate="<b>%{y}</b><br>%{x} OS paradas<extra></extra>",
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "margin": {"l": 240, "r": 20, "t": 30, "b": 50},
+            "xaxis": {"title": "OS abertas há mais de 90 dias"},
+        },
+    )
+    return _to_json(fig)
+
+
+def outage_map(mapa: dict[str, Any]) -> str:
+    """Mapa da massiva — quem está fora, quem voltou, CTOs afetadas e POPs (#146).
+
+    `scattermap` com tiles do OpenStreetMap: o Plotly já está self-hosted em
+    `static/vendor/`, então o único custo é liberar `tile.openstreetmap.org` no
+    CSP. Nenhum cabo é desenhado — a geometria não existe na API do IXC (§2.3),
+    e desenhar uma linha entre caixas seria inventar traçado.
+    """
+    # A ordem importa: o verde entra depois do vermelho pra que um cliente que
+    # voltou fique por cima do ponto antigo — é assim que a equipe vê o mapa
+    # esverdeando durante o reparo.
+    camadas = [
+        ("clientes", "Fora agora", "#dc2626", 9),
+        ("voltaram", "Já voltou", "#16a34a", 9),
+        ("ctos", "CTO afetada", "#f59e0b", 13),
+        ("pops", "POP", "#2563eb", 15),
+    ]
+    traces = []
+    todos: list[dict[str, Any]] = []
+    for chave, nome, cor, tamanho in camadas:
+        pontos = mapa.get(chave) or []
+        todos.extend(pontos)
+        traces.append(
+            go.Scattermap(
+                lat=[p["lat"] for p in pontos],
+                lon=[p["lon"] for p in pontos],
+                mode="markers",
+                name=nome,
+                marker={"size": tamanho, "color": cor},
+                text=[p["label"] for p in pontos],
+                hovertemplate="<b>%{text}</b><extra>" + nome + "</extra>",
+            )
+        )
+
+    if todos:
+        centro = {
+            "lat": sum(p["lat"] for p in todos) / len(todos),
+            "lon": sum(p["lon"] for p in todos) / len(todos),
+        }
+        zoom = 12
+    else:
+        # Sem ponto nenhum o mapa ainda renderiza (o estado vazio é o normal);
+        # fica no enquadramento do Brasil em vez de no golfo da Guiné.
+        centro = {"lat": -15.8, "lon": -47.9}
+        zoom = 3
+
+    fig = go.Figure(
+        data=traces,
+        layout={
+            "map": {"style": "open-street-map", "center": centro, "zoom": zoom},
+            "margin": {"l": 0, "r": 0, "t": 0, "b": 0},
+            "showlegend": True,
+            "legend": {"orientation": "h", "y": 0, "x": 0, "bgcolor": "rgba(255,255,255,.8)"},
+            "font": {"family": "system-ui, sans-serif", "size": 12},
+        },
+    )
+    return _to_json(fig)
+
+
+def outage_timeline(buckets: list[dict[str, Any]]) -> str:
+    """Barras empilhadas — quedas por bucket de 10 min, separando quem voltou."""
+    labels = [b["label"] for b in buckets]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=labels,
+                y=[b["fora"] for b in buckets],
+                name="Ainda fora",
+                marker={"color": "#dc2626"},
+                hovertemplate="<b>%{x}</b><br>%{y} ainda fora<extra></extra>",
+            ),
+            go.Bar(
+                x=labels,
+                y=[b["voltou"] for b in buckets],
+                name="Já voltou",
+                marker={"color": "#16a34a"},
+                hovertemplate="<b>%{x}</b><br>%{y} já voltaram<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "legend": {"orientation": "h", "y": -0.25},
+            "margin": {"l": 45, "r": 20, "t": 20, "b": 60},
+            "yaxis": {"title": "quedas", "rangemode": "tozero"},
+        },
+    )
+    return _to_json(fig)

@@ -5,7 +5,7 @@ o que permite testar com `FakeAtendimentoSource` sem rede. O comando
 `sync_opasuite` cuida de credenciais/checkpoint e injeta a source real.
 
 Fluxo:
-  1. Sincroniza departamentos (barato).
+  1. Sincroniza departamentos e canais de comunicacao (baratos).
   2. Monta o mapa `id_cliente_opaco -> documento` a partir da lista de clientes
      (barata) — resolve o vinculo conversa->Customer sem popular atendimento a
      atendimento.
@@ -24,6 +24,7 @@ import structlog
 from apps.atendimento.domain.ports import AtendimentoSourcePort
 from apps.atendimento.infrastructure.repositories import (
     AtendimentoRepository,
+    CanalComunicacaoRepository,
     DepartamentoRepository,
     EtiquetaRepository,
     MensagemRepository,
@@ -39,6 +40,7 @@ _logger = structlog.get_logger(__name__)
 @dataclass(frozen=True)
 class OpaSyncResult:
     departamentos: int = 0
+    canais: int = 0
     etiquetas: int = 0
     motivos: int = 0
     atendimentos: int = 0
@@ -71,6 +73,16 @@ def run_opa_sync(
     for dep in source.list_departamentos():
         dep_repo.upsert_from_dto(dep, source_type=source_type)
         dep_count += 1
+
+    # --- 1a2. Canais de comunicacao (catalogo id -> nome/midia/integracao) --
+    # Catalogo barato (~dezenas). Sem ele, o canal que a mensagem carrega e um
+    # ObjectId opaco e a pagina de Mensagens nao consegue dizer QUAL numero
+    # gerou o volume — que e justamente o recorte de custo.
+    canal_repo = CanalComunicacaoRepository(organization)
+    canal_count = 0
+    for canal in source.list_canais():
+        canal_repo.upsert_from_dto(canal, source_type=source_type)
+        canal_count += 1
 
     # --- 1b. Etiquetas (catalogo id_tag -> nome) ----------------------------
     # Catalogo barato; alem de persistir, monta o mapa que resolve os nomes das
@@ -151,6 +163,7 @@ def run_opa_sync(
 
     result = OpaSyncResult(
         departamentos=dep_count,
+        canais=canal_count,
         etiquetas=et_count,
         motivos=mot_count,
         atendimentos=at_count,
@@ -161,6 +174,7 @@ def run_opa_sync(
         "opa_sync_done",
         org=organization.slug,
         departamentos=result.departamentos,
+        canais=result.canais,
         etiquetas=result.etiquetas,
         motivos=result.motivos,
         atendimentos=result.atendimentos,

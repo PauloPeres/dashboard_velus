@@ -34,8 +34,11 @@ class Capability(models.TextChoices):
         PAYMENTS   → apps.financial.domain.ports.PaymentSourcePort
         TICKETS    → apps.helpdesk.domain.ports.TicketSourcePort
         ATENDIMENTO → apps.atendimento.domain.ports.AtendimentoSourcePort
+        MENSAGENS   → idem (listagem global de mensagens)
         CONNECTIONS → apps.network.domain.ports.ConnectionSourcePort
         BANDWIDTH   → apps.network.domain.ports.BandwidthUsageSourcePort
+        NETWORK_ELEMENTS → apps.network.domain.ports.NetworkElementSourcePort
+        OPTICAL_SIGNAL → apps.network.domain.ports.OpticalSignalSourcePort
         EQUIPMENT  → apps.inventory.domain.ports.EquipmentSourcePort
         LEADS         → apps.sales.domain.ports.LeadSourcePort
         OPPORTUNITIES → apps.sales.domain.ports.OpportunitySourcePort
@@ -48,8 +51,21 @@ class Capability(models.TextChoices):
     EXPENSES = "EXPENSES", "Despesas"
     TICKETS = "TICKETS", "Chamados"
     ATENDIMENTO = "ATENDIMENTO", "Atendimentos (Opa! Suite)"
+    # Cursor proprio: as mensagens vem de outra listagem, com outro ritmo e
+    # outro custo que os atendimentos. Compartilhar o checkpoint faria uma
+    # ingestao mover o cursor da outra.
+    MENSAGENS = "MENSAGENS", "Mensagens de atendimento (Opa! Suite)"
     CONNECTIONS = "CONNECTIONS", "Conexões"
     BANDWIDTH = "BANDWIDTH", "Consumo de banda"
+    # Planta física (CTO, POP, PON, OLT, cabo). Capability própria e não
+    # parte de CONNECTIONS porque a topologia muda em semanas e o estado do
+    # login muda em minutos — compartilhar o checkpoint faria um puxar o outro.
+    NETWORK_ELEMENTS = "NETWORK_ELEMENTS", "Topologia de rede"
+    # Sinal óptico da ONU. Capability própria porque é a única leitura do
+    # projeto que consulta equipamento de produção ao vivo (a OLT) — quem
+    # habilita isso para uma organização está autorizando essa consulta, e não
+    # deve vir de carona com o estado do login.
+    OPTICAL_SIGNAL = "OPTICAL_SIGNAL", "Sinal óptico da ONU"
     EQUIPMENT = "EQUIPMENT", "Equipamentos em comodato"
     LEADS = "LEADS", "Leads (CRM)"
     OPPORTUNITIES = "OPPORTUNITIES", "Negociações (CRM)"

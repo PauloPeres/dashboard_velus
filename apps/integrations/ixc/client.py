@@ -189,3 +189,62 @@ class IxcHttpClient(BaseHttpAdapter):
         if not isinstance(data, dict):
             raise AdapterError(f"IXC resposta inesperada em {path}: {type(data).__name__}")
         return data
+
+    # -------------------------------------------------------------------------
+    # Botão de relatório — a ÚNICA escrita autorizada do projeto
+    # -------------------------------------------------------------------------
+    def post_report_button(
+        self, resource: str, payload: dict[str, Any]
+    ) -> str:
+        """POST num botão de relatório do IXC; devolve o corpo **cru** (HTML).
+
+        Escopo, porque a exceção é estreita de propósito
+        (`docs/massivas-plano.md` §2.9): o dashboard **não escreve no IXC**.
+        Nada de abrir chamado, desconectar cliente ou marcar manutenção. O único
+        POST autorizado é este, e ele não grava dado de negócio — pede à OLT uma
+        medição de potência (`botao_rel_22991`) e recebe um painel de relatório
+        de volta.
+
+        Duas diferenças deliberadas em relação a `paginate_ixc`:
+
+        - **sem retry.** Do outro lado tem equipamento de produção. Uma chamada
+          que falhou é uma medição perdida, e medição perdida é aceitável;
+          martelar a OLT não é. Quem chama recua sozinho;
+        - **sem `response.json()`.** A resposta é HTML por design, e a
+          classificação de "não-JSON = erro transiente" que serve à listagem
+          transformaria toda medição bem-sucedida em falha.
+        """
+        if self._client is None:
+            raise RuntimeError(
+                f"{type(self).__name__} deve ser usado em context manager."
+            )
+
+        self._throttle()
+        try:
+            response = self._client.request(
+                "POST",
+                resource,
+                content=_json.dumps(payload).encode("utf-8"),
+            )
+        except httpx.TimeoutException as exc:
+            raise AdapterTransientError(f"Timeout em IXC {resource}") from exc
+        except httpx.NetworkError as exc:
+            raise AdapterTransientError(
+                f"Erro de rede em IXC {resource}: {exc}"
+            ) from exc
+
+        from apps.integrations.shared.exceptions import (
+            AdapterAuthError,
+            AdapterClientError,
+        )
+
+        status = response.status_code
+        if status in (401, 403):
+            raise AdapterAuthError(f"Auth falhou em IXC {resource}: HTTP {status}")
+        if status == 429 or 500 <= status < 600:
+            raise AdapterTransientError(f"IXC HTTP {status} em {resource}")
+        if 400 <= status < 500:
+            raise AdapterClientError(
+                f"IXC HTTP {status} em {resource}: {response.text[:200]}"
+            )
+        return response.text

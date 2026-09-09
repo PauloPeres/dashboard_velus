@@ -39,6 +39,27 @@ def page_access(request: HttpRequest) -> dict[str, Any]:
     }
 
 
+def nav(request: HttpRequest) -> dict[str, Any]:
+    """Monta o menu lateral a partir do catálogo de páginas (`pages.PAGES`).
+
+    O nav era HTML escrito à mão, em paralelo ao catálogo — e página nova
+    nascia invisível. Aqui a árvore vem pronta e filtrada; o template só
+    desenha. Reaproveita o mesmo cálculo de permissão de `page_access` pra as
+    duas visões não divergirem.
+    """
+    from .pages import nav_tree
+
+    acesso = page_access(request)
+    match = getattr(request, "resolver_match", None)
+    return {
+        "nav_tree": nav_tree(
+            allowed_all=acesso["allowed_all"],
+            allowed_pages=acesso["allowed_pages"],
+            url_name_atual=getattr(match, "url_name", None),
+        )
+    }
+
+
 def data_lineage(request: HttpRequest) -> dict[str, Any]:
     """Expõe as fontes de dados da página atual (badge + hover, #67)."""
     from .data_lineage import lineage_for

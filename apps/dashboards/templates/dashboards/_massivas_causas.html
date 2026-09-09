@@ -1,0 +1,128 @@
+{% load humanize %}
+{% comment %}
+Painéis de causa da queda (#146, atualizado com a #148).
+
+Dois campos, hierarquia explícita:
+
+- **principal** — `causa_ultima_queda` da ONU (`Connection.onu_last_drop_cause`),
+  que vem na listagem passiva do IXC e **discrimina o tipo de falha**;
+- **secundário** — `motivo_desconexao` do RADIUS, que só sabe dizer `NAS-Request`
+  ou vazio e por isso não separa massiva de queda individual.
+
+Nos dois a cobertura é declarada, e nos dois os rótulos saem crus: a legenda
+explica o vocabulário da OLT, mas quem conclui "foi falta de energia" é o time,
+não a tela.
+{% endcomment %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-center gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Causa informada pela ONU</h2>
+    {% include "dashboards/_badge_agora.html" %}
+  </div>
+  <p class="text-sm text-gray-600 mb-1">
+    Causa conhecida em <span class="font-semibold">{{ causas_onu.conhecidos|intcomma }}</span>
+    de <span class="font-semibold">{{ causas_onu.total|intcomma }}</span> quedas
+    ({{ causas_onu.cobertura_pct }}% de cobertura).
+  </p>
+  <p class="text-xs text-gray-400 mb-3 leading-relaxed">
+    Lida da listagem passiva do IXC (<code class="bg-gray-100 px-1 rounded">causa_ultima_queda</code>),
+    sem consultar a OLT. Campo vazio e <code class="bg-gray-100 px-1 rounded">-</code> são
+    <strong>ausência de informação</strong>, não "sem causa", e ficam fora das fatias. Os rótulos
+    abaixo são os da OLT, sem tradução — os percentuais são sobre as quedas <em>com</em> causa.
+  </p>
+
+  {% if causas_onu.linhas %}
+  <table class="min-w-full text-sm">
+    <thead>
+      <tr class="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100">
+        <th class="text-left font-medium py-2 pr-4">Causa (como a OLT informou)</th>
+        <th class="text-right font-medium py-2 px-4">Quedas</th>
+        <th class="text-right font-medium py-2 pl-4">% das com causa</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for c in causas_onu.linhas %}
+      <tr>
+        <td class="py-2 pr-4 text-gray-800 font-mono text-xs">{{ c.causa }}</td>
+        <td class="py-2 px-4 text-right tabular-nums text-gray-900">{{ c.quedas|intcomma }}</td>
+        <td class="py-2 pl-4 text-right tabular-nums text-gray-500">{{ c.pct_dos_conhecidos }}%</td>
+      </tr>
+      {% endfor %}
+      <tr>
+        <td class="py-2 pr-4 text-gray-400 italic">A OLT não informou</td>
+        <td class="py-2 px-4 text-right tabular-nums text-gray-400">{{ causas_onu.sem_causa|intcomma }}</td>
+        <td class="py-2 pl-4 text-right text-gray-300">—</td>
+      </tr>
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-sm text-gray-500">Nenhuma queda com causa informada pela OLT.</p>
+  {% endif %}
+
+  {% comment %}
+  Legenda estática: vocabulário, não conclusão. Traduzir o termo ajuda a ler;
+  afirmar "foi falta de energia no bairro" é diagnóstico, e diagnóstico é do time.
+  {% endcomment %}
+  <div class="mt-4 border-t border-gray-100 pt-3">
+    <p class="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">O que os termos querem dizer</p>
+    <dl class="text-xs text-gray-500 space-y-0.5 leading-relaxed">
+      <div><dt class="inline font-mono text-gray-700">dying-gasp</dt> — <dd class="inline">a ONU avisou a OLT antes de desligar; é o aviso típico de perda de energia no cliente.</dd></div>
+      <div><dt class="inline font-mono text-gray-700">LOS / LOSi / LOBi</dt> — <dd class="inline">a OLT parou de receber luz daquela ONU (perda de sinal óptico).</dd></div>
+      <div><dt class="inline font-mono text-gray-700">reset</dt> — <dd class="inline">reinício reportado pelo equipamento.</dd></div>
+      <div><dt class="inline font-mono text-gray-700">ONT</dt> — <dd class="inline">estado reportado pela própria ONT, sem detalhamento da OLT.</dd></div>
+    </dl>
+    <p class="text-xs text-gray-400 mt-2 leading-relaxed">
+      A tela mostra o que a OLT disse e não conclui nada a partir disso. Um conjunto de
+      <code class="bg-gray-100 px-1 rounded">dying-gasp</code> e um conjunto de
+      <code class="bg-gray-100 px-1 rounded">LOS</code> pedem providências diferentes — a leitura é de quem opera.
+    </p>
+  </div>
+</div>
+
+<!-- ===================================================================
+     Motivo do RADIUS: secundário desde a #148. Continua na tela porque é o
+     único sinal que existe para login sem ONU cadastrada — mas ele não separa
+     massiva de queda individual (§2.4), e a cobertura vai declarada igual.
+     =================================================================== -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-center gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Motivo do RADIUS <span class="text-xs font-normal text-gray-400">(secundário)</span></h2>
+    {% include "dashboards/_badge_agora.html" %}
+  </div>
+  <p class="text-sm text-gray-600 mb-1">
+    Motivo conhecido em <span class="font-semibold">{{ motivos.conhecidos|intcomma }}</span>
+    de <span class="font-semibold">{{ motivos.total|intcomma }}</span> quedas
+    ({{ motivos.cobertura_pct }}% de cobertura).
+  </p>
+  <p class="text-xs text-gray-400 mb-3 leading-relaxed">
+    O IXC deixa <code class="bg-gray-100 px-1 rounded">motivo_desconexao</code> vazio na maior parte das
+    quedas, e o valor que vem (<code class="bg-gray-100 px-1 rounded">NAS-Request</code>) não distingue
+    massiva de queda individual. Os percentuais são sobre as quedas <em>com</em> motivo — não sobre o total.
+  </p>
+  {% if motivos.linhas %}
+  <table class="min-w-full text-sm">
+    <thead>
+      <tr class="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100">
+        <th class="text-left font-medium py-2 pr-4">Motivo</th>
+        <th class="text-right font-medium py-2 px-4">Quedas</th>
+        <th class="text-right font-medium py-2 pl-4">% das com motivo</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for m in motivos.linhas %}
+      <tr>
+        <td class="py-2 pr-4 text-gray-800">{{ m.motivo }}</td>
+        <td class="py-2 px-4 text-right tabular-nums text-gray-900">{{ m.quedas|intcomma }}</td>
+        <td class="py-2 pl-4 text-right tabular-nums text-gray-500">{{ m.pct_dos_conhecidos }}%</td>
+      </tr>
+      {% endfor %}
+      <tr>
+        <td class="py-2 pr-4 text-gray-400 italic">Sem motivo informado</td>
+        <td class="py-2 px-4 text-right tabular-nums text-gray-400">{{ motivos.sem_motivo|intcomma }}</td>
+        <td class="py-2 pl-4 text-right text-gray-300">—</td>
+      </tr>
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-sm text-gray-500">Nenhuma queda aberta com motivo informado.</p>
+  {% endif %}
+</div>

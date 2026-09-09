@@ -7491,49 +7491,42 @@ _CTO_CAPACITY_CUTOFF = 64
 
 
 def _fetch_cto_catalog(organization: Organization) -> dict[str, dict[str, Any]]:
-    """Busca catálogo de CTOs do IXC via rad_caixa_ftth.
+    """Catálogo de CTOs a partir de `NetworkElement` (#142).
 
-    Retorna {cto_id: {capacidade, id_projeto, descricao, id_cidade, bairro, status}}
-    para todas as caixas ativas com capacidade real (campo 'capacidade').
+    Antes isto batia no IXC dentro do render: uma chamada HTTP por pageview e o
+    contexto de analytics importando `apps.integrations`, contra a regra do
+    AGENT.md §1.6. Agora a planta chega pelo sync diário de topologia e aqui só
+    se lê o banco.
+
+    Filtra pela capacidade (>0 e <= _CTO_CAPACITY_CUTOFF) porque acima disso o
+    registro é agregação/OLT, não caixa de atendimento.
+
+    Retorna {cto_id: {capacidade, id_projeto, descricao, id_cidade, bairro, status}}.
     """
-    import structlog
-    _log = structlog.get_logger(__name__)
+    from apps.network.infrastructure.models import NetworkElement
 
-    from apps.tenancy.models import OrganizationDataSource
-    from apps.integrations.ixc.client import IxcHttpClient
-
-    ds = (
-        OrganizationDataSource.objects
-        .filter(organization=organization, source_type="IXC", is_active=True)
-        .first()
-    )
-    if not ds:
-        return {}
-
-    creds = ds.get_credentials()
     catalog: dict[str, dict[str, Any]] = {}
-    try:
-        with IxcHttpClient(
-            base_url=creds["base_url"],
-            user_id=creds["user_id"],
-            api_token=creds["api_token"],
-        ) as client:
-            for raw in client.paginate_ixc("rad_caixa_ftth"):
-                cto_id = str(raw.get("id", ""))
-                cap = int(raw.get("capacidade", 0) or 0)
-                if cap <= 0 or cap > _CTO_CAPACITY_CUTOFF:
-                    continue
-                catalog[cto_id] = {
-                    "capacidade": cap,
-                    "id_projeto": str(raw.get("id_projeto", "0")),
-                    "descricao": raw.get("descricao", ""),
-                    "id_cidade": str(raw.get("id_cidade", "")),
-                    "bairro": raw.get("bairro", ""),
-                    "status": raw.get("status", ""),
-                }
-    except Exception:
-        _log.warning("cto_catalog_fetch_failed", exc_info=True)
-
+    rows = NetworkElement.objects.filter(
+        organization=organization,
+        kind=NetworkElement.Kind.CTO,
+        capacity__gt=0,
+        capacity__lte=_CTO_CAPACITY_CUTOFF,
+    ).values(
+        "external_id", "capacity", "project_external_id", "name",
+        "status", "raw_extras",
+    )
+    for row in rows:
+        extras = row["raw_extras"] or {}
+        catalog[row["external_id"]] = {
+            "capacidade": row["capacity"],
+            "id_projeto": row["project_external_id"] or "0",
+            "descricao": row["name"],
+            # Cidade e bairro seguem em raw_extras: o DTO neutro guarda o
+            # endereço já montado, e estes dois só servem ao rótulo desta tela.
+            "id_cidade": str(extras.get("id_cidade", "")),
+            "bairro": extras.get("bairro", ""),
+            "status": row["status"],
+        }
     return catalog
 
 
@@ -7541,22 +7534,25 @@ def _fetch_cto_catalog(organization: Organization) -> dict[str, dict[str, Any]]:
 def compute_cto_summary(organization: Organization) -> dict[str, Any]:
     """Ocupação de portas de CTOs FTTH, agregada por projeto.
 
-    Capacidade real vem do endpoint rad_caixa_ftth do IXC (campo 'capacidade').
-    Ocupação vem de Connection.raw_extras.id_caixa_ftth (radusuarios).
+    Capacidade real vem da planta sincronizada (`NetworkElement`, kind CTO).
+    Ocupação vem de `Connection.cto_external_id` — coluna desde #143; antes era
+    um `KeyTextTransform` em cima de `raw_extras`, que não usava índice.
     """
     from apps.network.infrastructure.models import Connection
 
-    # 1) Catálogo do IXC com capacidade real
+    # 1) Catálogo da planta, com capacidade real
     catalog = _fetch_cto_catalog(organization)
 
     # 2) Ocupação por CTO a partir das conexões
-    qs = Connection.objects.filter(organization=organization).annotate(
-        cto_id=KeyTextTransform("id_caixa_ftth", "raw_extras"),
-    ).exclude(cto_id__isnull=True).exclude(cto_id="").exclude(cto_id="0")
+    qs = (
+        Connection.objects
+        .filter(organization=organization)
+        .exclude(cto_external_id="")
+    )
 
     cto_occupied: dict[str, int] = {}
-    for row in qs.values("cto_id").annotate(occupied=Count("id")):
-        cto_occupied[row["cto_id"]] = row["occupied"]
+    for row in qs.values("cto_external_id").annotate(occupied=Count("id")):
+        cto_occupied[row["cto_external_id"]] = row["occupied"]
 
     # 3) Montar dados — CTOs do catálogo (inclui as sem conexão = 100% livres)
     proj_agg: dict[str, dict[str, Any]] = defaultdict(
@@ -7620,3 +7616,508 @@ def compute_cto_summary(organization: Organization) -> dict[str, Any]:
         "by_project": by_project,
         "top_ctos": top_ctos,
     }
+
+
+# =============================================================================
+# Mensagens & Canais — volume, direção, tipo, canal e origem
+# =============================================================================
+
+# Rótulos dos tipos crus da Opa!. O que não estiver aqui aparece com o nome cru
+# (é preferível "menuInterativo" a "Outro": um tipo novo na fonte tem que
+# aparecer, não se esconder num balde genérico).
+_MENSAGEM_TIPO_LABELS: dict[str, str] = {
+    "texto": "Texto",
+    "midia": "Mídia (foto, áudio, arquivo)",
+    "menuInterativo": "Menu interativo (bot)",
+    "template": "Template (HSM)",
+    "localizacao": "Localização",
+    "contato": "Contato",
+    "": "Sem tipo",
+}
+
+# Origens de conversa, como a fonte as nomeia.
+_ORIGEM_LABELS: dict[str, str] = {
+    "": "Cliente chamou direto",
+    "anuncioWhatsapp": "Anúncio Click-to-WhatsApp",
+}
+
+
+def compute_mensagens_volume(
+    organization: Organization,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    granularity: str = "week",
+    canal_external_id: str | None = None,
+    departamento_id: int | None = None,
+    top_n: int = 12,
+) -> dict[str, Any]:
+    """Volume de mensagens por direção, tipo, canal, departamento e motivo.
+
+    Responde "quanto se fala, quem fala e por onde entra" — a pergunta de custo
+    e de capacidade, separada da pergunta de qualidade que as outras abas de
+    atendimento já respondem.
+
+    Duas escolhas de recorte que mudam a leitura dos números:
+
+    - **A mensagem é atribuída ao período em que foi enviada** (`sent_at`), não
+      ao da abertura da conversa. Uma conversa aberta dia 30 que se arrasta até
+      dia 2 tem mensagens nos dois meses — que é o comportamento certo pra
+      custo, porque é assim que o BSP fatura.
+    - **A média é por conversa COM mensagem ingerida**, não por conversa
+      existente. Enquanto o backfill não cobre a janela inteira, dividir pelo
+      total de conversas daria uma média artificialmente baixa; `cobertura`
+      devolve a fração real pra tela poder avisar em vez de mentir.
+    """
+    from apps.atendimento.infrastructure.models import (
+        Atendimento,
+        CanalComunicacao,
+        Mensagem,
+    )
+
+    if granularity not in _TENDENCIA_GRANULARIDADES:
+        granularity = "week"
+
+    now = timezone.now()
+    window_end = end or now
+    window_start = start or (now - relativedelta(months=6))
+
+    mensagens = Mensagem.objects.filter(
+        organization=organization,
+        sent_at__gte=window_start,
+        sent_at__lte=window_end,
+        sent_at__isnull=False,
+    )
+    if canal_external_id:
+        mensagens = mensagens.filter(canal_external_id=canal_external_id)
+    if departamento_id is not None:
+        mensagens = mensagens.filter(atendimento__departamento_id=departamento_id)
+
+    # --- Totais por direção ------------------------------------------------
+    por_direcao = {
+        row["direction"]: row["n"]
+        for row in mensagens.values("direction").annotate(n=Count("id"))
+    }
+    n_agente = por_direcao.get(Mensagem.Direction.AGENT.value, 0)
+    n_cliente = por_direcao.get(Mensagem.Direction.CLIENT.value, 0)
+    n_sistema = por_direcao.get(Mensagem.Direction.SYSTEM.value, 0)
+    n_sistema += por_direcao.get(Mensagem.Direction.UNKNOWN.value, 0)
+    total = n_agente + n_cliente + n_sistema
+
+    # --- Série temporal por direção ----------------------------------------
+    buckets = _eixo_de_buckets(window_start, window_end, granularity)
+    serie_por_bucket: dict[date_cls, dict[str, int]] = defaultdict(
+        lambda: {"agente": 0, "cliente": 0}
+    )
+    for sent_at, direction in mensagens.values_list("sent_at", "direction").iterator(
+        chunk_size=5000
+    ):
+        bucket = _bucket_start(timezone.localtime(sent_at).date(), granularity)
+        chave = "agente" if direction == Mensagem.Direction.AGENT.value else "cliente"
+        serie_por_bucket[bucket][chave] += 1
+
+    serie = {
+        "labels": [_bucket_label(b, granularity) for b in buckets],
+        "agente": [serie_por_bucket[b]["agente"] for b in buckets],
+        "cliente": [serie_por_bucket[b]["cliente"] for b in buckets],
+    }
+
+    # --- Por tipo ----------------------------------------------------------
+    por_tipo = [
+        {
+            "tipo": row["tipo"],
+            "label": _MENSAGEM_TIPO_LABELS.get(row["tipo"], row["tipo"] or "Sem tipo"),
+            "n": row["n"],
+            "pct": _pct(row["n"], total),
+        }
+        for row in mensagens.values("tipo").annotate(n=Count("id")).order_by("-n")
+    ]
+
+    # --- Por canal ---------------------------------------------------------
+    catalogo = {
+        c.external_id: c
+        for c in CanalComunicacao.objects.filter(organization=organization)
+    }
+    por_canal = []
+    for row in (
+        mensagens.values("canal_external_id").annotate(n=Count("id")).order_by("-n")
+    ):
+        canal = catalogo.get(row["canal_external_id"])
+        por_canal.append(
+            {
+                "external_id": row["canal_external_id"],
+                "nome": canal.nome if canal else (row["canal_external_id"] or "—"),
+                "midia": canal.canal if canal else "",
+                "integracao": canal.integracao if canal else "",
+                "ativo": canal.is_ativo if canal else None,
+                "n": row["n"],
+                "pct": _pct(row["n"], total),
+            }
+        )
+
+    # --- Custo: enviadas fora da janela de 24h -----------------------------
+    # A fonte só marca o flag no que ela envia, então a base do percentual é o
+    # que a Velus mandou — não o total, que incluiria mensagens de cliente e
+    # diluiria o número pra menos da metade do real.
+    fora_janela = mensagens.filter(fora_janela_24h=True).count()
+
+    # --- Por conversa: departamento, motivo, origem ------------------------
+    por_atendimento = dict(
+        mensagens.exclude(atendimento__isnull=True)
+        .values_list("atendimento_id")
+        .annotate(n=Count("id"))
+        .values_list("atendimento_id", "n")
+    )
+    agregado = _agregar_mensagens_por_conversa(
+        organization, por_atendimento, top_n=top_n
+    )
+
+    # --- Cobertura: quanto da janela o backfill já cobre --------------------
+    conversas_na_janela = Atendimento.objects.filter(
+        organization=organization,
+        opened_at__gte=window_start,
+        opened_at__lte=window_end,
+    ).count()
+    conversas_com_mensagem = len(por_atendimento)
+
+    return {
+        "window_start": window_start,
+        "window_end": window_end,
+        "granularity": granularity,
+        "total": total,
+        "n_agente": n_agente,
+        "n_cliente": n_cliente,
+        "n_sistema": n_sistema,
+        "pct_agente": _pct(n_agente, total),
+        "pct_cliente": _pct(n_cliente, total),
+        # Quantas mensagens a Velus manda pra cada uma que recebe. Acima de ~2
+        # é bot/menu falando sozinho, não conversa.
+        "razao_resposta": round(n_agente / n_cliente, 2) if n_cliente else None,
+        "media_por_conversa": (
+            round(total / conversas_com_mensagem, 1) if conversas_com_mensagem else None
+        ),
+        "serie": serie,
+        "por_tipo": por_tipo,
+        "por_canal": por_canal,
+        "fora_janela": fora_janela,
+        "pct_fora_janela": _pct(fora_janela, n_agente),
+        "por_departamento": agregado["por_departamento"],
+        "por_motivo": agregado["por_motivo"],
+        "origem": agregado["origem"],
+        "cobertura": {
+            "conversas": conversas_na_janela,
+            "conversas_com_mensagem": conversas_com_mensagem,
+            "pct": _pct(conversas_com_mensagem, conversas_na_janela),
+            # A tela avisa em vez de fingir número fechado. O corte não é
+            # estatístico, é prático: abaixo disso o gráfico de volume desenha
+            # o backfill, não a operação.
+            "parcial": _pct(conversas_com_mensagem, conversas_na_janela) < 90,
+        },
+        "canais_disponiveis": [
+            {"external_id": c.external_id, "nome": c.nome, "ativo": c.is_ativo}
+            for c in sorted(catalogo.values(), key=lambda c: (not c.is_ativo, c.nome))
+        ],
+        "selected_canal": canal_external_id or "",
+    }
+
+
+def _agregar_mensagens_por_conversa(
+    organization: Organization,
+    por_atendimento: dict[int, int],
+    *,
+    top_n: int,
+) -> dict[str, Any]:
+    """Distribui as mensagens já contadas pelos atributos da conversa.
+
+    Departamento sai de FK e caberia em SQL; motivo não — é JSONField com N
+    valores por conversa, e cada motivo tem que receber a conversa inteira
+    (uma conversa com dois motivos conta nos dois). Como a volta ao banco já é
+    necessária pro motivo, os quatro recortes saem da mesma varredura.
+    """
+    from apps.atendimento.infrastructure.models import Atendimento
+
+    if not por_atendimento:
+        return {
+            "por_departamento": [],
+            "por_motivo": [],
+            "origem": {
+                "conversas": 0,
+                "por_tipo": [],
+                "top_anuncios": [],
+            },
+        }
+
+    msgs_por_depto: Counter[str] = Counter()
+    convs_por_depto: Counter[str] = Counter()
+    msgs_por_motivo: Counter[str] = Counter()
+    convs_por_motivo: Counter[str] = Counter()
+    msgs_por_origem: Counter[str] = Counter()
+    convs_por_origem: Counter[str] = Counter()
+    msgs_por_anuncio: Counter[str] = Counter()
+    convs_por_anuncio: Counter[str] = Counter()
+
+    campos = (
+        "id",
+        "departamento__nome",
+        "motivos",
+        "origem_tipo",
+        "origem_ref",
+    )
+    conversas = (
+        Atendimento.objects.filter(
+            organization=organization, id__in=list(por_atendimento)
+        )
+        .values_list(*campos)
+        .iterator(chunk_size=2000)
+    )
+    for at_id, depto, motivos, origem_tipo, origem_ref in conversas:
+        n = por_atendimento.get(at_id, 0)
+        if not n:
+            continue
+
+        nome_depto = depto or "Sem departamento"
+        msgs_por_depto[nome_depto] += n
+        convs_por_depto[nome_depto] += 1
+
+        # Conversa sem motivo aplicado é o caso mais comum na Triagem; ela
+        # precisa aparecer, senão o total do recorte não bate com o geral.
+        for motivo in motivos or ["Sem motivo"]:
+            if motivo:
+                msgs_por_motivo[motivo] += n
+                convs_por_motivo[motivo] += 1
+
+        origem = origem_tipo or ""
+        msgs_por_origem[origem] += n
+        convs_por_origem[origem] += 1
+        if origem_ref:
+            msgs_por_anuncio[origem_ref] += n
+            convs_por_anuncio[origem_ref] += 1
+
+    return {
+        "por_departamento": _linhas_media(
+            msgs_por_depto, convs_por_depto, limite=None
+        ),
+        "por_motivo": _linhas_media(msgs_por_motivo, convs_por_motivo, limite=top_n),
+        "origem": {
+            "conversas": sum(convs_por_origem.values()),
+            "por_tipo": [
+                {
+                    "tipo": tipo,
+                    "label": _ORIGEM_LABELS.get(tipo, tipo),
+                    "mensagens": msgs_por_origem[tipo],
+                    "conversas": convs,
+                    "media": round(msgs_por_origem[tipo] / convs, 1) if convs else 0,
+                }
+                for tipo, convs in convs_por_origem.most_common()
+            ],
+            "top_anuncios": _linhas_media(
+                msgs_por_anuncio, convs_por_anuncio, limite=10
+            ),
+        },
+    }
+
+
+def _linhas_media(
+    mensagens: Counter[str],
+    conversas: Counter[str],
+    *,
+    limite: int | None,
+) -> list[dict[str, Any]]:
+    """Linhas `(nome, mensagens, conversas, média)` ordenadas por volume.
+
+    Ordena por total de mensagens, não pela média: o que interessa é onde o
+    volume está, e a média de uma categoria com três conversas oscila demais
+    pra liderar um ranking.
+    """
+    itens = mensagens.most_common(limite) if limite else mensagens.most_common()
+    total = sum(mensagens.values())
+    return [
+        {
+            "nome": nome,
+            "mensagens": n,
+            "conversas": conversas[nome],
+            "media": round(n / conversas[nome], 1) if conversas[nome] else 0,
+            "pct": _pct(n, total),
+        }
+        for nome, n in itens
+    ]
+
+
+def _eixo_de_buckets(
+    window_start: datetime, window_end: datetime, granularity: str
+) -> list[date_cls]:
+    """Eixo completo da janela — bucket sem dado vira zero, não some do gráfico."""
+    buckets: list[date_cls] = []
+    cursor = _bucket_start(timezone.localtime(window_start).date(), granularity)
+    last = _bucket_start(timezone.localtime(window_end).date(), granularity)
+    while cursor <= last:
+        buckets.append(cursor)
+        cursor = _next_bucket(cursor, granularity)
+    return buckets
+
+
+def _pct(parte: int, total: int) -> float:
+    return round(100 * parte / total, 1) if total else 0.0
+
+
+# =============================================================================
+# OS — carga atual: fila aberta por pessoa, backlog e SLA de agenda
+# =============================================================================
+
+# Fronteira entre fila viva e backlog parado. 90 dias não é arbitrário: acima
+# disso a base da Velus é quase toda pendência administrativa pós-cancelamento
+# (retirada de equipamento, verificação financeira, SPC), que não disputa a
+# agenda do técnico de hoje e por isso não pode somar no mesmo número.
+OS_BACKLOG_DIAS = 90
+
+_OS_FAIXAS: tuple[tuple[str, str, int | None], ...] = (
+    ("recente", "Até 7 dias", 7),
+    ("atencao", "8 a 30 dias", 30),
+    ("atrasada", "31 a 90 dias", OS_BACKLOG_DIAS),
+    ("backlog", "Mais de 90 dias", None),
+)
+
+
+def compute_os_carga_atual(
+    organization: Organization,
+    *,
+    agora: datetime | None = None,
+) -> dict[str, Any]:
+    """Foto de AGORA das OS abertas: por pessoa, por idade e SLA de agenda.
+
+    Não responde ao filtro de período de propósito — é estoque, não fluxo. "OS
+    abertas no mês passado" não é uma pergunta respondível: uma OS aberta em
+    março e ainda aberta hoje pertence ao presente, não a março.
+
+    **SLA aqui é derivado da agenda**, não lido da fonte: o IXC tem os campos
+    (`status_sla`, `data_prazo_limite`), mas a Velus não os preenche —
+    `status_sla` nunca assume valor de atraso e o prazo limite existe em 7 das
+    959 OS abertas. O que sobra de compromisso datado e confiável é a data
+    agendada: passou e a OS não fechou, a Velus prometeu e não foi.
+    """
+    from apps.helpdesk.application.os_lookups import load_os_lookups
+    from apps.helpdesk.infrastructure.models import Ticket
+
+    now = agora or timezone.now()
+    lookups = load_os_lookups(organization)
+
+    abertas = Ticket.objects.filter(organization=organization).exclude(
+        status=Ticket.Status.CLOSED.value
+    )
+
+    por_pessoa: dict[str, dict[str, Any]] = {}
+    backlog_por_tipo: Counter[str] = Counter()
+    fila_por_tipo: Counter[str] = Counter()
+    por_status: Counter[str] = Counter()
+    faixas_totais: Counter[str] = Counter()
+
+    total = 0
+    sla_vencidas = 0
+    sla_no_prazo = 0
+    sem_agenda = 0
+
+    campos = (
+        "technician_id",
+        "subject_id",
+        "status",
+        "opened_at",
+        "scheduled_at",
+    )
+    for tecnico_id, assunto_id, status, opened_at, scheduled_at in abertas.values_list(
+        *campos
+    ).iterator(chunk_size=2000):
+        total += 1
+        por_status[status] += 1
+
+        faixa = _os_faixa_idade(opened_at, now)
+        faixas_totais[faixa] += 1
+
+        # SLA de agenda: sem data agendada não há promessa a cumprir, então a OS
+        # não conta como cumprida NEM como estourada — vira sua própria
+        # categoria, senão o percentual mentiria pra um lado ou pro outro.
+        if scheduled_at is None:
+            sem_agenda += 1
+            venceu = False
+        elif scheduled_at < now:
+            sla_vencidas += 1
+            venceu = True
+        else:
+            sla_no_prazo += 1
+            venceu = False
+
+        nome = lookups.technician_name(tecnico_id)
+        linha = por_pessoa.setdefault(
+            nome,
+            {
+                "nome": nome,
+                "total": 0,
+                "sla_vencidas": 0,
+                **{chave: 0 for chave, _, _ in _OS_FAIXAS},
+            },
+        )
+        linha["total"] += 1
+        linha[faixa] += 1
+        if venceu:
+            linha["sla_vencidas"] += 1
+
+        assunto = lookups.subject_name(assunto_id)
+        if faixa == "backlog":
+            backlog_por_tipo[assunto] += 1
+        else:
+            fila_por_tipo[assunto] += 1
+
+    backlog = faixas_totais["backlog"]
+    fila_viva = total - backlog
+
+    pessoas = sorted(por_pessoa.values(), key=lambda p: -p["total"])
+    for pessoa in pessoas:
+        pessoa["fila_viva"] = pessoa["total"] - pessoa["backlog"]
+        # Fila inteiramente parada e sem nada recente: ou a pessoa saiu, ou a
+        # fila dela foi abandonada. Nos dois casos o "total" dela não é carga
+        # de trabalho de ninguém, e a tela precisa poder dizer isso.
+        pessoa["fila_parada"] = pessoa["total"] > 0 and pessoa["fila_viva"] == 0
+
+    return {
+        "gerado_em": now,
+        "total": total,
+        "fila_viva": fila_viva,
+        "backlog": backlog,
+        "pct_backlog": _pct(backlog, total),
+        "por_status": [
+            {"status": status, "n": n} for status, n in por_status.most_common()
+        ],
+        "faixas": [
+            {"chave": chave, "label": label, "n": faixas_totais[chave]}
+            for chave, label, _ in _OS_FAIXAS
+        ],
+        "sla": {
+            "vencidas": sla_vencidas,
+            "no_prazo": sla_no_prazo,
+            "sem_agenda": sem_agenda,
+            # Base = OS com agenda. As sem agenda ficam fora da conta em vez de
+            # entrarem como "no prazo" — não há prazo pra cumprir.
+            "pct_vencidas": _pct(sla_vencidas, sla_vencidas + sla_no_prazo),
+        },
+        "por_pessoa": pessoas,
+        "backlog_por_tipo": [
+            {"nome": nome, "n": n} for nome, n in backlog_por_tipo.most_common(12)
+        ],
+        "fila_por_tipo": [
+            {"nome": nome, "n": n} for nome, n in fila_por_tipo.most_common(12)
+        ],
+    }
+
+
+def _os_faixa_idade(opened_at: datetime | None, now: datetime) -> str:
+    """Faixa etária da OS aberta. Sem data de abertura cai no backlog.
+
+    Uma OS sem `opened_at` não tem como provar que é recente; tratá-la como
+    recente inflaria a fila viva — o balde conservador é o certo.
+    """
+    if opened_at is None:
+        return "backlog"
+    dias = (now - opened_at).days
+    for chave, _label, teto in _OS_FAIXAS:
+        if teto is None or dias <= teto:
+            return chave
+    return "backlog"

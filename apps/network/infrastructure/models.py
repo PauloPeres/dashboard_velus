@@ -63,6 +63,51 @@ class Connection(TenantModel):
 
     last_connection_at = models.DateTimeField(null=True, blank=True)
 
+    # Topologia e queda promovidas de `raw_extras` em #143. Estavam no JSON
+    # desde sempre e ninguém lia; viraram coluna quando o detector de massivas
+    # passou a precisar filtrar e agrupar por elas — JSONField não sustenta
+    # índice pra "todas as quedas desta CTO na última hora".
+    cto_external_id = models.CharField(max_length=128, blank=True, default="")
+    cto_port = models.CharField(max_length=32, blank=True, default="")
+    pon_external_id = models.CharField(max_length=128, blank=True, default="")
+    transmitter_external_id = models.CharField(max_length=128, blank=True, default="")
+    concentrator_external_id = models.CharField(
+        max_length=128, blank=True, default=""
+    )
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    disconnect_reason = models.CharField(max_length=64, blank=True, default="")
+    last_disconnection_at = models.DateTimeField(null=True, blank=True)
+
+    # --- sinal óptico da ONU (#148) ---
+    # É com estes campos que a equipe pega **fusão mal feita depois de um
+    # reparo**: o cliente volta a conectar, mas com 5 dB a menos do que tinha.
+    #
+    # `onu_external_id` é o id do registro em `radpop_radio_cliente_fibra` (o
+    # `id_cliente_fibra`), e não uma duplicata do login: é a chave que o disparo
+    # de medição exige. Sem ela, medir um cliente custaria uma listagem só para
+    # descobrir qual ONU é a dele.
+    onu_external_id = models.CharField(max_length=128, blank=True, default="")
+    # Null (e não 0.0) porque **zero não é potência, é ausência de leitura**:
+    # `sinal_rx = "0.00"` vem em 1.391 dos 4.554 registros do IXC, e ~30% das
+    # ONUs simplesmente não reportam. Gravar 0.0 faria todo cliente caído
+    # aparecer com ~24 dB de perda contra uma base típica de -24 dB.
+    signal_rx = models.FloatField(
+        null=True, blank=True, help_text=_("Potência de recepção (dBm). Nulo = sem leitura.")
+    )
+    signal_tx = models.FloatField(null=True, blank=True)
+    # O carimbo é parte do dado, não metadado: a coleta passiva do IXC é diária
+    # (~06:30), então uma leitura pode ter 18 horas — e a tela precisa dizer isso
+    # em vez de apresentá-la como se fosse de agora.
+    signal_measured_at = models.DateTimeField(null=True, blank=True)
+    onu_run_state = models.CharField(max_length=32, blank=True, default="")
+    # O que a OLT respondeu, literal (`dying-gasp`, `LOS`, `LOSi/LOBi`,
+    # `reset`...). Vazio é **"a OLT não informou"**, não "sem causa" — e o código
+    # não traduz: interpretar `dying-gasp` como falta de energia é leitura do
+    # time, e ainda não foi observada numa massiva real.
+    onu_last_drop_cause = models.CharField(max_length=64, blank=True, default="")
+    onu_last_up_at = models.DateTimeField(null=True, blank=True)
+
     raw_extras = models.JSONField(default=dict, blank=True)
 
     history = HistoricalRecords()
@@ -83,6 +128,11 @@ class Connection(TenantModel):
             models.Index(
                 fields=["organization", "source_type", "customer_external_id"]
             ),
+            # Acessos do detector: "quem está fora agrupado por caixa/porta" e
+            # "quem caiu nesta janela".
+            models.Index(fields=["organization", "cto_external_id"]),
+            models.Index(fields=["organization", "pon_external_id"]),
+            models.Index(fields=["organization", "last_disconnection_at"]),
         ]
 
     def __str__(self) -> str:
@@ -149,3 +199,380 @@ class BandwidthUsage(TenantModel):
             f"↓{self.download_bytes} ↑{self.upload_bytes} "
             f"({self.source_type}:{self.external_id})"
         )
+
+
+class NetworkElement(TenantModel):
+    """Elemento da planta de rede — CTO, POP, porta PON, OLT ou cabo (#142).
+
+    Existe pra que a agregação de CTOs e o detector de massivas leiam topologia
+    do banco em vez de bater no IXC no meio do render (que era o que
+    `_fetch_cto_catalog` fazia: uma chamada HTTP por pageview, e domínio
+    importando `apps.integrations` — AGENT.md §1.6).
+
+    A hierarquia é guardada como par `(parent_kind, parent_external_id)` e não
+    como FK: os elementos chegam do sync em ordem arbitrária e uma FK obrigaria
+    a ordenar a carga por nível. Quem precisa navegar resolve com um dict em
+    memória — a planta inteira tem milhares de linhas, não milhões.
+    """
+
+    class Kind(models.TextChoices):
+        CTO = "CTO", _("Caixa de atendimento (CTO)")
+        POP = "POP", _("Ponto de presença (POP)")
+        PON = "PON", _("Porta PON")
+        OLT = "OLT", _("Transmissor (OLT)")
+        CABLE = "CABLE", _("Cabo")
+
+    source_type = models.CharField(
+        max_length=32,
+        choices=SourceType.choices,
+        help_text=_("Sistema externo que originou este registro."),
+    )
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    external_id = models.CharField(
+        max_length=128,
+        help_text=_("ID do elemento no sistema externo (opaco — string)."),
+    )
+
+    name = models.CharField(max_length=255, blank=True, default="")
+
+    # Null (e não 0.0) quando a origem não tem posição: cabo nunca tem, e uma
+    # coordenada (0, 0) cairia no golfo da Guiné e contaminaria cluster geográfico.
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+
+    parent_external_id = models.CharField(max_length=128, blank=True, default="")
+    parent_kind = models.CharField(
+        max_length=16, choices=Kind.choices, blank=True, default=""
+    )
+
+    capacity = models.IntegerField(null=True, blank=True)
+    address = models.CharField(max_length=255, blank=True, default="")
+    project_external_id = models.CharField(max_length=128, blank=True, default="")
+    status = models.CharField(max_length=32, blank=True, default="")
+
+    raw_extras = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        verbose_name = _("Elemento de rede")
+        verbose_name_plural = _("Elementos de rede")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "source_type", "kind", "external_id"],
+                name="unique_network_element_per_source",
+            ),
+        ]
+        indexes = [
+            # O detector varre por tipo ("todas as CTOs") e sobe a hierarquia
+            # ("todas as PONs desta OLT") — são os dois acessos quentes.
+            models.Index(fields=["organization", "kind"]),
+            models.Index(fields=["organization", "kind", "parent_external_id"]),
+            models.Index(
+                fields=["organization", "source_type", "kind", "external_id"],
+                name="netelem_lookup_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.get_kind_display()} {self.name or self.external_id}"
+
+    @property
+    def has_position(self) -> bool:
+        return self.latitude is not None and self.longitude is not None
+
+
+class ConnectionDropEvent(TenantModel):
+    """Uma queda de login (#143) — **estado de trabalho, não arquivo**.
+
+    Existe pra responder, agora: quem está fora e quem já voltou. É append-only
+    no sentido de que nenhuma linha é reescrita para trás, mas não é série
+    histórica: a durabilidade da massiva mora no `OutageEvent` (#145), que
+    guarda quando, quantos e onde de forma genérica. Aqui não entra campo nem
+    índice que só sirva pra analytics do passado.
+
+    Existe como tabela própria porque `HistoricalConnection` guarda o estado
+    corrente versionado, não as transições — nota já conhecida do projeto (#20).
+
+    Os campos de topologia são **snapshot do instante da queda**, não FK pro
+    estado atual: o cliente pode mudar de CTO ou de PON depois, e a massiva de
+    ontem tem que continuar contando o que era ontem.
+
+    `restored_at` nulo significa "ainda fora" — é o que o poll fecha quando o
+    login volta a online.
+    """
+
+    connection = models.ForeignKey(
+        "network.Connection",
+        on_delete=models.CASCADE,
+        related_name="drop_events",
+    )
+    # FK opcional: a conexão pode ter caído antes de o cliente ter sido
+    # sincronizado, e perder a queda por causa disso seria pior que não ter o nome.
+    customer = models.ForeignKey(
+        "customers.Customer",
+        on_delete=models.SET_NULL,
+        related_name="connection_drop_events",
+        null=True,
+        blank=True,
+    )
+
+    login = models.CharField(max_length=128, blank=True, default="")
+
+    dropped_at = models.DateTimeField()
+    restored_at = models.DateTimeField(null=True, blank=True)
+    reason = models.CharField(max_length=64, blank=True, default="")
+
+    # --- snapshot da topologia no instante da queda ---
+    cto_external_id = models.CharField(max_length=128, blank=True, default="")
+    cto_port = models.CharField(max_length=32, blank=True, default="")
+    pon_external_id = models.CharField(max_length=128, blank=True, default="")
+    transmitter_external_id = models.CharField(max_length=128, blank=True, default="")
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    monthly_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text=_("MRR do contrato no momento da queda — base do MRR afetado."),
+    )
+
+    # --- sinal antes e depois (#148) ---
+    # O par que responde à pergunta do time: "com que sinal ele caiu e com que
+    # sinal voltou?". Uma piora além do limiar depois de um reparo é o assinante
+    # de fusão mal feita — a base é estável o bastante para isso significar algo
+    # (uma ONU saudável variou menos de 0,7 dB em dez dias).
+    #
+    # `signal_rx_before` é a última leitura **válida** anterior à queda, buscada
+    # no histórico quando a corrente está zerada. Zero jamais entra aqui: seria
+    # ausência de leitura disfarçada de valor, e produziria uma perda fictícia de
+    # ~24 dB em cada cliente caído.
+    signal_rx_before = models.FloatField(null=True, blank=True)
+    # Carimbo separado porque a distância entre os dois momentos é informação:
+    # comparar uma base de 18 horas atrás com uma medição de agora é legítimo,
+    # mas a tela tem que declarar isso.
+    signal_before_measured_at = models.DateTimeField(null=True, blank=True)
+    # Medido **no retorno**, pela consulta ativa à OLT. Nulo é o caso comum e
+    # honesto: ~30% das ONUs não reportam sinal, e há ONU que a OLT não conhece
+    # mais.
+    signal_rx_after = models.FloatField(null=True, blank=True)
+    signal_after_measured_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("Evento de queda")
+        verbose_name_plural = _("Eventos de queda")
+        constraints = [
+            # Uma queda aberta por conexão. Sem isso, dois polls concorrentes
+            # (ou um retry do Celery) abririam a mesma queda duas vezes e
+            # dobrariam o tamanho da massiva.
+            models.UniqueConstraint(
+                fields=["organization", "connection"],
+                condition=models.Q(restored_at__isnull=True),
+                name="unique_open_drop_per_connection",
+            ),
+        ]
+        indexes = [
+            # Os dois acessos de tempo real: "quem caiu nesta janela" e "quem
+            # ainda está fora". Nada de índice pra recorte histórico — a
+            # durabilidade da massiva mora no OutageEvent, não aqui.
+            models.Index(fields=["organization", "dropped_at"]),
+            models.Index(fields=["organization", "restored_at"]),
+        ]
+
+    def __str__(self) -> str:
+        estado = "aberta" if self.restored_at is None else "encerrada"
+        return f"queda {self.login} @ {self.dropped_at:%d/%m %H:%M} ({estado})"
+
+    @property
+    def is_open(self) -> bool:
+        return self.restored_at is None
+
+    @property
+    def signal_delta_db(self) -> float | None:
+        """Quanto o sinal piorou (negativo) ou melhorou (positivo), em dB.
+
+        `None` quando falta uma das pontas — que é o caso frequente, não a
+        exceção. Nulo aqui significa "não dá para comparar", e a tela declara a
+        cobertura em vez de fingir uma lista completa.
+
+        Quem decide se o número é grande é quem chama, com o limiar configurável
+        (`apps.network.application.optical_signal.degradation_threshold_db`): 3 dB
+        é sugestão calibrada na base real, não constante mágica de domínio.
+        """
+        if self.signal_rx_before is None or self.signal_rx_after is None:
+            return None
+        return self.signal_rx_after - self.signal_rx_before
+
+
+class ConnectionPollState(TenantModel):
+    """Desde quando observamos o estado de conexão desta organização (#144).
+
+    Uma linha por organização. Existe por causa da **partida a frio** (§5.7 do
+    plano): o IXC tem hoje 237 logins ativos offline, boa parte caída há
+    semanas. Sem saber o instante em que passamos a olhar, o diff de quedas só
+    pode confiar na transição observada online → offline — e um login que já
+    estava offline no banco, voltou e caiu de novo entre dois polls jamais
+    abriria evento, porque o poll só lista quem está fora e nunca o vê online.
+
+    `last_poll_at` não é métrica de vaidade: a tela é de tempo real e precisa
+    dizer de quando é a foto que está mostrando.
+    """
+
+    baseline_at = models.DateTimeField(
+        help_text=_("Instante da primeira leitura de status — antes disso, nada é queda."),
+    )
+    last_poll_at = models.DateTimeField(null=True, blank=True)
+    last_success_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("Estado do poll de conexões")
+        verbose_name_plural = _("Estados do poll de conexões")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization"], name="unique_connection_poll_state_per_org"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"poll desde {self.baseline_at:%d/%m %H:%M}"
+
+
+class OutageEvent(TenantModel):
+    """Uma massiva detectada (#145) — **este é o registro que dura**.
+
+    O `ConnectionDropEvent` é estado de trabalho e responde "quem está fora
+    agora"; aqui mora o agregado que sobrevive ao fim do evento: quando começou,
+    quantos clientes, onde, qual elemento/trecho ficou sob suspeita.
+
+    Os campos de escopo são **da última detecção**, não do primeiro instante: o
+    detector roda a cada 3 min sobre as quedas ainda abertas, e uma massiva que
+    começa numa caixa e escala pra OLT continua sendo a mesma ocorrência — o que
+    muda é o que sabemos dela. Ver `apps.network.application.outage_detection`
+    para a regra de identidade.
+
+    `element_label` e `affected_fraction` são guardados separados de propósito:
+    escopo alto com fração baixa significa "algo abaixo desta OLT", nunca "esta
+    OLT caiu" (§2.6). Quem costura a frase é o template.
+    """
+
+    class Scope(models.TextChoices):
+        CTO = "CTO", _("Caixa (CTO)")
+        PON = "PON", _("Porta PON")
+        OLT = "OLT", _("Transmissor (OLT)")
+        POP = "POP", _("POP")
+        GEO = "GEO", _("Proximidade geográfica")
+
+    class Confidence(models.TextChoices):
+        HIGH = "ALTA", _("Alta")
+        MEDIUM = "MEDIA", _("Média")
+        LOW = "BAIXA", _("Baixa")
+
+    started_at = models.DateTimeField()
+    ended_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_("Preenchido quando ≥90% dos afetados voltou (§6)."),
+    )
+    last_detected_at = models.DateTimeField(
+        help_text=_("Última rodada do poll em que o detector ainda viu esta massiva."),
+    )
+
+    scope = models.CharField(max_length=8, choices=Scope.choices)
+    element_external_id = models.CharField(max_length=128, blank=True, default="")
+    element_label = models.CharField(max_length=255, blank=True, default="")
+
+    # FK opcional: o elemento pode não estar cadastrado (a topologia da queda vem
+    # do snapshot do login, que existe antes do sync de planta), e o escopo GEO
+    # não tem elemento nenhum.
+    suspected_element = models.ForeignKey(
+        "network.NetworkElement",
+        on_delete=models.SET_NULL,
+        related_name="outage_events",
+        null=True,
+        blank=True,
+    )
+    suspected_segment_label = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text=_("Trecho suspeito entre caixas — nunca 'cabo X', que a API não permite afirmar (§2.3)."),
+    )
+
+    confidence = models.CharField(max_length=8, choices=Confidence.choices)
+
+    affected_count = models.PositiveIntegerField(default=0)
+    restored_count = models.PositiveIntegerField(default=0)
+    affected_fraction = models.FloatField(
+        default=0.0,
+        help_text=_("Afetados / logins ativos do elemento em escopo."),
+    )
+    mrr_at_risk = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    class Meta:
+        verbose_name = _("Massiva")
+        verbose_name_plural = _("Massivas")
+        indexes = [
+            # O acesso de tempo real: "quais massivas estão abertas agora".
+            # O histórico é curto (poucas por dia) e ordena sem índice próprio —
+            # índice pra recorte do passado seria contra a §1 do plano.
+            models.Index(fields=["organization", "ended_at"]),
+        ]
+
+    def __str__(self) -> str:
+        estado = "aberta" if self.ended_at is None else "encerrada"
+        return f"massiva {self.scope} {self.element_label} ({self.affected_count} clientes, {estado})"
+
+    @property
+    def is_open(self) -> bool:
+        return self.ended_at is None
+
+    @property
+    def restored_fraction(self) -> float:
+        return (self.restored_count / self.affected_count) if self.affected_count else 0.0
+
+
+class OutageAffectedLogin(TenantModel):
+    """Liga a massiva a uma queda individual (#145/#147).
+
+    `login`, `dropped_at` e `restored_at` são copiados do `ConnectionDropEvent`
+    em vez de lidos por FK: a queda é estado de trabalho e pode ser podada, e a
+    massiva tem que continuar dizendo quantos caíram e quando voltaram. Por isso
+    a FK é `SET_NULL` — perder a queda não pode apagar o agregado.
+    """
+
+    outage = models.ForeignKey(
+        "network.OutageEvent",
+        on_delete=models.CASCADE,
+        related_name="affected_logins",
+    )
+    drop_event = models.ForeignKey(
+        "network.ConnectionDropEvent",
+        on_delete=models.SET_NULL,
+        related_name="outage_links",
+        null=True,
+        blank=True,
+    )
+
+    login = models.CharField(max_length=128, blank=True, default="")
+    dropped_at = models.DateTimeField()
+    restored_at = models.DateTimeField(null=True, blank=True)
+    monthly_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+
+    class Meta:
+        verbose_name = _("Cliente afetado por massiva")
+        verbose_name_plural = _("Clientes afetados por massiva")
+        constraints = [
+            # Uma queda pertence a no máximo uma massiva. É o que impede que a
+            # redetecção a cada 3 min duplique o afetado dentro do mesmo evento.
+            models.UniqueConstraint(
+                fields=["outage", "drop_event"],
+                name="unique_affected_drop_per_outage",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "outage"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.login} em {self.outage_id}"

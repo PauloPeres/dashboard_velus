@@ -116,6 +116,7 @@ TEMPLATES = [
                 "apps.shared.context_processors.tenant",
                 "apps.dashboards.context_processors.period_context",
                 "apps.dashboards.context_processors.page_access",
+                "apps.dashboards.context_processors.nav",
                 "apps.dashboards.context_processors.data_lineage",
             ],
         },
@@ -347,6 +348,31 @@ CELERY_BEAT_SCHEDULE: dict = {
         "kwargs": {"capabilities": ["CONNECTIONS", "BANDWIDTH"]},
         "options": {"queue": "celery"},
     },
+    # Topologia (CTO/POP/PON/OLT/cabo) muda em semanas, não em minutos — 1x/dia,
+    # de madrugada, antes do snapshot semanal de CTO das 03:30.
+    "sync-network-topology-daily": {
+        "task": "apps.sync.tasks.dispatch_incremental_for_all_orgs",
+        "schedule": crontab(minute=5, hour=3),
+        "kwargs": {"capabilities": ["NETWORK_ELEMENTS"]},
+        "options": {"queue": "celery"},
+    },
+    # Status de conexão a cada 3 min — a única cadência de minutos do projeto.
+    # É a base da aba Quedas & Massivas: uma listagem de ~240 linhas por rodada
+    # (`online=N & ativo=S`), não um sync. O sync completo de rede (6h, acima)
+    # continua sendo quem traz o universo.
+    "poll-connection-status-every-3min": {
+        "task": "apps.network.tasks.dispatch_connection_poll_for_all_orgs",
+        "schedule": crontab(minute="*/3"),
+        "options": {"queue": "celery"},
+    },
+    # Linha de base de sinal óptico — 1x/dia, depois da varredura de ONUs do IXC
+    # (~06:30). Não adianta puxar antes: a coleta que alimenta esses valores é
+    # diária, e a leitura ativa da OLT acontece sob evento, não sob relógio.
+    "refresh-optical-signal-daily": {
+        "task": "apps.network.tasks.dispatch_optical_signal_refresh_for_all_orgs",
+        "schedule": crontab(minute=15, hour=7),
+        "options": {"queue": "celery"},
+    },
     "sync-crm-every-6h": {
         "task": "apps.sync.tasks.dispatch_incremental_for_all_orgs",
         "schedule": crontab(minute=50, hour="2,8,14,20"),
@@ -487,14 +513,21 @@ X_FRAME_OPTIONS = "DENY"
 # -----------------------------------------------------------------------------
 # CSP (django-csp) — default deny, libera o mínimo
 # -----------------------------------------------------------------------------
+# Tiles do OpenStreetMap: o mapa da aba Quedas & Massivas (#146) é `scattermap`
+# do Plotly (self-hosted) com basemap raster do OSM. O tile chega como imagem
+# (img-src) mas o MapLibre busca por fetch (connect-src), e ele monta o worker
+# de render a partir de um blob: — sem worker-src/child-src o mapa fica em
+# branco sem erro visível. Nenhuma dependência nova: só o basemap.
 CONTENT_SECURITY_POLICY = {
     "DIRECTIVES": {
         "default-src": ["'self'"],
         "script-src": ["'self'", "'unsafe-inline'"],
         "style-src": ["'self'", "'unsafe-inline'"],  # Tailwind compilado pode ainda usar inline
-        "img-src": ["'self'", "data:"],
+        "img-src": ["'self'", "data:", "blob:", "https://tile.openstreetmap.org", "https://*.tile.openstreetmap.org"],
         "font-src": ["'self'", "data:"],
-        "connect-src": ["'self'"],
+        "connect-src": ["'self'", "https://tile.openstreetmap.org", "https://*.tile.openstreetmap.org"],
+        "worker-src": ["'self'", "blob:"],
+        "child-src": ["'self'", "blob:"],
         "frame-ancestors": ["'none'"],
         "base-uri": ["'self'"],
         "form-action": ["'self'"],
@@ -527,3 +560,27 @@ MCP_ENABLED = env.MCP_ENABLED
 MCP_HOST = env.MCP_HOST
 MCP_PORT = env.MCP_PORT
 MCP_ALLOWED_HOSTS = [h.strip() for h in env.MCP_ALLOWED_HOSTS.split(",") if h.strip()]
+
+
+# ---------------------------------------------------------------------------
+# Sinal óptico da ONU (#148) — knobs operacionais
+# ---------------------------------------------------------------------------
+# Ficam aqui, e não como constante no meio do código, porque são decisão de
+# operação e não regra de domínio: quem ajusta é quem convive com a OLT.
+
+# Atraso entre o login voltar ao ar e a medição ativa. A ONU acabou de subir e
+# precisa estabilizar — medir no mesmo segundo registra o transitório em vez do
+# enlace reparado.
+OPTICAL_SIGNAL_MEASURE_DELAY_SECONDS = env.OPTICAL_SIGNAL_MEASURE_DELAY_SECONDS
+
+# Teto rígido de consultas à OLT por rodada. A OLT é equipamento de produção; a
+# maior massiva real medida teve 44 clientes, e este teto os cobre em duas
+# passadas do poll sem nunca virar enxurrada.
+OPTICAL_SIGNAL_MAX_CALLS_PER_ROUND = env.OPTICAL_SIGNAL_MAX_CALLS_PER_ROUND
+
+# Piora, em dB, a partir da qual a leitura vira notícia na tela. 3 dB é sugestão
+# calibrada no dado real (uma ONU saudável variou menos de 0,7 dB em dez dias),
+# não número mágico — e por isso é configurável.
+OPTICAL_SIGNAL_DEGRADATION_THRESHOLD_DB = (
+    env.OPTICAL_SIGNAL_DEGRADATION_THRESHOLD_DB
+)

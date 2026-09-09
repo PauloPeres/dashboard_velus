@@ -145,6 +145,18 @@ class Settings(BaseSettings):
     QA_LLM_ENABLED: bool = False
 
     # -------------------------------------------------------------------------
+    # Sinal óptico da ONU (#148) — knobs da medição ativa contra a OLT
+    # -------------------------------------------------------------------------
+    # Atraso entre o login voltar ao ar e a medição. A ONU acabou de subir e
+    # precisa estabilizar; medir no mesmo segundo registra o transitório.
+    OPTICAL_SIGNAL_MEASURE_DELAY_SECONDS: int = 60
+    # Teto rígido de consultas por rodada — a OLT é equipamento de produção.
+    OPTICAL_SIGNAL_MAX_CALLS_PER_ROUND: int = 25
+    # Piora (dB) que vira notícia na tela. 3 dB é calibrado no dado real (ONU
+    # saudável variou < 0,7 dB em dez dias), não constante mágica.
+    OPTICAL_SIGNAL_DEGRADATION_THRESHOLD_DB: float = 3.0
+
+    # -------------------------------------------------------------------------
     # Servidor MCP (read-only, autenticado por token por organização)
     # -------------------------------------------------------------------------
     MCP_ENABLED: bool = False

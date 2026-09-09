@@ -366,7 +366,9 @@ class TestOpaBeatTask:
 
         result = sync_opa_for_all_orgs()
 
-        assert result == {"orgs": 1, "atendimentos": 1}
+        # `mensagens` entra no retorno desde que o beat passou a rodar também o
+        # incremental de volume (listagem global) — aqui o seed não tem nenhuma.
+        assert result == {"orgs": 1, "atendimentos": 1, "mensagens": 0}
         set_current_organization(organization_a)
         assert Atendimento.objects.count() == 1
         # Checkpoint avançou — próxima execução é incremental.
@@ -397,6 +399,6 @@ class TestOpaBeatTask:
 
         result = sync_opa_for_all_orgs()
 
-        assert result == {"orgs": 0, "atendimentos": 0}
+        assert result == {"orgs": 0, "atendimentos": 0, "mensagens": 0}
         set_current_organization(organization_a)
         assert Atendimento.objects.count() == 0

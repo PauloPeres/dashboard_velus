@@ -11,6 +11,7 @@ from apps.integrations.shared.enums import Capability, SourceType
 from .dto import (
     AtendenteRefDTO,
     AtendimentoDTO,
+    CanalComunicacaoDTO,
     ClienteRefDTO,
     DepartamentoDTO,
     EtiquetaDTO,
@@ -62,6 +63,14 @@ class AtendimentoSourcePort(Protocol):
         """
         ...
 
+    def list_canais(self) -> Iterator[CanalComunicacaoDTO]:
+        """Itera o catalogo de canais/numeros de comunicacao (id opaco -> nome).
+
+        Lista barata usada pra resolver o canal que a mensagem so traz como id
+        opaco (`canalComunicacao`) — a unidade de custo do WhatsApp.
+        """
+        ...
+
     def list_atendimentos(
         self,
         *,
@@ -79,4 +88,23 @@ class AtendimentoSourcePort(Protocol):
         atendimento_external_id: str,
     ) -> Iterator[MensagemDTO]:
         """Itera as mensagens de um atendimento (1 chamada por atendimento — caro)."""
+        ...
+
+    def list_mensagens_global(
+        self,
+        *,
+        start_skip: int = 0,
+        page_size: int = 100,
+        max_pages: int | None = None,
+    ) -> Iterator[tuple[int, MensagemDTO]]:
+        """Itera as mensagens da conta inteira, em ordem de insercao.
+
+        Yield `(offset_absoluto, dto)` — o offset e o cursor que o backfill
+        retoma. Alternativa barata ao `list_mensagens` por atendimento quando o
+        que se quer e volume, nao o conteudo de uma conversa especifica.
+        """
+        ...
+
+    def find_skip_for_date(self, target: datetime, *, ceiling: int = 4_000_000) -> int:
+        """Menor offset da listagem global cuja mensagem ja e >= `target`."""
         ...
