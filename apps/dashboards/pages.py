@@ -55,6 +55,7 @@ PAGES: list[dict[str, Any]] = [
     {"key": "atendimento_conversao", "label": "Conversão & Churn", "url": "dashboards:atendimento_conversao", "section": "Operações"},
     {"key": "conversas_ruins", "label": "Conversas Ruins", "url": "dashboards:conversas_ruins", "section": "Operações", "active_on": ["atendimento_detail"]},
     {"key": "qa_supervisor", "label": "QA de Atendimento", "url": "dashboards:qa_supervisor", "section": "Operações"},
+    {"key": "massivas", "label": "Quedas & Massivas", "url": "dashboards:massivas", "section": "Operações", "active_on": ["massiva_detalhe"]},
     {"key": "network", "label": "Rede", "url": "dashboards:network", "section": "Operações"},
     {"key": "sales", "label": "Vendas / CRM", "url": "dashboards:sales", "section": "Comercial"},
     {"key": "customers", "label": "Clientes 360", "url": "dashboards:customers", "section": "Comercial", "active_on": ["customer_detail"]},
@@ -79,6 +80,9 @@ _ROUTE_TO_KEY.update({
     # ela absorveu. Ver `_ROUTE_EXTRA_KEYS`: o acesso a ela não é exclusivo dessa
     # aba.
     ("dashboards", "atendimento_lista"): "atendimento_tendencias",
+    # Detalhe de uma massiva e o partial de auto-refresh herdam a aba (#146).
+    ("dashboards", "massiva_detalhe"): "massivas",
+    ("dashboards", "massivas_abertas"): "massivas",
     # CRUD de eventos de rede (#78) mora na página de Tendências.
     ("dashboards", "evento_rede_novo"): "atendimento_tendencias",
     ("dashboards", "evento_rede_editar"): "atendimento_tendencias",

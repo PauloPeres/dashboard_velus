@@ -1,0 +1,55 @@
+{% load humanize %}
+{% comment %}
+Mapa da aba de massivas (#146). Usado na tela geral e no detalhe de uma massiva.
+
+`scattermap` com tiles do OpenStreetMap — o Plotly já está self-hosted, o CSP é
+que precisou liberar `tile.openstreetmap.org`. Não usa `renderChart` porque
+aquele helper decide "tem dado?" olhando x/y/labels, que um traço de mapa não
+tem: aqui o mapa renderiza mesmo vazio, e o vazio é informação.
+{% endcomment %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex flex-wrap items-center gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Onde estão os clientes fora — e quem já voltou</h2>
+    {% comment %}
+    Carimbo próprio: este bloco é desenhado uma vez, no load, e NÃO acompanha o
+    auto-refresh da lista. Sem a hora aqui, um mapa velho colado numa lista viva
+    mente por omissão.
+    {% endcomment %}
+    <span class="text-[10px] font-medium bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+      desenhado às {{ desenhado_as|date:"H:i" }} · não acompanha o auto-refresh
+    </span>
+  </div>
+  <p class="text-xs text-gray-400 mb-1 leading-relaxed">
+    Vermelho: fora agora. Verde: já voltou. Laranja: caixa (CTO) afetada. Azul: POP.
+    <strong>Nenhum cabo é desenhado</strong> — a API do IXC não expõe a geometria dos cabos,
+    então o máximo que a tela pode apontar é um <em>trecho suspeito</em> entre caixas, nunca
+    "cabo X rompido".
+  </p>
+  {% if mapa_nota %}
+  <p class="text-xs text-gray-400 mb-1 leading-relaxed">{{ mapa_nota }}</p>
+  {% endif %}
+  {% if mapa.sem_coordenada %}
+  <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3 leading-relaxed">
+    {{ mapa.sem_coordenada|intcomma }} de {{ mapa.total_quedas|intcomma }} quedas não têm coordenada
+    no cadastro e não aparecem no mapa. O mapa é menor que a massiva.
+  </p>
+  {% endif %}
+  <div id="massivas-mapa" style="height:460px;" class="rounded-lg bg-gray-50 overflow-hidden"></div>
+  {{ mapa_chart_json|json_script:"massivas-mapa-data" }}
+  <script>
+    (function () {
+      var el = document.getElementById("massivas-mapa");
+      var node = document.getElementById("massivas-mapa-data");
+      if (!el || !node) return;
+      try {
+        var raw = JSON.parse(node.textContent);
+        var parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
+        Plotly.newPlot(el, parsed.data || [], parsed.layout || {},
+                       { responsive: true, displayModeBar: false });
+      } catch (e) {
+        console.error("mapa de massivas", e);
+        el.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-red-400">Erro ao carregar o mapa</div>';
+      }
+    })();
+  </script>
+</div>

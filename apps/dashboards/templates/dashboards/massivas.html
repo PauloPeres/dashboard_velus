@@ -1,0 +1,103 @@
+{% extends "dashboards/base.html" %}
+{% load humanize %}
+
+{% block title %}Quedas & Massivas · Velus{% endblock %}
+
+{% block content %}
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Quedas &amp; Massivas</h1>
+    <p class="text-xs text-gray-400 mt-0.5">
+      Quem está fora agora, onde provavelmente rompeu e quem já voltou ·
+      atualiza sozinha a cada minuto
+    </p>
+  </div>
+</div>
+
+{% comment %}
+Sem barra de período: a página inteira é posição de agora. O único passado que
+ela mostra é o registro das massivas encerradas, no fim — a ferramenta é de
+tempo real e não responde pergunta sobre o passado (§1 do plano).
+{% endcomment %}
+
+{% include "dashboards/_massivas_abertas.html" %}
+
+{% include "dashboards/_massivas_mapa.html" %}
+
+<!-- Linha do tempo -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex flex-wrap items-center gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Quedas por bucket de {{ bucket_minutos }} minutos</h2>
+    {% include "dashboards/_badge_agora.html" with rotulo="janela fixa" titulo="Últimas horas, sempre — este bloco não responde a filtro de período." %}
+    <span class="text-[10px] font-medium bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+      desenhado às {{ desenhado_as|date:"H:i" }} · não acompanha o auto-refresh
+    </span>
+  </div>
+  <p class="text-xs text-gray-400 mb-3 leading-relaxed">
+    Últimas {{ timeline_horas }} horas, no mesmo bucket que o detector usa pra agrupar. Barra alta é
+    simultaneidade — o sinal que separa massiva de queda avulsa. A parte verde já voltou ao ar.
+  </p>
+  <div id="massivas-timeline-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
+</div>
+
+<!-- Histórico: o agregado das massivas encerradas, e só ele -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+  <div class="p-5 pb-3">
+    <h2 class="text-sm font-semibold text-gray-700">Massivas encerradas</h2>
+    <p class="text-xs text-gray-400 mt-0.5 leading-relaxed">
+      Últimas {{ historico|length }} ocorrências fechadas — quando, quantos clientes e onde, de forma
+      genérica. Não há recorte nem série: a ferramenta é de tempo real, e o que sobrevive ao fim do
+      evento é o registro dele, não a análise do passado.
+    </p>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-gray-50 border-t border-gray-200">
+        <tr>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Onde (escopo e fração)</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Começou</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Encerrou</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Duração</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Clientes</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Voltaram</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Mensalidade dos afetados</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for h in historico %}
+        <tr class="hover:bg-gray-50">
+          <td class="px-4 py-3">
+            {% if h.tem_trecho %}
+            <a href="{% url 'dashboards:massiva_detalhe' h.id %}" class="font-medium text-gray-900 hover:text-blue-600">{{ h.trecho_suspeito }}</a>
+            <p class="text-xs text-gray-400">trecho suspeito · escopo {{ h.scope_label }} · {{ h.elemento_frase }}{% if h.referencia %} · {{ h.referencia }}{% endif %}</p>
+            {% else %}
+            <a href="{% url 'dashboards:massiva_detalhe' h.id %}" class="font-medium text-gray-900 hover:text-blue-600">{{ h.elemento_frase }}</a>
+            <p class="text-xs text-gray-400">escopo {{ h.scope_label }} · confiança {{ h.confidence_label }}{% if h.referencia %} · {{ h.referencia }}{% endif %}</p>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 text-gray-600 whitespace-nowrap">{{ h.started_at|date:"d/m H:i" }}</td>
+          <td class="px-4 py-3 text-gray-600 whitespace-nowrap">{{ h.ended_at|date:"d/m H:i" }}</td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-700">{{ h.duracao_min|intcomma }} min</td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-900">{{ h.affected_count|intcomma }}</td>
+          <td class="px-4 py-3 text-right tabular-nums text-emerald-700">{{ h.restored_count|intcomma }}</td>
+          <td class="px-4 py-3 text-right tabular-nums text-gray-700">R$ {{ h.mrr_at_risk|floatformat:2|intcomma }}</td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="7" class="px-6 py-8 text-center text-gray-500">
+            Nenhuma massiva encerrada registrada.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ timeline_chart_json|json_script:"massivas-timeline-data" }}
+<script>
+  renderChart("massivas-timeline-chart", "massivas-timeline-data");
+</script>
+{% endblock %}

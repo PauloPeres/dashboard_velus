@@ -68,6 +68,18 @@ urlpatterns = [
         views.atendimento_detail,
         name="atendimento_detail",
     ),
+    path("operations/massivas/", views.massivas, name="massivas"),
+    # Partial do auto-refresh (HTMX) — devolve só o bloco de tempo real.
+    path(
+        "operations/massivas/abertas/",
+        views.massivas_abertas,
+        name="massivas_abertas",
+    ),
+    path(
+        "operations/massivas/<int:outage_id>/",
+        views.massiva_detalhe,
+        name="massiva_detalhe",
+    ),
     path("network/", views.network, name="network"),
     path("sales/", views.sales, name="sales"),
     path("customers/", views.customers, name="customers"),

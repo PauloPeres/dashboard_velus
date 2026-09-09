@@ -2416,3 +2416,94 @@ def os_backlog_por_tipo(rows: list[dict[str, Any]]) -> str:
         },
     )
     return _to_json(fig)
+
+
+def outage_map(mapa: dict[str, Any]) -> str:
+    """Mapa da massiva — quem está fora, quem voltou, CTOs afetadas e POPs (#146).
+
+    `scattermap` com tiles do OpenStreetMap: o Plotly já está self-hosted em
+    `static/vendor/`, então o único custo é liberar `tile.openstreetmap.org` no
+    CSP. Nenhum cabo é desenhado — a geometria não existe na API do IXC (§2.3),
+    e desenhar uma linha entre caixas seria inventar traçado.
+    """
+    # A ordem importa: o verde entra depois do vermelho pra que um cliente que
+    # voltou fique por cima do ponto antigo — é assim que a equipe vê o mapa
+    # esverdeando durante o reparo.
+    camadas = [
+        ("clientes", "Fora agora", "#dc2626", 9),
+        ("voltaram", "Já voltou", "#16a34a", 9),
+        ("ctos", "CTO afetada", "#f59e0b", 13),
+        ("pops", "POP", "#2563eb", 15),
+    ]
+    traces = []
+    todos: list[dict[str, Any]] = []
+    for chave, nome, cor, tamanho in camadas:
+        pontos = mapa.get(chave) or []
+        todos.extend(pontos)
+        traces.append(
+            go.Scattermap(
+                lat=[p["lat"] for p in pontos],
+                lon=[p["lon"] for p in pontos],
+                mode="markers",
+                name=nome,
+                marker={"size": tamanho, "color": cor},
+                text=[p["label"] for p in pontos],
+                hovertemplate="<b>%{text}</b><extra>" + nome + "</extra>",
+            )
+        )
+
+    if todos:
+        centro = {
+            "lat": sum(p["lat"] for p in todos) / len(todos),
+            "lon": sum(p["lon"] for p in todos) / len(todos),
+        }
+        zoom = 12
+    else:
+        # Sem ponto nenhum o mapa ainda renderiza (o estado vazio é o normal);
+        # fica no enquadramento do Brasil em vez de no golfo da Guiné.
+        centro = {"lat": -15.8, "lon": -47.9}
+        zoom = 3
+
+    fig = go.Figure(
+        data=traces,
+        layout={
+            "map": {"style": "open-street-map", "center": centro, "zoom": zoom},
+            "margin": {"l": 0, "r": 0, "t": 0, "b": 0},
+            "showlegend": True,
+            "legend": {"orientation": "h", "y": 0, "x": 0, "bgcolor": "rgba(255,255,255,.8)"},
+            "font": {"family": "system-ui, sans-serif", "size": 12},
+        },
+    )
+    return _to_json(fig)
+
+
+def outage_timeline(buckets: list[dict[str, Any]]) -> str:
+    """Barras empilhadas — quedas por bucket de 10 min, separando quem voltou."""
+    labels = [b["label"] for b in buckets]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=labels,
+                y=[b["fora"] for b in buckets],
+                name="Ainda fora",
+                marker={"color": "#dc2626"},
+                hovertemplate="<b>%{x}</b><br>%{y} ainda fora<extra></extra>",
+            ),
+            go.Bar(
+                x=labels,
+                y=[b["voltou"] for b in buckets],
+                name="Já voltou",
+                marker={"color": "#16a34a"},
+                hovertemplate="<b>%{x}</b><br>%{y} já voltaram<extra></extra>",
+            ),
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "barmode": "stack",
+            "showlegend": True,
+            "legend": {"orientation": "h", "y": -0.25},
+            "margin": {"l": 45, "r": 20, "t": 20, "b": 60},
+            "yaxis": {"title": "quedas", "rangemode": "tozero"},
+        },
+    )
+    return _to_json(fig)
