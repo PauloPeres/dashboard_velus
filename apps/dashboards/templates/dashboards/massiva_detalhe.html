@@ -29,6 +29,8 @@
 
       {% include "dashboards/_massivas_vizinhanca.html" with z=outage.vizinhanca %}
 
+      {% include "dashboards/_massivas_reincidencia.html" with r=outage.reincidencia %}
+
       {% if outage.ressalva_escopo %}
       <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2 leading-relaxed max-w-2xl">
         {{ outage.ressalva_escopo }}

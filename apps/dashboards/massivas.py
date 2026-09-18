@@ -29,6 +29,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from django.utils import timezone
+
 from apps.customers.infrastructure.models import Contract
 from apps.network.infrastructure.models import (
     Connection,
@@ -167,6 +169,7 @@ def outage_row(
     referencia: str = "",
     veredito: dict[str, Any] | None = None,
     vizinhanca: dict[str, Any] | None = None,
+    reincidencia: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Uma massiva pronta pro template, com escopo e fração já costurados.
 
@@ -179,8 +182,9 @@ def outage_row(
     porque a derivação é uma query e esta função é chamada em laço.
 
     `veredito` (R7) e `vizinhanca` (R6) também vêm de fora, e pelo mesmo motivo:
-    dependem das quedas da massiva, que são outra query. Ausentes, a linha sai
-    como sempre saiu.
+    dependem das quedas da massiva, que são outra query. `reincidencia` (R8) vem
+    de fora por um motivo diferente: ela olha o passado do elemento, então é uma
+    contagem só para a tela inteira. Ausentes, a linha sai como sempre saiu.
     """
     escopo_nome = _SCOPE_NOUN.get(outage.scope, outage.scope)
     fracao = outage.affected_fraction or 0.0
@@ -237,6 +241,7 @@ def outage_row(
         "is_open": outage.is_open,
         "veredito": veredito,
         "vizinhanca": vizinhanca,
+        "reincidencia": reincidencia,
     }
 
 
@@ -320,12 +325,14 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
     vizinhancas = {
         o.pk: compute_vizinhanca(org, quedas_por_massiva.get(o.pk, [])) for o in abertas
     }
+    reincidencias = compute_reincidencia(org, abertas, now=now)
     linhas = [
         outage_row(
             o,
             referencia=referencias.get(o.pk, ""),
             veredito=compute_veredito(quedas_por_massiva.get(o.pk, []), scope=o.scope),
             vizinhanca=vizinhancas.get(o.pk),
+            reincidencia=reincidencias.get(o.pk),
         )
         for o in abertas
     ]
@@ -772,6 +779,138 @@ def compute_vizinhanca(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str,
     }
 
 
+# =============================================================================
+# Reincidência do trecho (R8)
+# =============================================================================
+# "Esta OLT teve 4 massivas" separa o acidente do trecho cronicamente ruim —
+# travessia de rodovia, poste de esquina, emenda mal feita que abre a cada
+# chuva. O evento de hoje é igual em qualquer um dos casos; o contador é a
+# única coisa na tela que distingue os dois.
+#
+# Duas honestidades obrigatórias aqui, ambas medidas em produção (2026-09-18):
+#
+# 1. **O registro de massivas começou em 09/09** — 24 eventos, 9 dias. Um rótulo
+#    "N nos últimos 90 dias" sobre 9 dias de histórico é falso por omissão: quem
+#    lê "1 massiva em 90 dias" entende trecho saudável, quando o que a base diz
+#    é "1 massiva na única semana que observamos". Por isso a janela efetiva é
+#    sempre a menor entre os 90 dias e o histórico que existe, e ela vai escrita
+#    ao lado do número.
+# 2. **16 das 24 massivas são de escopo GEO e não têm elemento** — o cluster
+#    geográfico não é cadastro, é um agrupamento que muda de forma a cada
+#    evento. Contar reincidência de "GEO" juntaria bairros diferentes num
+#    contador só. Sem elemento, o bloco se recusa.
+REINCIDENCIA_DIAS = 90
+
+
+def compute_reincidencia(
+    org: Any,
+    outages: list[OutageEvent],
+    *,
+    now: datetime,
+    dias: int = REINCIDENCIA_DIAS,
+) -> dict[int, dict[str, Any]]:
+    """Quantas massivas cada elemento já teve na janela — e desde quando olhamos.
+
+    Devolve um dict por `outage.pk` porque a contagem é uma query só para todas
+    as massivas da tela: o histórico é curto (poucas por dia, §1) e trazer a
+    janela inteira em memória sai mais barato que um `count()` por card.
+
+    A identidade do trecho é `(scope, element_external_id)` — o par que o
+    detector grava. Não é `element_label`, que é texto de tela e muda quando o
+    cadastro é corrigido, nem `suspected_segment_label`, que depende de quem
+    caiu naquele evento e seria diferente a cada ocorrência do mesmo trecho.
+    """
+    if not outages:
+        return {}
+
+    inicio_janela = now - timedelta(days=dias)
+    # De quando é o registro mais antigo da organização — o que limita a janela
+    # de verdade. Sem isto, o denominador do contador seria imaginário.
+    primeira = (
+        OutageEvent.objects.filter(organization=org)
+        .order_by("started_at")
+        .values_list("started_at", flat=True)
+        .first()
+    )
+    observado_desde = max(primeira, inicio_janela) if primeira else inicio_janela
+    dias_observados = max(int((now - observado_desde).total_seconds() // 86400), 0)
+    janela_parcial = bool(primeira and primeira > inicio_janela)
+
+    eventos = list(
+        OutageEvent.objects.filter(organization=org, started_at__gte=inicio_janela)
+        .exclude(element_external_id="")
+        .values_list("id", "scope", "element_external_id", "started_at")
+    )
+    por_elemento: dict[tuple[str, str], list[tuple[int, datetime]]] = {}
+    for pk, scope, element_id, inicio in eventos:
+        por_elemento.setdefault((scope, element_id), []).append((pk, inicio))
+
+    if janela_parcial:
+        plural = "s" if dias_observados != 1 else ""
+        ressalva = (
+            f"O registro de massivas começa em {observado_desde:%d/%m} — "
+            f"{dias_observados} dia{plural} de histórico, menos que a janela de "
+            f"{dias} dias. O contador não enxerga antes disso."
+        )
+        janela_str = f"{dias_observados} dia{plural} de registro"
+    else:
+        ressalva = ""
+        janela_str = f"{dias} dias"
+
+    saida: dict[int, dict[str, Any]] = {}
+    for outage in outages:
+        base = {
+            "janela_dias": dias,
+            "janela_str": janela_str,
+            "observado_desde": observado_desde,
+            "dias_observados": dias_observados,
+            "janela_parcial": janela_parcial,
+            "ressalva_janela": ressalva,
+            "ultima_anterior": None,
+        }
+        if not outage.element_external_id:
+            saida[outage.pk] = {
+                **base,
+                "determinavel": False,
+                "motivo": (
+                    f"Agrupamento por {_SCOPE_NOUN.get(outage.scope, outage.scope)} "
+                    "não tem elemento fixo no cadastro: o conjunto de clientes muda "
+                    "a cada evento, então não há trecho para contar reincidência."
+                ),
+                "total": 0,
+                "anteriores": 0,
+                "reincidente": False,
+                "frase": "",
+            }
+            continue
+
+        ocorrencias = por_elemento.get((outage.scope, outage.element_external_id), [])
+        # Só o que veio ANTES desta massiva entra no ordinal. Uma encerrada
+        # aberta no histórico não pode virar "a 4ª" por causa do que aconteceu
+        # depois dela.
+        anteriores = [
+            inicio
+            for pk, inicio in ocorrencias
+            if pk != outage.pk and inicio < outage.started_at
+        ]
+        total = len(anteriores) + 1
+        saida[outage.pk] = {
+            **base,
+            "determinavel": True,
+            "motivo": "",
+            "total": total,
+            "anteriores": len(anteriores),
+            "reincidente": bool(anteriores),
+            "ultima_anterior": max(anteriores) if anteriores else None,
+            "frase": (
+                f"{total}ª massiva deste elemento em {janela_str}"
+                if anteriores
+                else f"Primeira massiva deste elemento em {janela_str}"
+            ),
+        }
+    return saida
+
+
 def compute_mapa(
     org: Any,
     quedas: list[ConnectionDropEvent],
@@ -1074,7 +1213,9 @@ def _signal_cell(drop: ConnectionDropEvent | None) -> dict[str, Any]:
     }
 
 
-def compute_massiva_detalhe(org: Any, outage: OutageEvent) -> dict[str, Any]:
+def compute_massiva_detalhe(
+    org: Any, outage: OutageEvent, *, now: datetime | None = None
+) -> dict[str, Any]:
     """Cabeçalho + tabela de clientes de uma massiva."""
     afetados = list(
         OutageAffectedLogin.objects.filter(organization=org, outage=outage)
@@ -1144,6 +1285,9 @@ def compute_massiva_detalhe(org: Any, outage: OutageEvent) -> dict[str, Any]:
             referencia=element_references(org, [outage]).get(outage.pk, ""),
             veredito=compute_veredito(quedas, scope=outage.scope),
             vizinhanca=compute_vizinhanca(org, quedas),
+            reincidencia=compute_reincidencia(
+                org, [outage], now=now or timezone.now()
+            ).get(outage.pk),
         ),
         "linhas": linhas,
         "sinal_disponivel": _signal_fields_available(),
@@ -1162,7 +1306,9 @@ def compute_massiva_detalhe(org: Any, outage: OutageEvent) -> dict[str, Any]:
 # =============================================================================
 # Histórico (o agregado, e só ele — §1)
 # =============================================================================
-def compute_historico(org: Any, *, limit: int = 20) -> list[dict[str, Any]]:
+def compute_historico(
+    org: Any, *, limit: int = 20, now: datetime | None = None
+) -> list[dict[str, Any]]:
     """Massivas já encerradas — quando, quantas pessoas, onde, genericamente.
 
     Deliberadamente sem recorte, filtro ou série: a ferramenta é de tempo real e
@@ -1175,4 +1321,15 @@ def compute_historico(org: Any, *, limit: int = 20) -> list[dict[str, Any]]:
         )[:limit]
     )
     referencias = element_references(org, encerradas)
-    return [outage_row(o, referencia=referencias.get(o.pk, "")) for o in encerradas]
+    # A reincidência (R8) é a única leitura do passado que o histórico ganha — e
+    # é dela que a tabela vive: a mesma OLT aparecendo quatro vezes só vira
+    # informação quando a quarta linha diz que é a quarta.
+    reincidencias = compute_reincidencia(org, encerradas, now=now or timezone.now())
+    return [
+        outage_row(
+            o,
+            referencia=referencias.get(o.pk, ""),
+            reincidencia=reincidencias.get(o.pk),
+        )
+        for o in encerradas
+    ]

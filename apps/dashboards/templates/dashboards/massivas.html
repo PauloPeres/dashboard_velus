@@ -49,6 +49,11 @@ tempo real e não responde pergunta sobre o passado (§1 do plano).
       genérica. Não há recorte nem série: a ferramenta é de tempo real, e o que sobrevive ao fim do
       evento é o registro dele, não a análise do passado.
     </p>
+    {% if historico.0.reincidencia.ressalva_janela %}
+    <p class="text-[11px] text-gray-400 mt-1 leading-relaxed">
+      {{ historico.0.reincidencia.ressalva_janela }}
+    </p>
+    {% endif %}
   </div>
   <div class="overflow-x-auto">
     <table class="min-w-full text-sm">
@@ -73,6 +78,18 @@ tempo real e não responde pergunta sobre o passado (§1 do plano).
             {% else %}
             <a href="{% url 'dashboards:massiva_detalhe' h.id %}" class="font-medium text-gray-900 hover:text-blue-600">{{ h.elemento_frase }}</a>
             <p class="text-xs text-gray-400">escopo {{ h.scope_label }} · confiança {{ h.confidence_label }}{% if h.referencia %} · {{ h.referencia }}{% endif %}</p>
+            {% endif %}
+            {% comment %}
+            Reincidência (R8): no histórico é ela que transforma uma tabela de
+            ocorrências soltas em leitura de trecho — quatro linhas da mesma OLT
+            só dizem alguma coisa quando a quarta se declara a quarta. A janela
+            vem escrita junto porque o registro é mais novo que os 90 dias
+            nominais (ver `compute_reincidencia`).
+            {% endcomment %}
+            {% if h.reincidencia.reincidente %}
+            <p class="text-xs text-orange-700 mt-0.5">
+              {{ h.reincidencia.frase }} · a anterior em {{ h.reincidencia.ultima_anterior|date:"d/m H:i" }}
+            </p>
             {% endif %}
           </td>
           <td class="px-4 py-3 text-gray-600 whitespace-nowrap">{{ h.started_at|date:"d/m H:i" }}</td>

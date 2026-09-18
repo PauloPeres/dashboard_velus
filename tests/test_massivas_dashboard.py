@@ -34,6 +34,7 @@ from apps.dashboards.massivas import (
     _signal_fields_available,
     compute_causas_onu,
     compute_motivos,
+    compute_reincidencia,
     compute_veredito,
     compute_vizinhanca,
     compute_mapa,
@@ -125,13 +126,14 @@ def _outage(
     restored: int = 0,
     mrr: str = "499.50",
     ended: bool = False,
+    inicio_min_atras: int = 30,
 ) -> OutageEvent:
     set_current_organization(org)
     now = timezone.now()
     return OutageEvent.objects.create(
         organization=org,
-        started_at=now - timedelta(minutes=30),
-        ended_at=now - timedelta(minutes=2) if ended else None,
+        started_at=now - timedelta(minutes=inicio_min_atras),
+        ended_at=now - timedelta(minutes=inicio_min_atras - 28) if ended else None,
         last_detected_at=now,
         scope=scope,
         element_external_id=element_id,
@@ -1400,3 +1402,131 @@ class TestLigacoesDoMapa:
         html = client.get(URL).content.decode()
         assert "não o caminho da fibra" in html
         assert "Nenhum cabo é desenhado" in html
+
+
+# =============================================================================
+# Reincidência do trecho (R8) — acidente vs. trecho cronicamente ruim
+# =============================================================================
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestReincidencia:
+    def test_terceira_massiva_da_mesma_olt_se_declara_terceira(
+        self, organization_a: Organization
+    ) -> None:
+        """O ordinal é o produto: "3ª massiva" é o que separa azar de trecho ruim."""
+        set_current_organization(organization_a)
+        _outage(organization_a, element_id="1", inicio_min_atras=60 * 24 * 5)
+        anterior = _outage(organization_a, element_id="1", inicio_min_atras=60 * 24 * 2)
+        atual = _outage(organization_a, element_id="1", inicio_min_atras=30)
+
+        r = compute_reincidencia(
+            organization_a, [atual], now=timezone.now()
+        )[atual.pk]
+        assert r["determinavel"] is True
+        assert r["total"] == 3
+        assert r["anteriores"] == 2
+        assert r["reincidente"] is True
+        assert r["ultima_anterior"] == anterior.started_at
+        assert r["frase"].startswith("3ª massiva")
+
+    def test_elemento_diferente_nao_soma(self, organization_a: Organization) -> None:
+        """A identidade é (escopo, id do elemento). OLT 2 não conta para OLT 1."""
+        set_current_organization(organization_a)
+        _outage(organization_a, element_id="2", inicio_min_atras=60 * 24)
+        atual = _outage(organization_a, element_id="1")
+        r = compute_reincidencia(organization_a, [atual], now=timezone.now())[atual.pk]
+        assert r["anteriores"] == 0
+        assert r["reincidente"] is False
+        assert r["frase"].startswith("Primeira massiva")
+
+    def test_massiva_posterior_nao_entra_no_ordinal_da_anterior(
+        self, organization_a: Organization
+    ) -> None:
+        """Olhando uma encerrada no histórico, o que veio DEPOIS dela não conta.
+
+        Senão a massiva de terça viraria "a 3ª" por causa do que aconteceu na
+        quinta — o card diria algo que não era verdade quando o evento estava
+        acontecendo.
+        """
+        set_current_organization(organization_a)
+        antiga = _outage(organization_a, element_id="1", inicio_min_atras=60 * 24 * 3)
+        _outage(organization_a, element_id="1", inicio_min_atras=60)
+        r = compute_reincidencia(organization_a, [antiga], now=timezone.now())[antiga.pk]
+        assert r["total"] == 1
+        assert r["reincidente"] is False
+
+    def test_escopo_sem_elemento_se_recusa_a_contar(
+        self, organization_a: Organization
+    ) -> None:
+        """GEO não tem elemento no cadastro: o cluster muda de forma a cada
+        evento, e somar todos num contador só juntaria bairros diferentes."""
+        set_current_organization(organization_a)
+        _outage(
+            organization_a, scope=OutageEvent.Scope.GEO, element_id="",
+            element_label="Cluster geográfico", inicio_min_atras=60 * 24,
+        )
+        atual = _outage(
+            organization_a, scope=OutageEvent.Scope.GEO, element_id="",
+            element_label="Cluster geográfico",
+        )
+        r = compute_reincidencia(organization_a, [atual], now=timezone.now())[atual.pk]
+        assert r["determinavel"] is False
+        assert r["reincidente"] is False
+        assert "não tem elemento fixo" in r["motivo"]
+
+    def test_janela_declarada_e_a_do_registro_nao_os_90_dias(
+        self, organization_a: Organization
+    ) -> None:
+        """Com 9 dias de registro, "1 massiva em 90 dias" seria elogio falso a um
+        trecho que ninguém observou. A janela efetiva vai escrita na tela."""
+        set_current_organization(organization_a)
+        atual = _outage(organization_a, element_id="1", inicio_min_atras=60 * 24 * 9)
+        r = compute_reincidencia(organization_a, [atual], now=timezone.now())[atual.pk]
+        assert r["janela_parcial"] is True
+        assert r["dias_observados"] == 9
+        assert "9 dias de registro" in r["frase"]
+        assert "menos que a janela de 90 dias" in r["ressalva_janela"]
+
+    def test_massiva_fora_da_janela_nao_conta(
+        self, organization_a: Organization
+    ) -> None:
+        """Passou dos 90 dias, sai da conta — e aí a janela nominal é a real."""
+        set_current_organization(organization_a)
+        _outage(organization_a, element_id="1", inicio_min_atras=60 * 24 * 200)
+        atual = _outage(organization_a, element_id="1")
+        r = compute_reincidencia(organization_a, [atual], now=timezone.now())[atual.pk]
+        assert r["anteriores"] == 0
+        assert r["janela_parcial"] is False
+        assert r["ressalva_janela"] == ""
+        assert "90 dias" in r["frase"]
+
+    def test_card_mostra_a_reincidencia(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        _outage(
+            organization_a, element_id="1", ended=True,
+            inicio_min_atras=60 * 24 * 2,
+        )
+        _outage(organization_a, element_id="1", affected=5)
+        client.force_login(user_a)
+        html = client.get(URL).content.decode()
+        assert "Reincidência do trecho" in html
+        assert "2ª massiva deste elemento" in html
+
+    def test_historico_marca_a_repetida(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        _outage(
+            organization_a, element_id="1", ended=True,
+            inicio_min_atras=60 * 24 * 2,
+        )
+        _outage(organization_a, element_id="1", ended=True, inicio_min_atras=120)
+        client.force_login(user_a)
+        resp = client.get(URL)
+        linhas = resp.context["historico"]
+        # Ordenado por fim desc: a mais recente é a 2ª ocorrência.
+        assert linhas[0]["reincidencia"]["total"] == 2
+        assert linhas[1]["reincidencia"]["total"] == 1
+        assert "2ª massiva deste elemento" in resp.content.decode()

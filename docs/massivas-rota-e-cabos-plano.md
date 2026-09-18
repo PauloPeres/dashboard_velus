@@ -270,9 +270,40 @@ sempre microssegundo zero, e é assim que os sintéticos são excluídos da cont
 No geral a cobertura é boa: **2.534 de 2.787 quedas (91%)** têm horário real, e
 as massivas recentes têm 100%.
 
-### R8 — Reincidência do trecho
+### R8 — Reincidência do trecho — FEITA (2026-09-18)
 Contador "N massivas nos últimos 90 dias" por elemento, no card e no histórico.
 **Depende de:** nada.
+
+**Como ficou, e por que a janela mudou de nome.** O bloco sai como ordinal — "3ª
+massiva deste elemento" — e não como contagem solta: "3 massivas" ainda deixa o
+leitor perguntando se a de hoje está dentro. Reincidente ganha cor e a data da
+anterior; primeira ocorrência sai cinza, dizendo que é a primeira.
+
+**Os 90 dias viraram texto variável.** *Medido em produção:* a base tem **24
+massivas e o registro começa em 09/09** — 9 dias. Um rótulo "1 massiva nos
+últimos 90 dias" sobre 9 dias de histórico é elogio falso a um trecho que
+ninguém observou, e o erro é exatamente o que esta tela existe para evitar. A
+janela efetiva passou a ser a menor entre os 90 dias e o registro que existe, e
+ela vai escrita ao lado do número ("em 9 dias de registro") com a ressalva de que
+o contador não enxerga antes disso. Quando o histórico passar dos 90 dias, a
+frase volta sozinha a dizer 90 dias.
+
+**Escopo sem elemento não conta.** *Medido:* **16 das 24 massivas são GEO**, e
+GEO não tem `element_external_id` — o cluster de proximidade muda de forma a cada
+evento. Somar todas num contador só diria "16 massivas neste trecho" juntando
+bairros diferentes. Sem elemento, o bloco se recusa e explica por quê; a
+identidade usada é `(scope, element_external_id)`, nunca o `element_label` (texto
+de tela, muda quando o cadastro é corrigido) nem o `suspected_segment_label` (que
+depende de quem caiu naquele evento, e seria diferente a cada ocorrência do mesmo
+trecho).
+
+**Detalhe que só aparece no histórico:** o ordinal conta apenas o que veio
+*antes* daquela massiva. Uma encerrada aberta hoje não pode virar "a 3ª" por
+causa do que aconteceu depois dela — o card diria algo que não era verdade
+enquanto o evento acontecia.
+
+A distribuição atual, para calibrar expectativa: 4 massivas na OLT 1, 3 na OLT 2,
+1 na PON 364 — 3 de 4 elementos distintos já são reincidentes em 9 dias.
 
 ### R9 — Causa confirmada no fechamento da massiva
 Campo simples (rompimento / energia / OLT-equipamento / manutenção / falso
