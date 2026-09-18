@@ -7772,12 +7772,22 @@ def compute_mensagens_volume(
         organization, por_atendimento, top_n=top_n
     )
 
-    # --- Cobertura: quanto da janela o backfill já cobre --------------------
-    conversas_na_janela = Atendimento.objects.filter(
+    # --- Quem puxou a conversa ---------------------------------------------
+    conversas_da_janela = Atendimento.objects.filter(
         organization=organization,
         opened_at__gte=window_start,
         opened_at__lte=window_end,
-    ).count()
+    )
+    if departamento_id is not None:
+        conversas_da_janela = conversas_da_janela.filter(
+            departamento_id=departamento_id
+        )
+    iniciativa = _iniciativa_das_conversas(
+        organization, conversas_da_janela, canal_external_id=canal_external_id
+    )
+
+    # --- Cobertura: quanto da janela o backfill já cobre --------------------
+    conversas_na_janela = conversas_da_janela.count()
     conversas_com_mensagem = len(por_atendimento)
 
     return {
@@ -7804,6 +7814,7 @@ def compute_mensagens_volume(
         "por_departamento": agregado["por_departamento"],
         "por_motivo": agregado["por_motivo"],
         "origem": agregado["origem"],
+        "iniciativa": iniciativa,
         "cobertura": {
             "conversas": conversas_na_janela,
             "conversas_com_mensagem": conversas_com_mensagem,
@@ -7818,6 +7829,57 @@ def compute_mensagens_volume(
             for c in sorted(catalogo.values(), key=lambda c: (not c.is_ativo, c.nome))
         ],
         "selected_canal": canal_external_id or "",
+    }
+
+
+def _iniciativa_das_conversas(
+    organization: Organization,
+    conversas: Any,
+    *,
+    canal_external_id: str | None = None,
+) -> dict[str, Any]:
+    """Quem puxou a conversa: direção da PRIMEIRA mensagem de cada atendimento.
+
+    Pergunta diferente da de volume, e por isso com recorte diferente: quem
+    iniciou é atributo da conversa, não da mensagem, então a conversa entra
+    pela data de ABERTURA (`opened_at`) e a primeira mensagem é buscada no
+    histórico inteiro dela — não só no pedaço que caiu na janela. Recortar por
+    `sent_at` inflaria o lado da Velus na borda: numa conversa aberta antes do
+    início da janela, a primeira mensagem de dentro dela costuma ser a nossa
+    resposta, não a pergunta do cliente que a abriu.
+
+    `AGENT` junta atendente humano e bot (a fonte não separa), então "iniciada
+    por nós" inclui disparo ativo e template automático.
+    """
+    from apps.atendimento.infrastructure.models import Mensagem
+
+    primeiras = Mensagem.objects.filter(
+        organization=organization,
+        atendimento__in=conversas,
+        sent_at__isnull=False,
+    )
+    if canal_external_id:
+        primeiras = primeiras.filter(canal_external_id=canal_external_id)
+
+    # DISTINCT ON (Postgres): uma linha por atendimento, a de menor `sent_at`.
+    direcoes: Counter[str] = Counter(
+        primeiras.order_by("atendimento_id", "sent_at")
+        .distinct("atendimento_id")
+        .values_list("direction", flat=True)
+    )
+
+    n_agente = direcoes.get(Mensagem.Direction.AGENT.value, 0)
+    n_cliente = direcoes.get(Mensagem.Direction.CLIENT.value, 0)
+    n_outro = sum(direcoes.values()) - n_agente - n_cliente
+    conversas_com_primeira = n_agente + n_cliente + n_outro
+
+    return {
+        "conversas": conversas_com_primeira,
+        "n_agente": n_agente,
+        "n_cliente": n_cliente,
+        "n_outro": n_outro,
+        "pct_agente": _pct(n_agente, conversas_com_primeira),
+        "pct_cliente": _pct(n_cliente, conversas_com_primeira),
     }
 
 

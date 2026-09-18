@@ -107,6 +107,25 @@ página poderia induzir.
   </div>
 </div>
 
+<!-- Quem puxou a conversa -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+    <h2 class="text-sm font-semibold text-gray-700">Quem iniciou a conversa</h2>
+    <span class="text-xs text-gray-400">{{ iniciativa.conversas|intcomma }} conversas abertas no período com mensagem ingerida</span>
+  </div>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    {% include "dashboards/_kpi_card.html" with label="Iniciadas por nós" value=iniciativa.n_agente|intcomma subtitle=iniciativa.pct_agente|stringformat:"s"|add:"% das conversas · inclui disparo de bot" tooltip="Conversas cuja primeira mensagem saiu do nosso lado: contato ativo, cobrança, aviso ou template automático. Atendente e bot contam juntos — a fonte não separa os dois." %}
+
+    {% include "dashboards/_kpi_card.html" with label="Iniciadas pelo cliente" value=iniciativa.n_cliente|intcomma subtitle=iniciativa.pct_cliente|stringformat:"s"|add:"% das conversas" tooltip="Conversas cuja primeira mensagem veio do cliente — demanda espontânea que chegou até nós." %}
+  </div>
+  <p class="text-xs text-gray-400 mt-3 leading-relaxed">
+    Recorte diferente do de volume: aqui a conversa entra pela data de <strong>abertura</strong>, e a primeira
+    mensagem é procurada no histórico inteiro dela. É a divisão entre <strong>demanda que chega</strong> e
+    <strong>contato que a gente provoca</strong> — as mensagens enviadas acima misturam as duas coisas, porque
+    responder um cliente também conta como mensagem nossa.
+  </p>
+</div>
+
 <!-- Custo: janela de 24h -->
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
   <div class="flex flex-wrap items-baseline justify-between gap-2">

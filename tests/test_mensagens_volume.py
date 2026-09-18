@@ -65,6 +65,7 @@ def _mensagem(
     fora: bool | None = None,
     dia: int = 1,
     mes: int = 8,
+    hora: int = 12,
 ) -> Mensagem:
     return Mensagem.objects.create(
         organization=org,
@@ -76,7 +77,7 @@ def _mensagem(
         tipo=tipo,
         canal_external_id=canal,
         fora_janela_24h=fora,
-        sent_at=datetime(2026, mes, dia, 12, 0, tzinfo=UTC),
+        sent_at=datetime(2026, mes, dia, hora, 0, tzinfo=UTC),
     )
 
 
@@ -283,3 +284,81 @@ class TestMensagensPage:
     def test_requires_login(self, client, cenario: Organization) -> None:
         response = client.get("/operations/mensagens/")
         assert response.status_code in (301, 302)
+
+
+class TestIniciativaDaConversa:
+    """Quem puxou a conversa — a primeira mensagem, não o volume."""
+
+    def test_split_por_quem_mandou_a_primeira(self, db, organization_a: Organization) -> None:
+        set_current_organization(organization_a)
+        # inbound: cliente fala primeiro, a Velus responde duas vezes
+        inbound = _atendimento(organization_a, "in-1", opened_dia=3)
+        _mensagem(organization_a, "i1", inbound, direction="CLIENT", dia=3, hora=8)
+        _mensagem(organization_a, "i2", inbound, dia=3, hora=9)
+        _mensagem(organization_a, "i3", inbound, dia=3, hora=10)
+        # outbound: disparo nosso, cliente responde
+        outbound = _atendimento(organization_a, "out-1", opened_dia=4)
+        _mensagem(organization_a, "o1", outbound, dia=4, hora=8)
+        _mensagem(organization_a, "o2", outbound, direction="CLIENT", dia=4, hora=9)
+
+        data = compute_mensagens_volume(
+            organization_a, start=JANELA_INICIO, end=JANELA_FIM
+        )
+
+        # Volume diz 3x2 pra Velus; iniciativa diz 1x1. São perguntas diferentes.
+        assert data["n_agente"] == 3
+        assert data["n_cliente"] == 2
+        assert data["iniciativa"]["conversas"] == 2
+        assert data["iniciativa"]["n_agente"] == 1
+        assert data["iniciativa"]["n_cliente"] == 1
+        assert data["iniciativa"]["pct_agente"] == 50.0
+
+    def test_primeira_mensagem_vem_de_antes_da_janela(
+        self, db, organization_a: Organization
+    ) -> None:
+        """Conversa aberta na janela conta pela 1a msg dela, mesmo anterior ao corte.
+
+        Sem isso a resposta da Velus dentro da janela viraria "iniciada por nós".
+        """
+        set_current_organization(organization_a)
+        conversa = _atendimento(organization_a, "borda-1", opened_dia=1)
+        _mensagem(organization_a, "b1", conversa, direction="CLIENT", dia=31, mes=7)
+        _mensagem(organization_a, "b2", conversa, dia=1, hora=10)
+
+        data = compute_mensagens_volume(
+            organization_a, start=JANELA_INICIO, end=JANELA_FIM
+        )
+
+        assert data["iniciativa"]["n_cliente"] == 1
+        assert data["iniciativa"]["n_agente"] == 0
+
+    def test_conversa_sem_mensagem_ingerida_fica_de_fora(
+        self, db, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        _atendimento(organization_a, "vazia-1", opened_dia=2)
+
+        data = compute_mensagens_volume(
+            organization_a, start=JANELA_INICIO, end=JANELA_FIM
+        )
+
+        assert data["iniciativa"]["conversas"] == 0
+        assert data["iniciativa"]["pct_cliente"] == 0
+
+    def test_filtro_de_departamento_recorta_iniciativa(
+        self, cenario: Organization
+    ) -> None:
+        set_current_organization(cenario)
+        comercial = Departamento.objects.get(organization=cenario, external_id="dep-com")
+
+        data = compute_mensagens_volume(
+            cenario,
+            start=JANELA_INICIO,
+            end=JANELA_FIM,
+            departamento_id=comercial.id,
+        )
+
+        assert data["iniciativa"]["conversas"] == 1
+        # Cobertura também respeita o recorte: 1 conversa do Comercial, 1 com msg.
+        assert data["cobertura"]["conversas"] == 1
+        assert data["cobertura"]["pct"] == 100.0
