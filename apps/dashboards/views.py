@@ -3104,6 +3104,24 @@ def _massivas_contexto_agora(org: Any, *, now: datetime) -> dict[str, Any]:
     }
 
 
+def _massivas_mapa_nota(dados: dict[str, Any]) -> str:
+    """Legenda do mapa da tela geral — o que está nele e o que ficou de fora."""
+    partes = [
+        "O mapa mostra as massivas abertas: vermelho quem segue fora, verde "
+        f"quem já voltou ({dados['mapa_voltaram']} cliente(s)). Durante um "
+        "reparo o mapa esverdeia; passe o mouse para ver a hora da queda e do "
+        "retorno."
+    ]
+    avulsas = dados["mapa_quedas_avulsas"]
+    if avulsas:
+        partes.append(
+            f"{avulsas} queda(s) individual(is) em curso não aparecem aqui — "
+            "não pertencem a nenhuma massiva aberta. Elas continuam contadas em "
+            "\"clientes fora\"."
+        )
+    return " ".join(partes)
+
+
 @login_required
 @never_cache
 def massivas(request: HttpRequest) -> HttpResponse:
@@ -3124,12 +3142,12 @@ def massivas(request: HttpRequest) -> HttpResponse:
             **ctx,
             "mapa": dados["mapa"],
             "mapa_chart_json": charts.outage_map(dados["mapa"]),
-            "mapa_nota": (
-                "Verde é retorno registrado nas últimas "
-                f"{dados['janela_retorno_horas']}h — {dados['clientes_que_voltaram']} "
-                "cliente(s). Durante um reparo o mapa esverdeia; passe o mouse "
-                "para ver a hora da queda e do retorno."
-            ),
+            # O mapa é só das massivas abertas (ver `compute_massivas_agora`).
+            # A nota precisa dizer o que ficou de fora: sem isso, um mapa vazio
+            # num dia de 40 quedas avulsas seria lido como "não tem nada
+            # acontecendo" em vez de "nada disso é massiva".
+            "mapa_titulo": "Onde estão as massivas abertas — e quem já voltou",
+            "mapa_nota": _massivas_mapa_nota(dados),
             "timeline_chart_json": charts.outage_timeline(dados["timeline"]),
             "timeline_horas": TIMELINE_HOURS,
             "bucket_minutos": BUCKET_MINUTES,

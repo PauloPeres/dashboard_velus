@@ -689,8 +689,18 @@ class TestAutoRefreshEMapa:
             latitude=-26.9,
             longitude=-48.6,
         )
-        _drop(organization_a, login="com-geo", cto="41", lat=-26.9, lon=-48.6)
-        _drop(organization_a, login="sem-geo", cto="41")
+        # As duas quedas precisam pertencer a uma massiva aberta: o mapa da tela
+        # geral só desenha o que está vinculado a uma.
+        outage = _outage(organization_a, scope=OutageEvent.Scope.CTO, element_id="41")
+        for login, lat, lon in (("com-geo", -26.9, -48.6), ("sem-geo", None, None)):
+            drop = _drop(organization_a, login=login, cto="41", lat=lat, lon=lon)
+            OutageAffectedLogin.objects.create(
+                organization=organization_a,
+                outage=outage,
+                drop_event=drop,
+                login=drop.login,
+                dropped_at=drop.dropped_at,
+            )
 
         client.force_login(user_a)
         resp = client.get(URL)
@@ -712,8 +722,22 @@ class TestRetornoVisivel:
     def test_quem_voltou_vira_camada_verde_no_mapa(
         self, client: Any, user_a: User, organization_a: Organization
     ) -> None:
-        _drop(organization_a, login="fora", lat=-26.9, lon=-48.6)
-        _drop(organization_a, login="voltou", restored=True, lat=-26.8, lon=-48.5)
+        outage = _outage(organization_a, affected=2, restored=1)
+        for login, voltou, lat, lon in (
+            ("fora", False, -26.9, -48.6),
+            ("voltou", True, -26.8, -48.5),
+        ):
+            drop = _drop(
+                organization_a, login=login, restored=voltou, lat=lat, lon=lon
+            )
+            OutageAffectedLogin.objects.create(
+                organization=organization_a,
+                outage=outage,
+                drop_event=drop,
+                login=drop.login,
+                dropped_at=drop.dropped_at,
+                restored_at=drop.restored_at,
+            )
 
         client.force_login(user_a)
         resp = client.get(URL)
@@ -726,6 +750,35 @@ class TestRetornoVisivel:
         # A legenda do traço vive no JSON do Plotly (com escape unicode), então
         # o que se verifica no HTML é a legenda escrita da própria seção.
         assert "Verde: já voltou" in resp.content.decode()
+
+    def test_mapa_da_tela_geral_ignora_queda_fora_de_massiva(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        """Queda individual não polui o mapa — mas a tela diz que ela existe.
+
+        Numa base grande há sempre quedas soltas (ONU na tomada, mudança de
+        endereço). Elas enchiam o mapa de vermelho sem relação com o rompimento
+        em atendimento. Somem do mapa, seguem contadas em "clientes fora", e a
+        nota do mapa declara quantas ficaram de fora.
+        """
+        outage = _outage(organization_a, affected=1)
+        na_massiva = _drop(organization_a, login="na-massiva", lat=-26.9, lon=-48.6)
+        OutageAffectedLogin.objects.create(
+            organization=organization_a,
+            outage=outage,
+            drop_event=na_massiva,
+            login=na_massiva.login,
+            dropped_at=na_massiva.dropped_at,
+        )
+        _drop(organization_a, login="avulso", lat=-26.5, lon=-48.1)
+
+        client.force_login(user_a)
+        resp = client.get(URL)
+        mapa = resp.context["mapa"]
+        assert [p["label"].split(" ·")[0] for p in mapa["clientes"]] == ["na-massiva"]
+        # O avulso não sumiu da tela: só saiu do mapa.
+        assert resp.context["clientes_fora"] == 2
+        assert "1 queda(s) individual(is)" in resp.content.decode()
 
     def test_detalhe_mantem_quem_voltou_no_mapa_em_verde(
         self, client: Any, user_a: User, organization_a: Organization

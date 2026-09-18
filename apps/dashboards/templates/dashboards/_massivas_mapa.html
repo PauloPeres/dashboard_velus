@@ -10,7 +10,12 @@ tem: aqui o mapa renderiza mesmo vazio, e o vazio é informação.
 {% endcomment %}
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
   <div class="flex flex-wrap items-center gap-2 mb-1">
-    <h2 class="text-sm font-semibold text-gray-700">Onde estão os clientes fora — e quem já voltou</h2>
+    {% comment %}
+    O título vem de fora porque o bloco serve duas telas com recortes
+    diferentes: na geral o mapa é das massivas abertas, no detalhe é de uma
+    massiva só. O default cobre o detalhe.
+    {% endcomment %}
+    <h2 class="text-sm font-semibold text-gray-700">{{ mapa_titulo|default:"Onde estão os clientes fora — e quem já voltou" }}</h2>
     {% comment %}
     Carimbo próprio: este bloco é desenhado uma vez, no load, e NÃO acompanha o
     auto-refresh da lista. Sem a hora aqui, um mapa velho colado numa lista viva

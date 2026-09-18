@@ -260,6 +260,30 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
         ).only(*_CAMPOS_DE_QUEDA_NO_MAPA)
     )
 
+    # O mapa é das MASSIVAS ABERTAS, não de toda queda solta da base. Numa base
+    # grande sempre há dezenas de quedas individuais espalhadas — ONU desligada
+    # na tomada, cliente que mudou de casa — e elas enchiam o mapa de vermelho
+    # sem relação nenhuma com o rompimento que a equipe está atendendo. O
+    # vínculo queda↔massiva já existe em `OutageAffectedLogin`; o mapa passa a
+    # sair de lá. Quem voltou continua aparecendo (em verde), porque é dentro da
+    # massiva que o esverdeamento conta a história do reparo.
+    afetados_de_massiva = list(
+        OutageAffectedLogin.objects.filter(
+            organization=org, outage__ended_at__isnull=True
+        )
+        .select_related("drop_event")
+        .only("drop_event", *(f"drop_event__{c}" for c in _CAMPOS_DE_QUEDA_NO_MAPA))
+    )
+    # `drop_event` é SET_NULL: a queda pode ter sido podada e a massiva
+    # sobreviver. Sem queda não há coordenada, então o afetado não vira ponto.
+    quedas_no_mapa = [a.drop_event for a in afetados_de_massiva if a.drop_event]
+
+    # Quantas quedas em curso ficaram FORA do mapa por não pertencerem a
+    # nenhuma massiva aberta. O número tem que aparecer na tela: um mapa com 8
+    # pontos sobre 40 clientes fora seria lido como "a massiva é pequena".
+    ids_em_massiva = {a.drop_event_id for a in afetados_de_massiva}
+    quedas_avulsas = sum(1 for q in quedas_abertas if q.pk not in ids_em_massiva)
+
     abertas = list(
         OutageEvent.objects.filter(organization=org, ended_at__isnull=True).order_by(
             "-affected_count", "started_at"
@@ -280,7 +304,9 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
         "linhas": linhas,
         "causas_onu": compute_causas_onu(quedas_abertas),
         "motivos": compute_motivos(quedas_abertas),
-        "mapa": compute_mapa(org, quedas_abertas + voltaram),
+        "mapa": compute_mapa(org, quedas_no_mapa),
+        "mapa_quedas_avulsas": quedas_avulsas,
+        "mapa_voltaram": sum(1 for q in quedas_no_mapa if q.restored_at is not None),
         "timeline": compute_timeline(org, now=now),
         "janela_retorno_horas": TIMELINE_HOURS,
     }
