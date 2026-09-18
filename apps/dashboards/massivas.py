@@ -317,15 +317,24 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
     for afetado in afetados_de_massiva:
         if afetado.drop_event is not None:
             quedas_por_massiva.setdefault(afetado.outage_id, []).append(afetado.drop_event)
+    vizinhancas = {
+        o.pk: compute_vizinhanca(org, quedas_por_massiva.get(o.pk, [])) for o in abertas
+    }
     linhas = [
         outage_row(
             o,
             referencia=referencias.get(o.pk, ""),
             veredito=compute_veredito(quedas_por_massiva.get(o.pk, []), scope=o.scope),
-            vizinhanca=compute_vizinhanca(org, quedas_por_massiva.get(o.pk, [])),
+            vizinhanca=vizinhancas.get(o.pk),
         )
         for o in abertas
     ]
+    # As caixas que escaparam entram no mapa como ponto vazado. Vêm de todas as
+    # massivas abertas, sem repetir a mesma caixa.
+    intactas_no_mapa: dict[str, dict[str, Any]] = {}
+    for vizinhanca in vizinhancas.values():
+        for irma in vizinhanca.get("intactas", []):
+            intactas_no_mapa.setdefault(irma["cto"], irma)
 
     mensalidade_afetada = sum((o.mrr_at_risk or Decimal("0")) for o in abertas)
     maior = linhas[0] if linhas else None
@@ -339,7 +348,9 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
         "linhas": linhas,
         "causas_onu": compute_causas_onu(quedas_abertas),
         "motivos": compute_motivos(quedas_abertas),
-        "mapa": compute_mapa(org, quedas_no_mapa),
+        "mapa": compute_mapa(
+            org, quedas_no_mapa, vizinhas_intactas=list(intactas_no_mapa.values())
+        ),
         "mapa_quedas_avulsas": quedas_avulsas,
         "mapa_voltaram": sum(1 for q in quedas_no_mapa if q.restored_at is not None),
         "timeline": compute_timeline(org, now=now),
@@ -705,13 +716,13 @@ def compute_vizinhanca(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str,
     )
 
     denominadores = active_logins_per_cto()
-    nomes = {
-        e.external_id: (e.name or e.external_id)
+    elementos = {
+        e.external_id: e
         for e in NetworkElement.objects.filter(
             organization=org,
             kind=NetworkElement.Kind.CTO,
             external_id__in=irmas_ids | ctos_afetadas,
-        ).only("external_id", "name")
+        ).only("external_id", "name", "latitude", "longitude")
     }
 
     # Quantos de cada caixa irmã estão fora AGORA — uma queda aberta é queda
@@ -726,9 +737,14 @@ def compute_vizinhanca(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str,
     for cto_id in sorted(irmas_ids):
         total = denominadores.get(cto_id, 0)
         fora = fora_por_cto.get(cto_id, 0)
+        elemento = elementos.get(cto_id)
         irmas.append({
             "cto": cto_id,
-            "nome": nomes.get(cto_id, cto_id),
+            "nome": (elemento.name if elemento else "") or cto_id,
+            # O mapa desenha a caixa intacta como ponto vazado (R3); sem
+            # coordenada ela ainda aparece na lista, só não no mapa.
+            "lat": elemento.latitude if elemento else None,
+            "lon": elemento.longitude if elemento else None,
             "fora": fora,
             "total": total,
             "de_pe": max(total - fora, 0),
@@ -742,6 +758,7 @@ def compute_vizinhanca(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str,
     intactas = [i for i in irmas if i["intacta"]]
     return {
         "determinavel": True,
+        "intactas": intactas,
         "pons": sorted(pons),
         "ctos_afetadas": len(ctos_afetadas),
         "irmas": irmas,
@@ -755,12 +772,26 @@ def compute_vizinhanca(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str,
     }
 
 
-def compute_mapa(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str, Any]:
-    """Pontos do mapa: quem está fora, quem já voltou, CTOs afetadas e POPs.
+def compute_mapa(
+    org: Any,
+    quedas: list[ConnectionDropEvent],
+    *,
+    vizinhas_intactas: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Pontos e ligações do mapa: quem está fora, quem voltou, CTOs, POPs.
 
     A separação fora/voltou é o coração da tela: durante o reparo a equipe
     precisa ver o vermelho virando verde. O carimbo de hora vai no rótulo do
     ponto (caiu às / voltou às) — sem ele, "verde" não diria *quando* voltou.
+
+    As **ligações** (R3) são o passo seguinte: da caixa até o POP que a alimenta,
+    e da caixa a montante até as demais afetadas. São retas entre dois pontos que
+    existem no cadastro, e **não são o caminho da fibra** — a geometria do cabo
+    não vem na API (§2.3). Por isso saem tracejadas: linha cheia leria como
+    traçado, e o técnico cavaria onde a linha passa.
+
+    `vizinhas_intactas` (R6) são as caixas da mesma PON que não caíram. Entram
+    como ponto vazado: é o que delimita o trecho.
     """
     com_posicao = [
         q for q in quedas if q.latitude is not None and q.longitude is not None
@@ -805,6 +836,14 @@ def compute_mapa(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str, Any]:
         )
     ]
 
+    vizinhas = [
+        {"lat": v["lat"], "lon": v["lon"], "label": f"{v['nome']} · {v['de_pe']} no ar"}
+        for v in (vizinhas_intactas or [])
+        if v.get("lat") is not None and v.get("lon") is not None
+    ]
+
+    ligacoes, trecho = _ligacoes_do_mapa(org, ctos_afetadas)
+
     # Quantos clientes fora ficaram FORA do mapa. Sem isso, um mapa com 3 pontos
     # sobre 40 quedas seria lido como "a massiva é pequena".
     sem_coordenada = len(quedas) - len(com_posicao)
@@ -813,9 +852,100 @@ def compute_mapa(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str, Any]:
         "voltaram": voltaram,
         "ctos": ctos,
         "pops": pops,
+        "vizinhas": vizinhas,
+        "ligacoes": ligacoes,
+        "trecho": trecho,
         "sem_coordenada": sem_coordenada,
         "total_quedas": len(quedas),
     }
+
+
+def _ligacoes_do_mapa(
+    org: Any, ctos_afetadas: set[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Segmentos CTO→POP e o trecho entre as caixas afetadas.
+
+    A CTO aponta para a OLT (100% do cadastro) e a OLT aponta para o POP — a OLT
+    não tem coordenada própria em nenhuma das três, então a ponta de cima da
+    ligação é a coordenada do POP.
+
+    O sentido do trecho usa a mesma distância do detector (`haversine_meters`):
+    a caixa mais próxima do POP é a de montante. Se a tela desenhasse a seta em
+    uma direção e o rótulo do trecho dissesse outra, uma das duas estaria
+    mentindo.
+    """
+    from apps.network.domain.outage import haversine_meters
+
+    if not ctos_afetadas:
+        return [], []
+
+    ctos = {
+        e.external_id: e
+        for e in NetworkElement.objects.filter(
+            organization=org,
+            kind=NetworkElement.Kind.CTO,
+            external_id__in=ctos_afetadas,
+            latitude__isnull=False,
+            longitude__isnull=False,
+        )
+    }
+    if not ctos:
+        return [], []
+
+    olts = {
+        e.external_id: e.parent_external_id
+        for e in NetworkElement.objects.filter(
+            organization=org,
+            kind=NetworkElement.Kind.OLT,
+            external_id__in={c.parent_external_id for c in ctos.values() if c.parent_external_id},
+        )
+    }
+    pops = {
+        e.external_id: (e.latitude, e.longitude, e.name or e.external_id)
+        for e in NetworkElement.objects.filter(
+            organization=org,
+            kind=NetworkElement.Kind.POP,
+            external_id__in={p for p in olts.values() if p},
+            latitude__isnull=False,
+            longitude__isnull=False,
+        )
+    }
+
+    ligacoes: list[dict[str, Any]] = []
+    pop_de: dict[str, tuple[float, float]] = {}
+    for cto_id, elemento in ctos.items():
+        pop_id = olts.get(elemento.parent_external_id, "")
+        pop = pops.get(pop_id)
+        if pop is None:
+            continue
+        pop_de[cto_id] = (pop[0], pop[1])
+        ligacoes.append({
+            "de": (elemento.latitude, elemento.longitude),
+            "para": (pop[0], pop[1]),
+            "label": f"{elemento.name or cto_id} → {pop[2]}",
+        })
+
+    # Trecho: da caixa mais próxima do POP para as demais. Com uma caixa só não
+    # há trecho — e sem POP não há como saber quem está a montante, então o
+    # desenho fica de fora em vez de chutar um sentido.
+    trecho: list[dict[str, Any]] = []
+    com_pop = [c for c in ctos if c in pop_de]
+    if len(ctos) >= 2 and com_pop:
+        referencia = pop_de[sorted(com_pop)[0]]
+        montante = min(
+            sorted(ctos),
+            key=lambda c: haversine_meters(referencia, (ctos[c].latitude, ctos[c].longitude)),
+        )
+        origem = ctos[montante]
+        for cto_id, elemento in sorted(ctos.items()):
+            if cto_id == montante:
+                continue
+            trecho.append({
+                "de": (origem.latitude, origem.longitude),
+                "para": (elemento.latitude, elemento.longitude),
+                "label": f"{origem.name or montante} → {elemento.name or cto_id}",
+            })
+    return ligacoes, trecho
 
 
 def compute_timeline(org: Any, *, now: datetime) -> list[dict[str, Any]]:
@@ -1023,7 +1153,8 @@ def compute_massiva_detalhe(org: Any, outage: OutageEvent) -> dict[str, Any]:
         },
         "mapa": compute_mapa(
             org,
-            [a.drop_event for a in afetados if a.drop_event],
+            quedas,
+            vizinhas_intactas=compute_vizinhanca(org, quedas).get("intactas", []),
         ),
     }
 

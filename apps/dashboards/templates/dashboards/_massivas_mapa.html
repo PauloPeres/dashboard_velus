@@ -26,10 +26,27 @@ tem: aqui o mapa renderiza mesmo vazio, e o vazio é informação.
     </span>
   </div>
   <p class="text-xs text-gray-400 mb-1 leading-relaxed">
-    Vermelho: fora agora. Verde: já voltou. Laranja: caixa (CTO) afetada. Azul: POP.
-    <strong>Nenhum cabo é desenhado</strong> — a API do IXC não expõe a geometria dos cabos,
-    então o máximo que a tela pode apontar é um <em>trecho suspeito</em> entre caixas, nunca
-    "cabo X rompido".
+    Vermelho: fora agora. Verde: já voltou. Laranja: caixa (CTO) afetada.
+    Verde-escuro: caixa vizinha da mesma PON que continua no ar — é ela que
+    delimita o trecho. Azul: POP.
+  </p>
+  {% comment %}
+  As linhas são a parte mais fácil de ler errado da tela inteira, então o aviso
+  fica junto delas e não numa legenda de rodapé. Tracejado é escolha de desenho,
+  não estilo: linha cheia leria como traçado de cabo (ver `_map_dashed_trace`).
+  {% endcomment %}
+  <p class="text-xs text-gray-400 mb-1 leading-relaxed">
+    As linhas <strong>tracejadas</strong> são vínculo de cadastro, não o caminho da fibra:
+    a cinza liga cada caixa ao POP que a alimenta, a laranja liga a caixa mais próxima do POP
+    às demais afetadas. <strong>Nenhum cabo é desenhado</strong> —
+    {% comment %}
+    Esta frase fica numa linha só de propósito: um teste garante que ela chega
+    inteira ao HTML, e quebrá-la no meio faz a asserção falhar (a quebra vira
+    espaço em branco no meio da string).
+    {% endcomment %}
+    a API do IXC não expõe a geometria dos cabos,
+    então o máximo que a tela aponta é um <em>trecho suspeito</em> entre caixas, nunca
+    "cabo X rompido". Não procure o rompimento onde a linha passa.
   </p>
   {% if mapa_nota %}
   <p class="text-xs text-gray-400 mb-1 leading-relaxed">{{ mapa_nota }}</p>

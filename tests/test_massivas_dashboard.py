@@ -36,6 +36,7 @@ from apps.dashboards.massivas import (
     compute_motivos,
     compute_veredito,
     compute_vizinhanca,
+    compute_mapa,
     element_references,
     outage_row,
 )
@@ -1289,3 +1290,113 @@ class TestVizinhanca:
         assert "Quem não caiu no mesmo caminho" in html
         assert "B31-SP01" in html
         assert "0/3 fora" in html
+
+
+# =============================================================================
+# Ligações no mapa (R3) — vínculo de cadastro, nunca traçado de cabo
+# =============================================================================
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestLigacoesDoMapa:
+    def _planta(self, org: Organization) -> None:
+        set_current_organization(org)
+        NetworkElement.objects.create(
+            organization=org, source_type="IXC", kind=NetworkElement.Kind.POP,
+            external_id="POP-1", name="POP Centro",
+            latitude=-23.500, longitude=-47.450,
+        )
+        NetworkElement.objects.create(
+            organization=org, source_type="IXC", kind=NetworkElement.Kind.OLT,
+            external_id="OLT-1", name="OLT 1",
+            parent_kind=NetworkElement.Kind.POP, parent_external_id="POP-1",
+        )
+        # Perto do POP e longe dele — o sentido do trecho depende disso.
+        for ext, nome, lat in (("CTO-P", "perto", -23.502), ("CTO-L", "longe", -23.560)):
+            NetworkElement.objects.create(
+                organization=org, source_type="IXC", kind=NetworkElement.Kind.CTO,
+                external_id=ext, name=nome, latitude=lat, longitude=-47.450,
+                parent_kind=NetworkElement.Kind.OLT, parent_external_id="OLT-1",
+            )
+
+    def test_liga_cada_caixa_ao_pop_que_a_alimenta(
+        self, organization_a: Organization
+    ) -> None:
+        """A OLT não tem coordenada em nenhuma das três da planta real, então a
+        ponta de cima da ligação é o POP — que a OLT aponta."""
+        self._planta(organization_a)
+        quedas = [
+            _drop(organization_a, login="x", cto="CTO-P", lat=-23.502, lon=-47.450)
+        ]
+        mapa = compute_mapa(organization_a, quedas)
+        assert len(mapa["ligacoes"]) == 1
+        assert mapa["ligacoes"][0]["para"] == (-23.500, -47.450)
+        assert "POP Centro" in mapa["ligacoes"][0]["label"]
+
+    def test_trecho_sai_da_caixa_mais_proxima_do_pop(
+        self, organization_a: Organization
+    ) -> None:
+        """O sentido tem que bater com o rótulo do trecho suspeito: se a tela
+        desenhasse a seta para um lado e o texto dissesse outro, uma das duas
+        estaria mentindo."""
+        self._planta(organization_a)
+        quedas = [
+            _drop(organization_a, login="a", cto="CTO-P", lat=-23.502, lon=-47.450),
+            _drop(organization_a, login="b", cto="CTO-L", lat=-23.560, lon=-47.450),
+        ]
+        mapa = compute_mapa(organization_a, quedas)
+        assert len(mapa["trecho"]) == 1
+        assert mapa["trecho"][0]["de"] == (-23.502, -47.450)
+        assert mapa["trecho"][0]["para"] == (-23.560, -47.450)
+
+    def test_uma_caixa_so_nao_tem_trecho(self, organization_a: Organization) -> None:
+        self._planta(organization_a)
+        quedas = [
+            _drop(organization_a, login="a", cto="CTO-P", lat=-23.502, lon=-47.450)
+        ]
+        assert compute_mapa(organization_a, quedas)["trecho"] == []
+
+    def test_sem_pop_no_cadastro_nao_desenha_nada(
+        self, organization_a: Organization
+    ) -> None:
+        """Sem POP não há como saber quem está a montante. Chutar um sentido
+        seria pior que não desenhar."""
+        set_current_organization(organization_a)
+        NetworkElement.objects.create(
+            organization=organization_a, source_type="IXC",
+            kind=NetworkElement.Kind.CTO, external_id="CTO-S", name="sem pai",
+            latitude=-23.502, longitude=-47.450,
+        )
+        quedas = [
+            _drop(organization_a, login="a", cto="CTO-S", lat=-23.502, lon=-47.450),
+            _drop(organization_a, login="b", cto="CTO-S", lat=-23.503, lon=-47.451),
+        ]
+        mapa = compute_mapa(organization_a, quedas)
+        assert mapa["ligacoes"] == []
+        assert mapa["trecho"] == []
+
+    def test_caixa_vizinha_intacta_entra_como_ponto(
+        self, organization_a: Organization
+    ) -> None:
+        self._planta(organization_a)
+        quedas = [
+            _drop(organization_a, login="a", cto="CTO-P", lat=-23.502, lon=-47.450)
+        ]
+        mapa = compute_mapa(
+            organization_a,
+            quedas,
+            vizinhas_intactas=[
+                {"cto": "CTO-L", "nome": "longe", "lat": -23.56, "lon": -47.45, "de_pe": 9},
+                # Sem coordenada não vira ponto — mas segue na lista do card.
+                {"cto": "CTO-X", "nome": "sem geo", "lat": None, "lon": None, "de_pe": 4},
+            ],
+        )
+        assert len(mapa["vizinhas"]) == 1
+        assert "9 no ar" in mapa["vizinhas"][0]["label"]
+
+    def test_legenda_avisa_que_a_linha_nao_e_o_cabo(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        html = client.get(URL).content.decode()
+        assert "não o caminho da fibra" in html
+        assert "Nenhum cabo é desenhado" in html

@@ -171,11 +171,32 @@ Três caminhos a testar, em ordem de custo:
 **Entrega:** resposta sim/não por caminho, com o que foi tentado. Se algum der
 certo, vira épico próprio (traçado real muda tudo).
 
-### R3 — Desenhar as ligações lógicas no mapa
+### R3 — Desenhar as ligações lógicas no mapa — FEITA (2026-09-18)
 Camadas 1 e 2 da seção 2, com legenda explícita e estilo pontilhado.
 Inclui: seta apontando da CTO a montante para as demais; POP no mapa sempre que
 houver massiva (hoje ele só aparece como ponto solto).
 **Depende de:** nada. É a tarefa que dá resultado visível mais rápido.
+
+**Como ficou.** Duas camadas de linha, ambas **tracejadas**: cinza da caixa até o
+POP que a alimenta, laranja da caixa mais próxima do POP até as demais afetadas.
+O sentido do trecho usa a mesma `haversine_meters` do detector (agora pública) —
+se a tela desenhasse a seta para um lado e o rótulo do trecho dissesse outro, uma
+das duas estaria mentindo. Sem POP no cadastro não se desenha nada: chutar o
+sentido seria pior.
+
+O tracejado é construído na mão, quebrando cada segmento em pedaços separados
+por `None`, porque **o Plotly não tem `dash` em traço de mapa**. Linha cheia aqui
+leria como traçado de cabo, e o técnico cavaria onde a linha passa.
+
+Junto entrou a parte do mapa que faltava em **R6**: as caixas vizinhas intactas
+como ponto verde-escuro.
+
+**Dois erros que só a imagem pegou:**
+1. Zoom fixo 12 espremia o evento num canto e as ligações, curtas, sumiam. O
+   enquadramento agora sai do conteúdo (bounding box dos pontos).
+2. A primeira versão do cálculo de zoom cortou o POP para fora do quadro: o
+   MapLibre serve tile de **512 px**, não os 256 px do Web Mercator clássico, e
+   errar isso custa exatamente um nível de zoom.
 
 ### R4 — Resumir o trecho por área (rebaixada)
 A ideia original era agrupar por derivação física. **R1 mostrou que o prefixo não
@@ -192,7 +213,7 @@ pista, é ruído — e dá ao técnico a sensação falsa de que o sistema sabe 
 
 **Só destrava se R2 achar geometria.** Até lá, não implementar.
 
-### R6 — "Quem não caiu" no card — FEITA (2026-09-18, parcial)
+### R6 — "Quem não caiu" no card e no mapa — FEITA (2026-09-18)
 Para cada massiva: irmãos do mesmo elemento que continuam de pé, com
 caídos/total ("CTO-14: 12/12 fora · CTO-13, mesma PON: 0/9 fora"). No mapa, as
 CTOs vizinhas online entram como pontos vazados. Quem ficou de pé delimita o
@@ -213,8 +234,7 @@ um lugar onde não há ninguém para cair. O denominador é o mesmo do detector
 (`active_logins_per_cto`, agora pública pelo mesmo motivo: duas contagens que
 deveriam ser iguais divergem no dia em que só uma for corrigida).
 
-**Falta a parte do mapa** (CTOs vizinhas online como pontos vazados) — entra
-junto com R3, que é quem mexe nas camadas do mapa.
+A parte do mapa (caixas vizinhas intactas como ponto) entrou junto com R3.
 
 ### R7 — Veredito de causa provável no card da massiva — FEITA (2026-09-18)
 Uma linha, no topo do card: "provável **energia** — 78% dying-gasp, quedas

@@ -6,6 +6,7 @@ template renderiza via `Plotly.newPlot(div_id, JSON.parse(json_str), {...})`.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import plotly.graph_objects as go
@@ -2435,6 +2436,97 @@ def os_backlog_por_tipo(rows: list[dict[str, Any]]) -> str:
 # estáticos): muda esta URL, o resto do código não.
 _BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/positron"
 
+# Em quantos pedaços um segmento é quebrado para virar tracejado. Ímpar de
+# propósito: começa e termina com traço desenhado, em vez de sumir na ponta.
+_DASH_PEDACOS = 7
+
+
+# Tamanho do quadro do mapa na tela (`_massivas_mapa.html`). Entra na conta do
+# zoom: enquadrar 2 km num quadro largo e baixo não é o mesmo zoom que num
+# quadrado.
+_MAPA_LARGURA_PX = 1000
+_MAPA_ALTURA_PX = 460
+_MAPA_ZOOM_MAX = 16.0
+_MAPA_ZOOM_MIN = 3.0
+# O MapLibre (que é o motor por baixo do `scattermap`) serve tile de 512 px, não
+# os 256 px do Web Mercator clássico. Errar isso custa exatamente um nível de
+# zoom — o mapa fecha o dobro do necessário e corta o POP para fora do quadro.
+_TILE_PX = 512
+
+
+def _map_enquadramento(pontos: list[dict[str, Any]]) -> tuple[dict[str, float], float]:
+    """Centro e zoom que cabem todos os pontos, com folga.
+
+    Zoom fixo era o que havia enquanto o mapa mostrava a base inteira. Agora que
+    ele mostra só as massivas abertas, um zoom de cidade deixa o evento do
+    tamanho de uma moeda no centro da tela — e as ligações tracejadas, que são
+    curtas, somem. O enquadramento passa a sair do conteúdo.
+
+    A conta é a do Web Mercator: cada nível de zoom dobra a resolução. Pega-se o
+    zoom que cabe na horizontal e o que cabe na vertical, e fica o menor dos
+    dois.
+    """
+    lats = [p["lat"] for p in pontos]
+    lons = [p["lon"] for p in pontos]
+    centro = {"lat": (min(lats) + max(lats)) / 2, "lon": (min(lons) + max(lons)) / 2}
+
+    # Um ponto só (ou todos empilhados) não tem extensão: aproxima no bastante
+    # pra ver a rua, sem fingir precisão que o ponto não tem.
+    span_lat = max(max(lats) - min(lats), 1e-4)
+    span_lon = max(max(lons) - min(lons), 1e-4)
+    # A longitude encolhe com o cosseno da latitude; sem isso o enquadramento
+    # sai apertado na vertical no hemisfério sul.
+    span_lat_equivalente = span_lat / max(math.cos(math.radians(centro["lat"])), 0.1)
+
+    zoom_x = math.log2(360 / span_lon * (_MAPA_LARGURA_PX / _TILE_PX))
+    zoom_y = math.log2(360 / span_lat_equivalente * (_MAPA_ALTURA_PX / _TILE_PX))
+    # A folga tira meio nível: pontos colados na borda do quadro ficam ilegíveis.
+    zoom = min(zoom_x, zoom_y) - 0.5
+    return centro, max(_MAPA_ZOOM_MIN, min(_MAPA_ZOOM_MAX, round(zoom, 1)))
+
+
+def _map_dashed_trace(
+    segmentos: list[dict[str, Any]], *, nome: str, cor: str, largura: float
+) -> list[go.Scattermap]:
+    """Linha TRACEJADA entre dois pontos do mapa.
+
+    O Plotly não tem `dash` em traço de mapa: linha de mapa sai sempre cheia. E
+    linha cheia aqui seria mentira — estas ligações são inferência de cadastro
+    (caixa → POP que a alimenta), não o caminho da fibra, que a API do IXC não
+    expõe (§2.3 do plano). Um técnico que leia a linha como traçado vai cavar
+    onde ela passa.
+
+    Então o tracejado é construído na mão: cada segmento vira uma sequência de
+    pedaços curtos separados por `None`, que é como o Plotly quebra a linha. O
+    custo é multiplicar os pontos de cada segmento por `_DASH_PEDACOS`; para
+    dezenas de segmentos é irrelevante.
+    """
+    if not segmentos:
+        return []
+    lats: list[float | None] = []
+    lons: list[float | None] = []
+    for seg in segmentos:
+        lat1, lon1 = seg["de"]
+        lat2, lon2 = seg["para"]
+        for i in range(_DASH_PEDACOS):
+            # Desenha o pedaço i e pula o seguinte — daí o passo de 2.
+            if i % 2:
+                continue
+            t0 = i / _DASH_PEDACOS
+            t1 = (i + 1) / _DASH_PEDACOS
+            lats += [lat1 + (lat2 - lat1) * t0, lat1 + (lat2 - lat1) * t1, None]
+            lons += [lon1 + (lon2 - lon1) * t0, lon1 + (lon2 - lon1) * t1, None]
+    return [
+        go.Scattermap(
+            lat=lats,
+            lon=lons,
+            mode="lines",
+            name=nome,
+            line={"width": largura, "color": cor},
+            hoverinfo="skip",
+        )
+    ]
+
 
 def outage_map(mapa: dict[str, Any]) -> str:
     """Mapa da massiva — quem está fora, quem voltou, CTOs afetadas e POPs (#146).
@@ -2450,9 +2542,24 @@ def outage_map(mapa: dict[str, Any]) -> str:
         ("clientes", "Fora agora", "#dc2626", 9),
         ("voltaram", "Já voltou", "#16a34a", 9),
         ("ctos", "CTO afetada", "#f59e0b", 13),
+        ("vizinhas", "Caixa vizinha no ar", "#059669", 13),
         ("pops", "POP", "#2563eb", 15),
     ]
-    traces = []
+    # As ligações entram ANTES dos pontos para ficarem por baixo deles.
+    traces = [
+        *_map_dashed_trace(
+            mapa.get("ligacoes") or [],
+            nome="Ligação lógica até o POP",
+            cor="#6b7280",
+            largura=2,
+        ),
+        *_map_dashed_trace(
+            mapa.get("trecho") or [],
+            nome="Trecho suspeito",
+            cor="#ea580c",
+            largura=4,
+        ),
+    ]
     todos: list[dict[str, Any]] = []
     for chave, nome, cor, tamanho in camadas:
         pontos = mapa.get(chave) or []
@@ -2470,11 +2577,7 @@ def outage_map(mapa: dict[str, Any]) -> str:
         )
 
     if todos:
-        centro = {
-            "lat": sum(p["lat"] for p in todos) / len(todos),
-            "lon": sum(p["lon"] for p in todos) / len(todos),
-        }
-        zoom = 12
+        centro, zoom = _map_enquadramento(todos)
     else:
         # Sem ponto nenhum o mapa ainda renderiza (o estado vazio é o normal);
         # fica no enquadramento do Brasil em vez de no golfo da Guiné.

@@ -600,7 +600,7 @@ def _closest_to_pop(cto_ids: Sequence[str], topology: _ResolvedTopology) -> str:
         point = topology.cto_coordinates.get(cto)
         if point is None:
             continue
-        distance = _haversine_meters(pop_point, point)
+        distance = haversine_meters(pop_point, point)
         if best is None or distance < best[0]:
             best = (distance, cto)
     return best[1] if best else sorted(cto_ids)[0]
@@ -643,7 +643,7 @@ def _geo_clusters(
     for i in range(len(located)):
         for j in range(i + 1, len(located)):
             a, b = located[i], located[j]
-            if _haversine_meters(_point(a), _point(b)) <= geo_radius_meters:
+            if haversine_meters(_point(a), _point(b)) <= geo_radius_meters:
                 parent[find(i)] = find(j)
 
     groups: dict[int, list[DropInput]] = defaultdict(list)
@@ -687,7 +687,13 @@ def _geo_fraction(drops: Sequence[DropInput], topology: _ResolvedTopology) -> fl
     return _fraction(len(drops), sum(topology.active_logins(cto) for cto in ctos))
 
 
-def _haversine_meters(a: tuple[float, float], b: tuple[float, float]) -> float:
+def haversine_meters(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Distância entre dois pontos em metros.
+
+    Pública porque o mapa (R3) precisa da MESMA distância que o detector usa
+    para decidir qual caixa está a montante — se a tela desenhar a seta em uma
+    direção e o rótulo do trecho disser outra, uma das duas está mentindo.
+    """
     lat1, lon1 = math.radians(a[0]), math.radians(a[1])
     lat2, lon2 = math.radians(b[0]), math.radians(b[1])
     dlat, dlon = lat2 - lat1, lon2 - lon1
