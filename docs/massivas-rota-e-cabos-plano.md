@@ -192,12 +192,29 @@ pista, é ruído — e dá ao técnico a sensação falsa de que o sistema sabe 
 
 **Só destrava se R2 achar geometria.** Até lá, não implementar.
 
-### R6 — "Quem não caiu" no card e no mapa
+### R6 — "Quem não caiu" no card — FEITA (2026-09-18, parcial)
 Para cada massiva: irmãos do mesmo elemento que continuam de pé, com
 caídos/total ("CTO-14: 12/12 fora · CTO-13, mesma PON: 0/9 fora"). No mapa, as
 CTOs vizinhas online entram como pontos vazados. Quem ficou de pé delimita o
 trecho tão bem quanto quem caiu, e hoje isso não aparece em lugar nenhum.
 **Depende de:** nada.
+
+**Como ficou.** A vizinhança sai da **PON**, não da OLT: a PON é propriedade do
+login (§2.5c), então as portas da massiva vêm dos logins que caíram e as caixas
+irmãs são as que têm login nessas mesmas portas. Quando os afetados não têm PON
+no cadastro, o bloco declara que não dá para determinar — cair para "mesma OLT"
+traria centenas de caixas sem relação com o trecho, o que é pior do que não
+responder.
+
+A caixa **intacta** encabeça a lista: é ela que marca o limite. E intacta exige
+denominador > 0 — uma caixa cujo único login é de contrato cancelado tem zero
+ativos, e oferecê-la como "0/0 fora, intacta" seria apontar como limite do trecho
+um lugar onde não há ninguém para cair. O denominador é o mesmo do detector
+(`active_logins_per_cto`, agora pública pelo mesmo motivo: duas contagens que
+deveriam ser iguais divergem no dia em que só uma for corrigida).
+
+**Falta a parte do mapa** (CTOs vizinhas online como pontos vazados) — entra
+junto com R3, que é quem mexe nas camadas do mapa.
 
 ### R7 — Veredito de causa provável no card da massiva — FEITA (2026-09-18)
 Uma linha, no topo do card: "provável **energia** — 78% dying-gasp, quedas

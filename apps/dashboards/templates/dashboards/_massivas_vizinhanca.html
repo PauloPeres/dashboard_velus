@@ -1,0 +1,64 @@
+{% comment %}
+Quem NÃO caiu no mesmo caminho (R6).
+
+"Caíram 31 clientes" não diz onde procurar. "As 3 caixas da PON 364 estão 100%
+fora e a CTO 1288, na mesma PON, está 9/9 no ar" diz: o problema está entre a
+1288 e as outras três. A caixa intacta é o que marca o limite do trecho, e por
+isso ela vem primeiro na lista.
+
+A vizinhança sai da PON, que é propriedade do login e não da caixa. Quando os
+afetados não têm PON no cadastro, o bloco diz isso em vez de cair para "mesma
+OLT" — que traria centenas de caixas sem relação com o trecho.
+
+Espera a variável `z` (dict de compute_vizinhanca).
+{% endcomment %}
+{% if z %}
+<div class="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+  <p class="text-[10px] uppercase tracking-wider font-semibold text-gray-400">
+    Quem não caiu no mesmo caminho
+  </p>
+
+  {% if not z.determinavel %}
+  <p class="text-xs text-gray-500 mt-1 leading-relaxed">{{ z.motivo }}</p>
+
+  {% elif not z.irmas %}
+  <p class="text-xs text-gray-500 mt-1 leading-relaxed">
+    Nenhuma outra caixa divide a PON desta massiva — não há vizinha para comparar,
+    então o limite do trecho não sai daqui.
+  </p>
+
+  {% else %}
+  <p class="text-xs text-gray-600 mt-1 leading-relaxed">
+    {{ z.n_irmas }} caixa{{ z.n_irmas|pluralize:"s" }} dividem a mesma porta PON e
+    não estão nesta massiva{% if z.n_intactas %} — <strong>{{ z.n_intactas }}</strong>
+    continua{{ z.n_intactas|pluralize:"m" }} 100% no ar, com {{ z.logins_de_pe }}
+    login{{ z.logins_de_pe|pluralize:"s" }} de pé{% endif %}.
+    Se a caixa intacta fica depois do ponto suspeito, o rompimento não é lá.
+  </p>
+
+  <ul class="mt-2 space-y-1">
+    {% for i in z.irmas|slice:":6" %}
+    <li class="text-xs flex items-baseline gap-2">
+      <span class="w-2 h-2 rounded-full shrink-0 mt-1
+                   {% if i.intacta %}bg-emerald-500{% else %}bg-amber-500{% endif %}"></span>
+      <span class="font-medium text-gray-700">{{ i.nome }}</span>
+      <span class="{% if i.intacta %}text-emerald-700{% else %}text-amber-700{% endif %}">
+        {% if i.total %}{{ i.fora }}/{{ i.total }} fora{% else %}sem denominador no cadastro{% endif %}
+      </span>
+    </li>
+    {% endfor %}
+    {% if z.n_irmas > 6 %}
+    <li class="text-xs text-gray-400">e mais {{ z.n_irmas|add:"-6" }} caixa{{ z.n_irmas|add:"-6"|pluralize:"s" }} na mesma PON.</li>
+    {% endif %}
+  </ul>
+
+  {% if z.sem_denominador %}
+  <p class="text-[11px] text-gray-400 mt-2 leading-relaxed">
+    {{ z.sem_denominador }} caixa{{ z.sem_denominador|pluralize:"s" }} sem contagem de
+    logins no cadastro: para ela{{ z.sem_denominador|pluralize:"s" }} não dá para dizer
+    quanto caiu, só que não está nesta massiva.
+  </p>
+  {% endif %}
+  {% endif %}
+</div>
+{% endif %}

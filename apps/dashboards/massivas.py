@@ -31,6 +31,7 @@ from typing import Any
 
 from apps.customers.infrastructure.models import Contract
 from apps.network.infrastructure.models import (
+    Connection,
     ConnectionDropEvent,
     ConnectionPollState,
     NetworkElement,
@@ -165,6 +166,7 @@ def outage_row(
     *,
     referencia: str = "",
     veredito: dict[str, Any] | None = None,
+    vizinhanca: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Uma massiva pronta pro template, com escopo e fração já costurados.
 
@@ -176,8 +178,9 @@ def outage_row(
     Pirapora"), derivado do cadastro por `element_references`. Vem de fora
     porque a derivação é uma query e esta função é chamada em laço.
 
-    `veredito` (R7) também vem de fora, e pelo mesmo motivo: depende das quedas
-    da massiva, que são outra query. Ausente, a linha sai como sempre saiu.
+    `veredito` (R7) e `vizinhanca` (R6) também vêm de fora, e pelo mesmo motivo:
+    dependem das quedas da massiva, que são outra query. Ausentes, a linha sai
+    como sempre saiu.
     """
     escopo_nome = _SCOPE_NOUN.get(outage.scope, outage.scope)
     fracao = outage.affected_fraction or 0.0
@@ -233,6 +236,7 @@ def outage_row(
         "mrr_at_risk": outage.mrr_at_risk or Decimal("0"),
         "is_open": outage.is_open,
         "veredito": veredito,
+        "vizinhanca": vizinhanca,
     }
 
 
@@ -284,9 +288,11 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
         .only(
             "drop_event",
             *(f"drop_event__{c}" for c in _CAMPOS_DE_QUEDA_NO_MAPA),
-            # A causa da ONU mora na Connection e é o insumo do veredito (R7).
+            # A causa da ONU e a porta PON moram na Connection: insumos do
+            # veredito (R7) e da vizinhança (R6).
             "drop_event__connection",
             "drop_event__connection__onu_last_drop_cause",
+            "drop_event__connection__pon_external_id",
         )
     )
     # `drop_event` é SET_NULL: a queda pode ter sido podada e a massiva
@@ -316,6 +322,7 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
             o,
             referencia=referencias.get(o.pk, ""),
             veredito=compute_veredito(quedas_por_massiva.get(o.pk, []), scope=o.scope),
+            vizinhanca=compute_vizinhanca(org, quedas_por_massiva.get(o.pk, [])),
         )
         for o in abertas
     ]
@@ -645,6 +652,109 @@ def _cronologia(quedas: list[ConnectionDropEvent]) -> dict[str, Any]:
     }
 
 
+# =============================================================================
+# Vizinhança: quem NÃO caiu no mesmo caminho (R6)
+# =============================================================================
+# "Caíram 31 clientes" não diz onde procurar. "As 3 caixas da PON 364 estão
+# 100% fora e a CTO 1288, na mesma PON, está 9/9 no ar" diz: o problema está
+# entre a 1288 e as outras três. Quem ficou de pé delimita o trecho tão bem
+# quanto quem caiu — e some da tela se ninguém for buscar.
+#
+# A vizinhança é derivada pela PON, e a PON é propriedade do LOGIN, não da caixa
+# (§2.5c: 26% das CTOs são alimentadas por mais de uma porta). Então as PONs da
+# massiva saem dos logins que caíram, e as caixas irmãs são as que têm login
+# nessas mesmas PONs.
+
+
+def compute_vizinhanca(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str, Any]:
+    """Caixas da mesma PON que a massiva não levou — e quanto de cada uma caiu.
+
+    Devolve `determinavel=False` quando a PON dos afetados não é conhecida. Sem
+    PON não há irmã: cair para "mesma OLT" encheria a tela com centenas de
+    caixas que não têm relação nenhuma com o trecho, o que é pior do que não
+    responder.
+    """
+    from apps.network.application.outage_detection import active_logins_per_cto
+
+    ctos_afetadas = {q.cto_external_id for q in quedas if q.cto_external_id}
+    pons = set()
+    for q in quedas:
+        conexao = getattr(q, "connection", None)
+        pon = (getattr(conexao, "pon_external_id", "") or "").strip()
+        if pon:
+            pons.add(pon)
+
+    if not pons:
+        return {
+            "determinavel": False,
+            "motivo": (
+                "As quedas desta massiva não têm porta PON no cadastro, então "
+                "não dá para dizer quais caixas dividem o mesmo caminho."
+            ),
+            "ctos_afetadas": len(ctos_afetadas),
+        }
+
+    # Caixas que têm login em alguma das PONs da massiva e não estão entre as
+    # afetadas: são as candidatas a delimitar o trecho.
+    irmas_ids = set(
+        Connection.objects.filter(organization=org, pon_external_id__in=pons)
+        .exclude(cto_external_id="")
+        .exclude(cto_external_id__in=ctos_afetadas)
+        .values_list("cto_external_id", flat=True)
+        .distinct()
+    )
+
+    denominadores = active_logins_per_cto()
+    nomes = {
+        e.external_id: (e.name or e.external_id)
+        for e in NetworkElement.objects.filter(
+            organization=org,
+            kind=NetworkElement.Kind.CTO,
+            external_id__in=irmas_ids | ctos_afetadas,
+        ).only("external_id", "name")
+    }
+
+    # Quantos de cada caixa irmã estão fora AGORA — uma queda aberta é queda
+    # aberta, pertença ela a esta massiva ou a outra.
+    fora_por_cto: dict[str, int] = {}
+    for cto_id in ConnectionDropEvent.objects.filter(
+        organization=org, restored_at__isnull=True, cto_external_id__in=irmas_ids
+    ).values_list("cto_external_id", flat=True):
+        fora_por_cto[cto_id] = fora_por_cto.get(cto_id, 0) + 1
+
+    irmas = []
+    for cto_id in sorted(irmas_ids):
+        total = denominadores.get(cto_id, 0)
+        fora = fora_por_cto.get(cto_id, 0)
+        irmas.append({
+            "cto": cto_id,
+            "nome": nomes.get(cto_id, cto_id),
+            "fora": fora,
+            "total": total,
+            "de_pe": max(total - fora, 0),
+            # Caixa intacta é a que mais informa: é ela que marca o limite do
+            # trecho. Por isso vira flag e não só um número a comparar.
+            "intacta": fora == 0 and total > 0,
+        })
+    # Intactas primeiro, depois as maiores: a leitura útil é "quem escapou".
+    irmas.sort(key=lambda i: (not i["intacta"], -i["total"]))
+
+    intactas = [i for i in irmas if i["intacta"]]
+    return {
+        "determinavel": True,
+        "pons": sorted(pons),
+        "ctos_afetadas": len(ctos_afetadas),
+        "irmas": irmas,
+        "n_irmas": len(irmas),
+        "n_intactas": len(intactas),
+        # Só das INTACTAS: é esse número que a frase da tela usa ("1 caixa
+        # continua 100% no ar, com 9 logins de pé"). Somar as parciais aqui
+        # faria a intacta parecer maior do que é.
+        "logins_de_pe": sum(i["de_pe"] for i in intactas),
+        "sem_denominador": sum(1 for i in irmas if i["total"] == 0),
+    }
+
+
 def compute_mapa(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str, Any]:
     """Pontos do mapa: quem está fora, quem já voltou, CTOs afetadas e POPs.
 
@@ -903,6 +1013,7 @@ def compute_massiva_detalhe(org: Any, outage: OutageEvent) -> dict[str, Any]:
             outage,
             referencia=element_references(org, [outage]).get(outage.pk, ""),
             veredito=compute_veredito(quedas, scope=outage.scope),
+            vizinhanca=compute_vizinhanca(org, quedas),
         ),
         "linhas": linhas,
         "sinal_disponivel": _signal_fields_available(),

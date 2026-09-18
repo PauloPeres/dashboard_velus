@@ -35,6 +35,7 @@ from apps.dashboards.massivas import (
     compute_causas_onu,
     compute_motivos,
     compute_veredito,
+    compute_vizinhanca,
     element_references,
     outage_row,
 )
@@ -1166,3 +1167,125 @@ class TestVeredito:
         assert "provável falta de energia" in html
         # A base do veredito anda junto com ele — nunca o rótulo sozinho.
         assert "Causa conhecida em 8 de 8 quedas" in html
+
+
+# =============================================================================
+# Quem NÃO caiu no mesmo caminho (R6) — o que delimita o trecho
+# =============================================================================
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestVizinhanca:
+    def _conn(
+        self, org: Organization, *, login: str, cto: str, pon: str, contrato: str = ""
+    ) -> Connection:
+        set_current_organization(org)
+        return Connection.objects.create(
+            organization=org,
+            source_type="IXC",
+            external_id=f"c-{login}",
+            customer_external_id=f"cu-{login}",
+            contract_external_id=contrato,
+            login=login,
+            pon_external_id=pon,
+            cto_external_id=cto,
+            status=Connection.Status.ONLINE,
+        )
+
+    def test_caixa_intacta_na_mesma_pon_aparece_primeiro(
+        self, organization_a: Organization
+    ) -> None:
+        """A caixa que escapou é o que marca o limite do trecho, então ela
+        encabeça a lista — não some no meio das que também caíram."""
+        set_current_organization(organization_a)
+        # A massiva: 2 logins da CTO-10, na PON 7.
+        self._conn(organization_a, login="a1", cto="CTO-10", pon="7")
+        self._conn(organization_a, login="a2", cto="CTO-10", pon="7")
+        # A vizinha intacta: 3 logins na mesma PON, outra caixa.
+        for i in range(3):
+            self._conn(organization_a, login=f"b{i}", cto="CTO-11", pon="7")
+        # Uma vizinha que também tem gente fora.
+        for i in range(2):
+            self._conn(organization_a, login=f"c{i}", cto="CTO-12", pon="7")
+        _drop(organization_a, login="c0", cto="CTO-12")
+
+        quedas = [_drop(organization_a, login="a1", cto="CTO-10")]
+        quedas[0].connection.pon_external_id = "7"
+
+        z = compute_vizinhanca(organization_a, quedas)
+        assert z["determinavel"] is True
+        assert z["n_irmas"] == 2
+        # Intacta primeiro.
+        assert z["irmas"][0]["cto"] == "CTO-11"
+        assert z["irmas"][0]["intacta"] is True
+        assert z["irmas"][0]["de_pe"] == 3
+        assert z["n_intactas"] == 1
+
+    def test_sem_pon_no_cadastro_o_bloco_se_recusa(
+        self, organization_a: Organization
+    ) -> None:
+        """Sem PON não há irmã. Cair para 'mesma OLT' traria centenas de caixas
+        sem relação com o trecho — pior que não responder."""
+        quedas = [_drop(organization_a, login="x1", cto="CTO-10")]
+        z = compute_vizinhanca(organization_a, quedas)
+        assert z["determinavel"] is False
+        assert "porta PON" in z["motivo"]
+
+    def test_caixa_so_com_contrato_inativo_nao_vira_caixa_intacta(
+        self, organization_a: Organization
+    ) -> None:
+        """Caixa cujo único login é de contrato cancelado tem denominador zero.
+
+        Ela é irmã pela PON, mas dizer "0/0 fora — intacta" seria oferecer como
+        limite do trecho uma caixa onde não há ninguém para cair. O denominador
+        é o mesmo do detector (contrato ATIVO), então ela sai como sem contagem
+        no cadastro e a tela declara isso.
+        """
+        set_current_organization(organization_a)
+        Contract.objects.create(
+            organization=organization_a,
+            source_type="IXC",
+            external_id="ctr-cancelado",
+            customer_external_id="cust-9",
+            plan_name="Fibra 500MB",
+            monthly_amount=Decimal("99.90"),
+            status=Contract.Status.CANCELED,
+        )
+        self._conn(organization_a, login="d1", cto="CTO-20", pon="9")
+        self._conn(
+            organization_a, login="d2", cto="CTO-21", pon="9",
+            contrato="ctr-cancelado",
+        )
+
+        quedas = [_drop(organization_a, login="d1", cto="CTO-20")]
+        quedas[0].connection.pon_external_id = "9"
+        z = compute_vizinhanca(organization_a, quedas)
+        irma = next(i for i in z["irmas"] if i["cto"] == "CTO-21")
+        assert irma["total"] == 0
+        assert irma["intacta"] is False
+        assert z["sem_denominador"] == 1
+        assert z["n_intactas"] == 0
+
+    def test_card_mostra_a_vizinhanca(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        outage = _outage(organization_a, affected=5)
+        NetworkElement.objects.create(
+            organization=organization_a, source_type="IXC",
+            kind=NetworkElement.Kind.CTO, external_id="CTO-31", name="B31-SP01",
+        )
+        for i in range(3):
+            self._conn(organization_a, login=f"viz{i}", cto="CTO-31", pon="5")
+        for i in range(5):
+            drop = _drop(organization_a, login=f"cai{i}", cto="CTO-30")
+            drop.connection.pon_external_id = "5"
+            drop.connection.save(update_fields=["pon_external_id"])
+            OutageAffectedLogin.objects.create(
+                organization=organization_a, outage=outage, drop_event=drop,
+                login=drop.login, dropped_at=drop.dropped_at,
+            )
+        client.force_login(user_a)
+        html = client.get(URL).content.decode()
+        assert "Quem não caiu no mesmo caminho" in html
+        assert "B31-SP01" in html
+        assert "0/3 fora" in html

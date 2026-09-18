@@ -154,7 +154,7 @@ def _open_drops() -> tuple[list[DropInput], dict[str, ConnectionDropEvent]]:
 def _build_topology() -> TopologyInput:
     """Denominadores e hierarquia — logins de `Connection`, planta de `NetworkElement`."""
     return TopologyInput(
-        active_logins_per_cto=_active_logins_per_cto(),
+        active_logins_per_cto=active_logins_per_cto(),
         cto_to_transmitter=_cto_to_transmitter(),
         cto_to_pop=_cto_to_pop(),
         cto_coordinates=_cto_coordinates(),
@@ -163,8 +163,12 @@ def _build_topology() -> TopologyInput:
     )
 
 
-def _active_logins_per_cto() -> dict[str, int]:
+def active_logins_per_cto() -> dict[str, int]:
     """Quantos logins de contrato ATIVO cada caixa tem.
+
+    Pública porque o denominador não é só do detector: a vizinhança da massiva
+    (R6) precisa exatamente do mesmo número, e duas contagens que deveriam ser
+    iguais divergem no dia em que uma das duas for corrigida.
 
     O denominador é de contrato ativo, não de login existente: contrato
     cancelado deixa login para trás no ERP e inflaria a caixa, derrubando a
