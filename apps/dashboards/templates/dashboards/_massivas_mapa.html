@@ -2,8 +2,9 @@
 {% comment %}
 Mapa da aba de massivas (#146). Usado na tela geral e no detalhe de uma massiva.
 
-`scattermap` com tiles do OpenStreetMap — o Plotly já está self-hosted, o CSP é
-que precisou liberar `tile.openstreetmap.org`. Não usa `renderChart` porque
+`scattermap` sobre o basemap do OpenFreeMap (o tile server do OSM bloqueia uso
+por aplicação — ver `charts._BASEMAP_STYLE`); o Plotly já está self-hosted, o
+CSP é que precisou liberar `tiles.openfreemap.org`. Não usa `renderChart` porque
 aquele helper decide "tem dado?" olhando x/y/labels, que um traço de mapa não
 tem: aqui o mapa renderiza mesmo vazio, e o vazio é informação.
 {% endcomment %}

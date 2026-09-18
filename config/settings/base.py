@@ -513,19 +513,20 @@ X_FRAME_OPTIONS = "DENY"
 # -----------------------------------------------------------------------------
 # CSP (django-csp) — default deny, libera o mínimo
 # -----------------------------------------------------------------------------
-# Tiles do OpenStreetMap: o mapa da aba Quedas & Massivas (#146) é `scattermap`
-# do Plotly (self-hosted) com basemap raster do OSM. O tile chega como imagem
-# (img-src) mas o MapLibre busca por fetch (connect-src), e ele monta o worker
-# de render a partir de um blob: — sem worker-src/child-src o mapa fica em
-# branco sem erro visível. Nenhuma dependência nova: só o basemap.
+# Tiles do basemap: o mapa da aba Quedas & Massivas (#146) é `scattermap` do
+# Plotly (self-hosted) sobre o basemap do OpenFreeMap — o tile server do OSM
+# bloqueia uso por aplicação, ver o comentário em `charts._BASEMAP_STYLE`. O tile
+# chega como imagem (img-src) mas o MapLibre busca por fetch (connect-src), e
+# ele monta o worker de render a partir de um blob: — sem worker-src/child-src
+# o mapa fica em branco sem erro visível. Nenhuma dependência nova: só o basemap.
 CONTENT_SECURITY_POLICY = {
     "DIRECTIVES": {
         "default-src": ["'self'"],
         "script-src": ["'self'", "'unsafe-inline'"],
         "style-src": ["'self'", "'unsafe-inline'"],  # Tailwind compilado pode ainda usar inline
-        "img-src": ["'self'", "data:", "blob:", "https://tile.openstreetmap.org", "https://*.tile.openstreetmap.org"],
+        "img-src": ["'self'", "data:", "blob:", "https://tiles.openfreemap.org"],
         "font-src": ["'self'", "data:"],
-        "connect-src": ["'self'", "https://tile.openstreetmap.org", "https://*.tile.openstreetmap.org"],
+        "connect-src": ["'self'", "https://tiles.openfreemap.org"],
         "worker-src": ["'self'", "blob:"],
         "child-src": ["'self'", "blob:"],
         "frame-ancestors": ["'none'"],

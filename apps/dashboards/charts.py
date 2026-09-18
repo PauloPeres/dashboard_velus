@@ -2418,13 +2418,30 @@ def os_backlog_por_tipo(rows: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+# Basemap: OpenFreeMap (estilo Positron), não o tile server do OpenStreetMap.
+#
+# O tile server do openstreetmap.org é bancado por voluntários e a policy dele
+# proíbe uso por aplicação — em 2026-09 ele passou a devolver o tile "Access
+# blocked" no lugar do mapa. O OpenFreeMap serve os MESMOS dados do OSM, é feito
+# para uso em aplicação e não pede API key (o CARTO, a outra opção óbvia, hoje
+# carimba "API KEY REQUIRED" em cima de cada tile de quem não tem conta).
+#
+# É style JSON de vetor, não tile raster: o MapLibre embutido no Plotly baixa o
+# style, os tiles `.pbf`, as fontes e o sprite — por isso o CSP libera o host
+# tanto em connect-src quanto em img-src. A atribuição o próprio MapLibre
+# desenha no canto a partir do style.
+#
+# Se este provedor apertar o uso, o próximo passo é self-host (os tiles são
+# estáticos): muda esta URL, o resto do código não.
+_BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/positron"
+
+
 def outage_map(mapa: dict[str, Any]) -> str:
     """Mapa da massiva — quem está fora, quem voltou, CTOs afetadas e POPs (#146).
 
-    `scattermap` com tiles do OpenStreetMap: o Plotly já está self-hosted em
-    `static/vendor/`, então o único custo é liberar `tile.openstreetmap.org` no
-    CSP. Nenhum cabo é desenhado — a geometria não existe na API do IXC (§2.3),
-    e desenhar uma linha entre caixas seria inventar traçado.
+    `scattermap` do Plotly (self-hosted em `static/vendor/`) sobre o basemap de
+    `_BASEMAP_STYLE`. Nenhum cabo é desenhado: a geometria não existe na API do
+    IXC (§2.3), e desenhar uma linha entre caixas seria inventar traçado.
     """
     # A ordem importa: o verde entra depois do vermelho pra que um cliente que
     # voltou fique por cima do ponto antigo — é assim que a equipe vê o mapa
@@ -2467,7 +2484,10 @@ def outage_map(mapa: dict[str, Any]) -> str:
     fig = go.Figure(
         data=traces,
         layout={
-            "map": {"style": "open-street-map", "center": centro, "zoom": zoom},
+            # O style vem de _BASEMAP_STYLE, não de um estilo embutido do
+            # Plotly: todos os embutidos apontam pro tile server do OSM, que
+            # bloqueia uso por aplicação.
+            "map": {"style": _BASEMAP_STYLE, "center": centro, "zoom": zoom},
             "margin": {"l": 0, "r": 0, "t": 0, "b": 0},
             "showlegend": True,
             "legend": {"orientation": "h", "y": 0, "x": 0, "bgcolor": "rgba(255,255,255,.8)"},

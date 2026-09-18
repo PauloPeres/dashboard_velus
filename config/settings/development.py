@@ -59,9 +59,9 @@ CONTENT_SECURITY_POLICY = {
         ],
         "style-src": ["'self'", "'unsafe-inline'", "https://cdn.tailwindcss.com"],
         # Ver o comentário do CSP em base.py: o basemap do mapa de massivas.
-        "img-src": ["'self'", "data:", "blob:", "https://tile.openstreetmap.org", "https://*.tile.openstreetmap.org"],
+        "img-src": ["'self'", "data:", "blob:", "https://tiles.openfreemap.org"],
         "font-src": ["'self'", "data:"],
-        "connect-src": ["'self'", "https://tile.openstreetmap.org", "https://*.tile.openstreetmap.org"],
+        "connect-src": ["'self'", "https://tiles.openfreemap.org"],
         "worker-src": ["'self'", "blob:"],
         "child-src": ["'self'", "blob:"],
         "frame-ancestors": ["'none'"],

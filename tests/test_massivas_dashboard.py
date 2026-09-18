@@ -676,7 +676,7 @@ class TestAutoRefreshEMapa:
         assert "<html" not in html
         assert "massivas-mapa" not in html
 
-    def test_mapa_usa_tiles_do_osm_e_marca_quem_nao_tem_coordenada(
+    def test_mapa_usa_basemap_proprio_e_marca_quem_nao_tem_coordenada(
         self, client: Any, user_a: User, organization_a: Organization
     ) -> None:
         set_current_organization(organization_a)
@@ -695,7 +695,10 @@ class TestAutoRefreshEMapa:
         client.force_login(user_a)
         resp = client.get(URL)
         html = resp.content.decode()
-        assert "open-street-map" in html
+        # O tile server do OSM bloqueia uso por aplicação: o basemap tem que
+        # sair de um provedor que permita, com a atribuição junto.
+        assert "tiles.openfreemap.org" in html
+        assert "tile.openstreetmap.org" not in html
         assert resp.context["mapa"]["sem_coordenada"] == 1
         assert "não têm coordenada" in html
 
