@@ -34,6 +34,7 @@ from apps.dashboards.massivas import (
     _signal_fields_available,
     compute_causas_onu,
     compute_motivos,
+    compute_veredito,
     element_references,
     outage_row,
 )
@@ -1033,3 +1034,135 @@ class TestHistorico:
         assert historico["duracao_min"] == 28
         # Mesmo no histórico o elemento não aparece sem a fração.
         assert historico["elemento_frase"] == "OLT 2 — 3% dos logins da OLT"
+
+
+# =============================================================================
+# Veredito de causa provável (R7) — a tela diz se manda viatura ou não
+# =============================================================================
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestVeredito:
+    def test_dying_gasp_em_massa_aponta_energia(
+        self, organization_a: Organization
+    ) -> None:
+        """Numa massiva de dying-gasp não se manda equipe — espera-se a luz voltar."""
+        quedas = [
+            _drop(organization_a, login=f"e{i}", causa_onu="dying-gasp")
+            for i in range(8)
+        ]
+        v = compute_veredito(quedas, scope="GEO")
+        assert v["veredito"] == "energia"
+        assert "dying-gasp" in v["base"]
+        # GEO + energia se reforçam: a queda seguiu o alimentador, não a rede.
+        assert "geográfico" in v["reforco"]
+
+    def test_los_em_massa_aponta_fibra(self, organization_a: Organization) -> None:
+        quedas = [
+            _drop(organization_a, login=f"f{i}", causa_onu="LOSi/LOBi")
+            for i in range(8)
+        ]
+        v = compute_veredito(quedas, scope="PON")
+        assert v["veredito"] == "fibra"
+        assert "topologia" in v["reforco"]
+
+    def test_energia_com_escopo_topologico_ganha_ressalva(
+        self, organization_a: Organization
+    ) -> None:
+        """Dying-gasp numa PON é estranho: se fosse a concessionária, pegaria
+        clientes de outras PONs junto. A tela aponta a contradição em vez de
+        engolir o veredito."""
+        quedas = [
+            _drop(organization_a, login=f"g{i}", causa_onu="dying-gasp")
+            for i in range(8)
+        ]
+        v = compute_veredito(quedas, scope="PON")
+        assert v["veredito"] == "energia"
+        assert "topologia" in v["reforco"]
+
+    def test_metade_e_metade_nao_vira_veredito(
+        self, organization_a: Organization
+    ) -> None:
+        quedas = [
+            _drop(organization_a, login=f"m{i}", causa_onu="dying-gasp")
+            for i in range(5)
+        ] + [
+            _drop(organization_a, login=f"n{i}", causa_onu="LOS") for i in range(5)
+        ]
+        v = compute_veredito(quedas, scope="OLT")
+        assert v["veredito"] == "misto"
+        assert v["pct_energia"] == 50
+        assert v["pct_fibra"] == 50
+
+    def test_poucas_quedas_nao_geram_veredito(
+        self, organization_a: Organization
+    ) -> None:
+        """2 de 3 quedas viram '67% de energia' — número que parece medida e é
+        coincidência. Abaixo do mínimo a tela se recusa a opinar."""
+        quedas = [
+            _drop(organization_a, login=f"p{i}", causa_onu="dying-gasp")
+            for i in range(3)
+        ]
+        v = compute_veredito(quedas, scope="CTO")
+        assert v["veredito"] == "sem_base"
+
+    def test_cobertura_baixa_nao_gera_veredito(
+        self, organization_a: Organization
+    ) -> None:
+        """Uma causa conhecida em dez quedas não descreve a massiva."""
+        quedas = [_drop(organization_a, login=f"q{i}") for i in range(9)]
+        quedas.append(_drop(organization_a, login="q9", causa_onu="dying-gasp"))
+        v = compute_veredito(quedas, scope="OLT")
+        assert v["veredito"] == "sem_base"
+        assert v["cobertura_pct"] == 10
+
+    def test_timestamp_sintetico_fica_fora_da_cronologia(
+        self, organization_a: Organization
+    ) -> None:
+        """Na partida a frio, 189 quedas ficaram com o MESMO horário ao
+        microssegundo — era o relógio do poll, não o IXC. Ler isso como "todas
+        no mesmo instante" seria inventar simultaneidade a partir de ausência de
+        dado. Horário do IXC vem com microssegundo zero."""
+        quedas = [
+            _drop(organization_a, login=f"s{i}", causa_onu="dying-gasp")
+            for i in range(6)
+        ]
+        agora = timezone.now().replace(microsecond=123456)
+        for q in quedas:
+            q.dropped_at = agora
+        v = compute_veredito(quedas, scope="GEO")
+        assert v["cronologia"]["medivel"] is False
+        assert v["cronologia"]["com_hora_real"] == 0
+
+    def test_cronologia_mede_espalhamento_com_hora_do_ixc(
+        self, organization_a: Organization
+    ) -> None:
+        quedas = [
+            _drop(organization_a, login=f"t{i}", causa_onu="LOS") for i in range(6)
+        ]
+        base = timezone.now().replace(microsecond=0) - timedelta(minutes=10)
+        for i, q in enumerate(quedas):
+            q.dropped_at = base + timedelta(seconds=i * 30)
+        v = compute_veredito(quedas, scope="PON")
+        assert v["cronologia"]["medivel"] is True
+        assert v["cronologia"]["spread_segundos"] == 150
+        assert v["cronologia"]["spread_str"] == "2 min"
+
+    def test_card_da_massiva_mostra_o_veredito(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        outage = _outage(organization_a, affected=8)
+        for i in range(8):
+            drop = _drop(organization_a, login=f"v{i}", causa_onu="dying-gasp")
+            OutageAffectedLogin.objects.create(
+                organization=organization_a,
+                outage=outage,
+                drop_event=drop,
+                login=drop.login,
+                dropped_at=drop.dropped_at,
+            )
+        client.force_login(user_a)
+        html = client.get(URL).content.decode()
+        assert "Causa provável" in html
+        assert "provável falta de energia" in html
+        # A base do veredito anda junto com ele — nunca o rótulo sozinho.
+        assert "Causa conhecida em 8 de 8 quedas" in html

@@ -160,7 +160,12 @@ def _fracao_str(fracao: float) -> str:
     return f"{pct:.0f}%"
 
 
-def outage_row(outage: OutageEvent, *, referencia: str = "") -> dict[str, Any]:
+def outage_row(
+    outage: OutageEvent,
+    *,
+    referencia: str = "",
+    veredito: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Uma massiva pronta pro template, com escopo e fração já costurados.
 
     O domínio guarda `element_label` e `affected_fraction` separados de propósito
@@ -170,6 +175,9 @@ def outage_row(outage: OutageEvent, *, referencia: str = "") -> dict[str, Any]:
     `referencia` é o lugar humano do elemento em escopo ("no POP Portal do
     Pirapora"), derivado do cadastro por `element_references`. Vem de fora
     porque a derivação é uma query e esta função é chamada em laço.
+
+    `veredito` (R7) também vem de fora, e pelo mesmo motivo: depende das quedas
+    da massiva, que são outra query. Ausente, a linha sai como sempre saiu.
     """
     escopo_nome = _SCOPE_NOUN.get(outage.scope, outage.scope)
     fracao = outage.affected_fraction or 0.0
@@ -224,6 +232,7 @@ def outage_row(outage: OutageEvent, *, referencia: str = "") -> dict[str, Any]:
         "referencia": referencia,
         "mrr_at_risk": outage.mrr_at_risk or Decimal("0"),
         "is_open": outage.is_open,
+        "veredito": veredito,
     }
 
 
@@ -271,8 +280,14 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
         OutageAffectedLogin.objects.filter(
             organization=org, outage__ended_at__isnull=True
         )
-        .select_related("drop_event")
-        .only("drop_event", *(f"drop_event__{c}" for c in _CAMPOS_DE_QUEDA_NO_MAPA))
+        .select_related("drop_event", "drop_event__connection")
+        .only(
+            "drop_event",
+            *(f"drop_event__{c}" for c in _CAMPOS_DE_QUEDA_NO_MAPA),
+            # A causa da ONU mora na Connection e é o insumo do veredito (R7).
+            "drop_event__connection",
+            "drop_event__connection__onu_last_drop_cause",
+        )
     )
     # `drop_event` é SET_NULL: a queda pode ter sido podada e a massiva
     # sobreviver. Sem queda não há coordenada, então o afetado não vira ponto.
@@ -290,7 +305,20 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
         )
     )
     referencias = element_references(org, abertas)
-    linhas = [outage_row(o, referencia=referencias.get(o.pk, "")) for o in abertas]
+    # As quedas já vieram na query dos afetados; agrupar em memória evita uma
+    # consulta por massiva dentro do laço.
+    quedas_por_massiva: dict[int, list[ConnectionDropEvent]] = {}
+    for afetado in afetados_de_massiva:
+        if afetado.drop_event is not None:
+            quedas_por_massiva.setdefault(afetado.outage_id, []).append(afetado.drop_event)
+    linhas = [
+        outage_row(
+            o,
+            referencia=referencias.get(o.pk, ""),
+            veredito=compute_veredito(quedas_por_massiva.get(o.pk, []), scope=o.scope),
+        )
+        for o in abertas
+    ]
 
     mensalidade_afetada = sum((o.mrr_at_risk or Decimal("0")) for o in abertas)
     maior = linhas[0] if linhas else None
@@ -481,6 +509,139 @@ def compute_causas_onu(quedas: list[ConnectionDropEvent]) -> dict[str, Any]:
         "sem_causa": total - conhecidos,
         "cobertura_pct": round(conhecidos / total * 100) if total else 0,
         "linhas": linhas,
+    }
+
+
+# =============================================================================
+# Veredito de causa provável (R7)
+# =============================================================================
+# `dying-gasp` é a ONU avisando que perdeu ENERGIA antes de desligar; `LOS`,
+# `LOSi` e `LOBi` são perda de SINAL ÓPTICO. A diferença decide a ação: numa
+# massiva de dying-gasp não se manda viatura, espera-se a concessionária; onde
+# aparece LOS, é fibra e a equipe sai.
+_CAUSAS_DE_ENERGIA = {"dying-gasp"}
+_CAUSAS_DE_FIBRA = {"los", "losi", "lobi", "losi/lobi"}
+
+# Abaixo disso o veredito não sai. Não é rigor estatístico — é que 2 de 3 quedas
+# com causa conhecida viram "67% de energia", um número que parece medida e é
+# coincidência.
+_MIN_QUEDAS_PARA_VEREDITO = 5
+_MIN_COBERTURA_PARA_VEREDITO = 40
+# Concentração necessária pra nomear a causa. Entre os dois limiares o veredito
+# é "misto", que é uma resposta legítima: massiva pode ter as duas coisas.
+_PCT_PARA_NOMEAR_CAUSA = 70
+
+
+def compute_veredito(quedas: list[ConnectionDropEvent], *, scope: str = "") -> dict[str, Any]:
+    """Causa provável de uma massiva — ou a recusa explícita de opinar.
+
+    Combina o que já existe: a causa que a OLT reportou (#148), o escopo em que o
+    detector fechou o evento e a cronologia das quedas. O veredito é **provável**
+    e diz em cima do que foi formado; quando a base não dá, ele se recusa a
+    concluir em vez de arredondar para o palpite mais próximo.
+
+    Sobre a cronologia: ela entra como *descrição*, não como prova. A literatura
+    de NOC diz que rompimento derruba todo mundo no mesmo segundo e que falta de
+    energia com nobreak derruba escalonado — mas isso **não se confirmou nos
+    nossos dados** (medição de 2026-09-18, 24 massivas): o evento com maior
+    proporção de LOS é justamente o de maior espalhamento (337 s), e massivas de
+    dying-gasp puro fecham em 20 s. O `ultima_conexao_final` do IXC parece
+    registrar quando a OLT reportou, não quando o cliente caiu. Então a tela
+    mostra o espalhamento e deixa a leitura com quem opera, em vez de derivar
+    conclusão de um sinal que não se sustentou aqui.
+    """
+    total = len(quedas)
+    energia = 0
+    fibra = 0
+    for q in quedas:
+        conexao = getattr(q, "connection", None)
+        causa = (getattr(conexao, "onu_last_drop_cause", "") or "").strip()
+        if causa in _CAUSAS_AUSENTES:
+            continue
+        normalizada = causa.lower()
+        if normalizada in _CAUSAS_DE_ENERGIA:
+            energia += 1
+        elif normalizada in _CAUSAS_DE_FIBRA:
+            fibra += 1
+
+    conhecidos = energia + fibra
+    cobertura = round(conhecidos / total * 100) if total else 0
+    pct_energia = round(energia / conhecidos * 100) if conhecidos else 0
+    pct_fibra = round(fibra / conhecidos * 100) if conhecidos else 0
+
+    if total < _MIN_QUEDAS_PARA_VEREDITO or cobertura < _MIN_COBERTURA_PARA_VEREDITO:
+        veredito, rotulo = "sem_base", "sem base para opinar"
+        base = (
+            f"causa conhecida em {conhecidos} de {total} quedas — "
+            "pouco para separar energia de fibra"
+        )
+    elif pct_energia >= _PCT_PARA_NOMEAR_CAUSA:
+        veredito, rotulo = "energia", "provável falta de energia"
+        base = f"{pct_energia}% das quedas com causa conhecida reportaram dying-gasp"
+    elif pct_fibra >= _PCT_PARA_NOMEAR_CAUSA:
+        veredito, rotulo = "fibra", "provável problema de fibra"
+        base = f"{pct_fibra}% das quedas com causa conhecida reportaram perda de sinal óptico"
+    else:
+        veredito, rotulo = "misto", "sinais misturados"
+        base = (
+            f"{pct_energia}% dying-gasp e {pct_fibra}% perda de sinal entre as "
+            "quedas com causa conhecida — não é uma coisa só"
+        )
+
+    # O escopo é o segundo sinal: rompimento correlaciona com TOPOLOGIA (a queda
+    # segue a árvore da rede), falta de energia correlaciona com GEOGRAFIA (segue
+    # o alimentador da concessionária, pegando clientes de PONs diferentes). Não
+    # muda o veredito — a causa da ONU é evidência mais direta —, mas quando os
+    # dois apontam junto vale dizer, e quando se contradizem vale mais ainda.
+    reforco = ""
+    if veredito == "energia" and scope == "GEO":
+        reforco = "O agrupamento é geográfico, o que combina com queda de energia na área."
+    elif veredito == "energia" and scope in ("OLT", "PON", "CTO"):
+        reforco = (
+            "Mas o agrupamento fechou por topologia, não por geografia — se fosse "
+            "a concessionária, esperaria-se gente de outras PONs junto."
+        )
+    elif veredito == "fibra" and scope in ("OLT", "PON", "CTO"):
+        reforco = "O agrupamento fechou por topologia, o que combina com rompimento."
+
+    return {
+        "veredito": veredito,
+        "rotulo": rotulo,
+        "base": base,
+        "reforco": reforco,
+        "total": total,
+        "conhecidos": conhecidos,
+        "cobertura_pct": cobertura,
+        "pct_energia": pct_energia,
+        "pct_fibra": pct_fibra,
+        "cronologia": _cronologia(quedas),
+    }
+
+
+def _cronologia(quedas: list[ConnectionDropEvent]) -> dict[str, Any]:
+    """Espalhamento das quedas — descrição factual, sem conclusão.
+
+    91% das quedas trazem o horário real do IXC (`ultima_conexao_final`); o resto
+    cai no relógio do poll, e aí o horário é sintético. Os sintéticos saem da
+    conta: na partida a frio de 09/09, 189 quedas ficaram com o mesmo timestamp
+    ao microssegundo, o que leria como "todas no mesmo instante" sendo que é
+    ausência de dado. Timestamp do IXC vem sempre com microssegundo zero.
+    """
+    reais = sorted(
+        q.dropped_at for q in quedas
+        if q.dropped_at is not None and q.dropped_at.microsecond == 0
+    )
+    if len(reais) < 2:
+        return {"medivel": False, "com_hora_real": len(reais), "total": len(quedas)}
+    spread = int((reais[-1] - reais[0]).total_seconds())
+    return {
+        "medivel": True,
+        "com_hora_real": len(reais),
+        "total": len(quedas),
+        "spread_segundos": spread,
+        "spread_str": f"{spread} s" if spread < 120 else f"{spread // 60} min",
+        "primeira": reais[0],
+        "ultima": reais[-1],
     }
 
 
@@ -739,7 +900,9 @@ def compute_massiva_detalhe(org: Any, outage: OutageEvent) -> dict[str, Any]:
         "causas_onu": compute_causas_onu(quedas),
         "motivos": compute_motivos(quedas),
         "cabecalho": outage_row(
-            outage, referencia=element_references(org, [outage]).get(outage.pk, "")
+            outage,
+            referencia=element_references(org, [outage]).get(outage.pk, ""),
+            veredito=compute_veredito(quedas, scope=outage.scope),
         ),
         "linhas": linhas,
         "sinal_disponivel": _signal_fields_available(),

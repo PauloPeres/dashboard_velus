@@ -1,0 +1,52 @@
+{% comment %}
+Veredito de causa provável de uma massiva (R7).
+
+A tela já mostrava a distribuição de causas da ONU e deixava a conclusão inteira
+por conta de quem lê. Aqui ela dá o passo que muda a ação — dying-gasp é energia
+(não se manda viatura), LOS é fibra (a equipe sai) — sem nunca afirmar mais do
+que o dado sustenta: o rótulo é sempre "provável", vem acompanhado da base em que
+foi formado, e quando a base não dá o bloco diz isso em vez de arredondar para o
+palpite mais próximo.
+
+O espalhamento das quedas aparece como descrição, não como prova: a regra de NOC
+de que rompimento derruba todo mundo no mesmo segundo não se confirmou nos nossos
+dados (ver docstring de `compute_veredito`).
+
+Espera a variável `v` (dict de compute_veredito).
+{% endcomment %}
+{% if v %}
+<div class="rounded-lg border px-3 py-2 mt-3
+            {% if v.veredito == 'energia' %}bg-amber-50 border-amber-200
+            {% elif v.veredito == 'fibra' %}bg-red-50 border-red-200
+            {% elif v.veredito == 'misto' %}bg-gray-50 border-gray-200
+            {% else %}bg-gray-50 border-gray-200{% endif %}">
+  {% comment %}
+  Rótulo em linha própria, como no resto da tela ("Trecho suspeito" acima, valor
+  abaixo). Empilhado não depende de classe de gap pra não colar uma coisa na
+  outra.
+  {% endcomment %}
+  <p class="text-[10px] uppercase tracking-wider font-semibold
+            {% if v.veredito == 'energia' %}text-amber-700
+            {% elif v.veredito == 'fibra' %}text-red-700
+            {% else %}text-gray-400{% endif %}">Causa provável</p>
+  <p class="text-sm font-bold
+            {% if v.veredito == 'energia' %}text-amber-900
+            {% elif v.veredito == 'fibra' %}text-red-900
+            {% else %}text-gray-600{% endif %}">{{ v.rotulo }}</p>
+  <p class="text-xs mt-1 leading-relaxed
+            {% if v.veredito == 'energia' %}text-amber-800
+            {% elif v.veredito == 'fibra' %}text-red-800
+            {% else %}text-gray-500{% endif %}">
+    {{ v.base }}.{% if v.reforco %} {{ v.reforco }}{% endif %}
+  </p>
+  <p class="text-[11px] text-gray-400 mt-1 leading-relaxed">
+    Causa conhecida em {{ v.conhecidos }} de {{ v.total }} quedas ({{ v.cobertura_pct }}%).
+    {% if v.cronologia.medivel %}
+    As quedas com horário do IXC se espalham por {{ v.cronologia.spread_str }}
+    ({{ v.cronologia.com_hora_real }} de {{ v.cronologia.total }} têm esse horário).
+    {% else %}
+    Sem horário de queda suficiente do IXC para medir o espalhamento.
+    {% endif %}
+  </p>
+</div>
+{% endif %}

@@ -199,13 +199,39 @@ CTOs vizinhas online entram como pontos vazados. Quem ficou de pé delimita o
 trecho tão bem quanto quem caiu, e hoje isso não aparece em lugar nenhum.
 **Depende de:** nada.
 
-### R7 — Veredito de causa provável no card da massiva
+### R7 — Veredito de causa provável no card da massiva — FEITA (2026-09-18)
 Uma linha, no topo do card: "provável **energia** — 78% dying-gasp, quedas
 espalhadas por 5 min" ou "provável **fibra** — 91% LOS, todas no mesmo segundo".
 Combina dying-gasp/LOS (já temos), spread cronológico (já temos, não usado) e
 topologia vs geografia (já temos os dois escopos). Declara a cobertura e nunca
 afirma sem base — igual ao resto da tela.
 **Depende de:** nada. Maior retorno por esforço desta lista.
+
+**Como ficou, e o que a calibração mudou.** O veredito saiu com três estados
+nomeados (energia / fibra / misto) mais a recusa explícita de opinar quando a
+base não dá: menos de 5 quedas ou cobertura de causa abaixo de 40%. O limiar
+para nomear a causa é 70% de concentração; entre os dois, "sinais misturados",
+que é resposta legítima.
+
+O escopo entra como segundo sinal, e o caso mais útil é o de **contradição**:
+dying-gasp num escopo topológico (PON/OLT/CTO) ganha a ressalva de que, se fosse
+a concessionária, esperaria-se gente de outras PONs junto.
+
+**A cronologia NÃO virou critério, e isso contraria a consultoria.** Medição de
+2026-09-18 sobre as 24 massivas: o evento com maior proporção de LOS é o de
+*maior* espalhamento (337 s), e massivas de dying-gasp puro fecham em 20 s —
+exatamente o oposto do que a regra "rompimento derruba todo mundo no mesmo
+segundo" previa. O `ultima_conexao_final` do IXC parece registrar quando a OLT
+reportou, não quando o cliente caiu. Então o espalhamento aparece na tela como
+descrição factual e a leitura fica com quem opera.
+
+**Achado que salvou o critério de um erro:** na partida a frio de 09/09, 189
+quedas ficaram com o mesmo timestamp **ao microssegundo** — era o relógio do
+poll, não o IXC. Lido como cronologia, seria "todas no mesmo instante", ou seja,
+simultaneidade inventada a partir de ausência de dado. Horário vindo do IXC tem
+sempre microssegundo zero, e é assim que os sintéticos são excluídos da conta.
+No geral a cobertura é boa: **2.534 de 2.787 quedas (91%)** têm horário real, e
+as massivas recentes têm 100%.
 
 ### R8 — Reincidência do trecho
 Contador "N massivas nos últimos 90 dias" por elemento, no card e no histórico.
