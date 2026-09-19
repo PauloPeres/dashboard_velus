@@ -316,3 +316,43 @@ class TestJanelaDeManutencao:
         assert janela_que_cobre(
             organization_a, scope="OLT", element_external_id="1", moment=timezone.now(),
         ) is None
+
+
+# =============================================================================
+# Fração zero não é medida, é ausência de denominador
+# =============================================================================
+@pytest.mark.django_db
+class TestFracaoSemDenominador:
+    def test_massiva_com_gente_fora_e_fracao_zero_nao_diz_zero_por_cento(
+        self, organization_a: Organization
+    ) -> None:
+        """Apareceu em produção: 121 clientes fora e "0% dos logins das caixas
+        envolvidas". Eram quedas sem CTO no snapshot — não havia denominador.
+        Zero ali se lê como "quase ninguém caiu", o oposto do que aconteceu."""
+        set_current_organization(organization_a)
+        now = timezone.now()
+        outage = OutageEvent.objects.create(
+            organization=organization_a,
+            started_at=now - timedelta(hours=2),
+            ended_at=now - timedelta(hours=1),
+            last_detected_at=now,
+            scope=OutageEvent.Scope.GEO,
+            element_label="Cluster geográfico",
+            confidence=OutageEvent.Confidence.LOW,
+            affected_count=121,
+            restored_count=121,
+            affected_fraction=0.0,
+        )
+        linha = outage_row(outage)
+        assert linha["sem_denominador"] is True
+        assert "0%" not in linha["elemento_frase"]
+        assert "sem denominador" in linha["elemento_frase"]
+        assert "quantos caíram" in linha["ressalva_escopo"]
+
+    def test_fracao_de_verdade_continua_aparecendo(
+        self, organization_a: Organization
+    ) -> None:
+        outage = _outage(organization_a)
+        linha = outage_row(outage)
+        assert linha["sem_denominador"] is False
+        assert "40%" in linha["elemento_frase"]

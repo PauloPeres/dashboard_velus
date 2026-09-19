@@ -191,6 +191,12 @@ def outage_row(
     escopo_nome = _SCOPE_NOUN.get(outage.scope, outage.scope)
     fracao = outage.affected_fraction or 0.0
     fracao_str = _fracao_str(fracao)
+    # Fração zero com gente fora **não é zero** — é denominador ausente. Uma
+    # massiva de 121 clientes exibindo "0% dos logins das caixas envolvidas" foi
+    # o que apareceu em produção: eram quedas sem CTO no snapshot, então não
+    # havia caixa de onde tirar o denominador. Zero ali se lê como medida
+    # ("quase ninguém caiu") e é o oposto do que aconteceu.
+    sem_denominador = fracao <= 0 and (outage.affected_count or 0) > 0
 
     elemento = outage.element_label or "elemento não identificado"
     # A frase é sempre "quem" + "quanto daquilo". Nunca só "quem".
@@ -199,7 +205,11 @@ def outage_row(
     # proximidade não é elemento de cadastro, então "X% dos logins da área" faria
     # parecer que existe uma área com logins contáveis. O que o detector divide
     # ali é pelas caixas que entraram no agrupamento — e é isso que vai escrito.
-    if outage.scope == OutageEvent.Scope.GEO:
+    if sem_denominador:
+        elemento_frase = (
+            f"{elemento} — sem denominador no cadastro para dizer que fração caiu"
+        )
+    elif outage.scope == OutageEvent.Scope.GEO:
         elemento_frase = f"{elemento} — {fracao_str} dos logins das caixas envolvidas"
     elif outage.element_label:
         elemento_frase = f"{elemento} — {fracao_str} dos logins da {escopo_nome}"
@@ -208,7 +218,13 @@ def outage_row(
 
     trecho = outage.suspected_segment_label or ""
     ressalva = ""
-    if outage.scope in _SCOPES_QUE_AGREGAM and fracao < _FRACAO_QUE_EXIGE_RESSALVA:
+    if sem_denominador:
+        ressalva = (
+            "As quedas desta massiva não têm caixa no cadastro, então não há "
+            "denominador: dá para dizer quantos caíram, não que parte do "
+            "elemento isso representa."
+        )
+    elif outage.scope in _SCOPES_QUE_AGREGAM and fracao < _FRACAO_QUE_EXIGE_RESSALVA:
         resto = _fracao_str(1 - fracao)
         ressalva = (
             f"{resto} dos logins desta {escopo_nome} continuam no ar: o que caiu "
@@ -227,6 +243,7 @@ def outage_row(
         "elemento_frase": elemento_frase,
         "fracao": fracao,
         "fracao_str": fracao_str,
+        "sem_denominador": sem_denominador,
         "ressalva_escopo": ressalva,
         # Quando há trecho, é ELE o destaque: é ele que diz pra onde o técnico
         # vai. O elemento em escopo vira contexto secundário.
