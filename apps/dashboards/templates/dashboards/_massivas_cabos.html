@@ -1,0 +1,75 @@
+{% comment %}
+Cabos candidatos (R5), destravado pela geometria do spike R2.
+
+Este bloco esteve bloqueado por meses com um motivo bom: nenhum campo liga cabo a
+CTO, e listar "os 562 cabos do projeto" daria ao técnico a sensação falsa de que
+o sistema sabe algo. O que mudou foi a geometria — agora dá para dizer *quais
+cabos passam pelas caixas que caíram*, com a distância medida.
+
+O que continua fora do que a tela pode afirmar: que a fibra passa exatamente
+ali, que é esse cabo que alimenta a caixa, ou que foi ele que rompeu. Por isso o
+rótulo é "candidato" e a distância aparece sempre — é ela que deixa o leitor
+julgar.
+
+Drop de cliente nunca entra: não explica trinta clientes fora.
+
+Espera a variável `c` (dict de compute_cabos_candidatos).
+{% endcomment %}
+{% if c %}
+<div class="mt-3 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2">
+  <p class="text-[10px] uppercase tracking-wider font-semibold text-violet-700">
+    Cabos candidatos
+  </p>
+
+  {% if not c.determinavel %}
+  <p class="text-xs text-gray-500 mt-1 leading-relaxed">{{ c.motivo }}</p>
+
+  {% elif not c.cabos %}
+  <p class="text-xs text-gray-600 mt-1 leading-relaxed">
+    Nenhum cabo cadastrado passa a menos de {{ c.raio_m }} m das caixas desta
+    massiva. Isso é resposta, não falha: o traçado do projeto não cobre este
+    trecho, e apontar o cabo mais próximo lá fora seria apontar outra rua.
+  </p>
+
+  {% else %}
+  <p class="text-xs text-violet-900 mt-1 leading-relaxed">
+    {{ c.total }} cabo{{ c.total|pluralize }} do projeto passa{{ c.total|pluralize:"m" }}
+    a menos de {{ c.raio_m }} m das caixas afetadas. É por onde o desenho do InMap
+    leva a fibra — não é leitura de onde ela rompeu.
+  </p>
+
+  <ul class="mt-2 space-y-1">
+    {% for cabo in c.cabos %}
+    <li class="text-xs flex items-baseline gap-2">
+      <span class="w-6 h-0.5 shrink-0 mt-1.5 bg-violet-600"></span>
+      <span class="font-medium text-gray-700">{{ cabo.nome }}</span>
+      {% if cabo.classe %}
+      <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded
+                   {% if cabo.classe == 'BACKBONE' %}bg-violet-200 text-violet-900{% else %}bg-gray-200 text-gray-600{% endif %}">
+        {{ cabo.classe|lower }}
+      </span>
+      {% endif %}
+      <span class="text-violet-700">
+        {{ cabo.ctos_tocadas }} caixa{{ cabo.ctos_tocadas|pluralize }} ·
+        {{ cabo.distancia_m|floatformat:"0" }} m
+      </span>
+    </li>
+    {% endfor %}
+    {% if c.alem_do_card %}
+    <li class="text-xs text-gray-400">
+      e mais {{ c.alem_do_card }} cabo{{ c.alem_do_card|pluralize }} no raio — o card
+      mostra os que tocam mais caixas.
+    </li>
+    {% endif %}
+  </ul>
+
+  {% if c.ctos_sem_cabo %}
+  <p class="text-[11px] text-gray-500 mt-2 leading-relaxed">
+    {{ c.ctos_sem_cabo }} das {{ c.ctos_com_coordenada }} caixas desta massiva não
+    têm cabo cadastrado a menos de {{ c.raio_m }} m. Para elas o candidato acima não
+    vale — a planta do InMap não cobre aquele pedaço.
+  </p>
+  {% endif %}
+  {% endif %}
+</div>
+{% endif %}

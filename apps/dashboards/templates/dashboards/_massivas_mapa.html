@@ -32,21 +32,25 @@ tem: aqui o mapa renderiza mesmo vazio, e o vazio é informação.
   </p>
   {% comment %}
   As linhas são a parte mais fácil de ler errado da tela inteira, então o aviso
-  fica junto delas e não numa legenda de rodapé. Tracejado é escolha de desenho,
-  não estilo: linha cheia leria como traçado de cabo (ver `_map_dashed_trace`).
+  fica junto delas e não numa legenda de rodapé. O estilo carrega o significado:
+  tracejado é inferência de cadastro, cheio é traçado de verdade. Até 2026-09-19
+  não havia linha cheia nenhuma aqui, porque não havia geometria — o spike R2
+  mostrou que ela existe na API (ver `_map_solid_path_trace`).
   {% endcomment %}
   <p class="text-xs text-gray-400 mb-1 leading-relaxed">
     As linhas <strong>tracejadas</strong> são vínculo de cadastro, não o caminho da fibra:
     a cinza liga cada caixa ao POP que a alimenta, a laranja liga a caixa mais próxima do POP
-    às demais afetadas. <strong>Nenhum cabo é desenhado</strong> —
+    às demais afetadas. A linha <strong>roxa e cheia</strong> é diferente:
     {% comment %}
-    Esta frase fica numa linha só de propósito: um teste garante que ela chega
-    inteira ao HTML, e quebrá-la no meio faz a asserção falhar (a quebra vira
-    espaço em branco no meio da string).
+    Estas frases ficam numa linha só de propósito: um teste garante que elas
+    chegam inteiras ao HTML, e quebrá-las no meio faz a asserção falhar (a
+    quebra vira espaço em branco no meio da string).
     {% endcomment %}
-    a API do IXC não expõe a geometria dos cabos,
-    então o máximo que a tela aponta é um <em>trecho suspeito</em> entre caixas, nunca
-    "cabo X rompido". Não procure o rompimento onde a linha passa.
+    é o traçado do cabo desenhado no projeto do InMap,
+    e só aparece para os cabos que passam perto das caixas afetadas.
+    Mesmo ela é <strong>cadastro, não leitura</strong>: diz por onde o projeto passa a fibra,
+    nunca onde ela rompeu. A tela aponta <em>trecho suspeito</em> e <em>cabo candidato</em>,
+    nunca "cabo X rompido".
   </p>
   {% if mapa_nota %}
   <p class="text-xs text-gray-400 mb-1 leading-relaxed">{{ mapa_nota }}</p>

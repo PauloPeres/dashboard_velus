@@ -37,11 +37,12 @@ from apps.inventory.infrastructure.repositories import EquipmentRepository
 from apps.network.domain.dto import (
     BandwidthUsageDTO,
     ConnectionDTO,
-    NetworkElementDTO,
+    ElementGeometryDTO,
 )
 from apps.network.infrastructure.repositories import (
     BandwidthUsageRepository,
     ConnectionRepository,
+    NetworkElementGeometryRepository,
     NetworkElementRepository,
 )
 from apps.sales.domain.dto import LeadDTO, OpportunityDTO
@@ -161,12 +162,39 @@ def _bandwidth_port_call(
 
 def _network_element_port_call(
     source: Any, since: datetime | None
-) -> Iterator[NetworkElementDTO]:
+) -> Iterator[Any]:
     # `since` é ignorado de propósito: a planta é pequena e os endpoints de
     # topologia do IXC não têm last-modified confiável (o `ultima_atualizacao`
     # das caixas vem zerado). Pull completo diário, upsert idempotente.
     del since
-    return source.list_network_elements()
+    yield from source.list_network_elements()
+    # O traçado vem na mesma rodada porque é a mesma planta vista de outro
+    # ângulo, e separá-lo em capability própria custaria outra credencial e
+    # outro agendamento para responder à mesma pergunta. Fonte que não conhece
+    # geometria (adapter antigo, de terceiro) simplesmente não tem o método.
+    listar_geometrias = getattr(source, "list_element_geometries", None)
+    if listar_geometrias is not None:
+        yield from listar_geometrias()
+
+
+class _PlantRepository:
+    """Roteia o DTO da planta pro repositório certo, por tipo.
+
+    Existe porque o dispatch do sync é um repositório por capability, e a planta
+    agora emite dois DTOs: o elemento e o traçado. A alternativa seria uma
+    capability nova só para a geometria — outra credencial em
+    `OrganizationDataSource`, outro agendamento, para ler os mesmos endpoints do
+    mesmo sistema na mesma frequência.
+    """
+
+    def __init__(self, organization: Organization) -> None:
+        self._elements = NetworkElementRepository(organization)
+        self._geometries = NetworkElementGeometryRepository(organization)
+
+    def upsert_from_dto(self, dto: Any, *, source_type: SourceType) -> Any:
+        if isinstance(dto, ElementGeometryDTO):
+            return self._geometries.upsert_from_dto(dto, source_type=source_type)
+        return self._elements.upsert_from_dto(dto, source_type=source_type)
 
 
 def _equipment_port_call(source: Any, since: datetime | None) -> Iterator[EquipmentDTO]:
@@ -203,7 +231,7 @@ _DISPATCH: dict[
     Capability.CONNECTIONS: (_connection_port_call, ConnectionRepository, _repo_upsert),
     Capability.BANDWIDTH: (_bandwidth_port_call, BandwidthUsageRepository, _repo_upsert),
     Capability.NETWORK_ELEMENTS: (
-        _network_element_port_call, NetworkElementRepository, _repo_upsert,
+        _network_element_port_call, _PlantRepository, _repo_upsert,
     ),
     Capability.EQUIPMENT: (_equipment_port_call, EquipmentRepository, _repo_upsert),
     Capability.LEADS: (_lead_port_call, LeadRepository, _repo_upsert),

@@ -32,6 +32,7 @@ from apps.customers.infrastructure.models import Contract, Customer
 from apps.dashboards.massivas import (
     _signal_cell,
     _signal_fields_available,
+    compute_cabos_candidatos,
     compute_causas_onu,
     compute_motivos,
     compute_reincidencia,
@@ -46,6 +47,7 @@ from apps.network.infrastructure.models import (
     ConnectionDropEvent,
     ConnectionPollState,
     NetworkElement,
+    NetworkElementGeometry,
     OutageAffectedLogin,
     OutageEvent,
 )
@@ -455,13 +457,21 @@ class TestRegra1EscopoNuncaSozinho:
 @pytest.mark.django_db
 @pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
 class TestRegra2SemTracadoDeCabo:
-    def test_mapa_declara_que_nao_desenha_cabo(
+    def test_mapa_separa_inferencia_de_tracado_real(
         self, client: Any, user_a: User, organization_a: Organization
     ) -> None:
+        """Desde o spike R2 existe linha cheia no mapa — o traçado do cabo.
+
+        A regra que sobrevive não é "não desenhe cabo", é "não diga que ele
+        rompeu": o estilo da linha tem que separar o que é inferência de
+        cadastro do que é geometria de verdade, e a legenda tem que dizer que
+        nem a geometria prova rompimento.
+        """
         client.force_login(user_a)
         html = client.get(URL).content.decode()
-        assert "Nenhum cabo é desenhado" in html
-        assert "não expõe a geometria dos cabos" in html
+        assert "é o traçado do cabo desenhado no projeto do InMap" in html
+        assert "cadastro, não leitura" in html
+        assert 'nunca "cabo X rompido"' in html
 
     def test_segmento_e_rotulado_como_trecho_suspeito(
         self, client: Any, user_a: User, organization_a: Organization
@@ -1395,13 +1405,14 @@ class TestLigacoesDoMapa:
         assert len(mapa["vizinhas"]) == 1
         assert "9 no ar" in mapa["vizinhas"][0]["label"]
 
-    def test_legenda_avisa_que_a_linha_nao_e_o_cabo(
+    def test_legenda_avisa_que_a_tracejada_nao_e_o_cabo(
         self, client: Any, user_a: User, organization_a: Organization
     ) -> None:
         client.force_login(user_a)
         html = client.get(URL).content.decode()
         assert "não o caminho da fibra" in html
-        assert "Nenhum cabo é desenhado" in html
+        # E a cheia, que é o cabo, vem com a ressalva de que é projeto.
+        assert "cadastro, não leitura" in html
 
 
 # =============================================================================
@@ -1530,3 +1541,143 @@ class TestReincidencia:
         assert linhas[0]["reincidencia"]["total"] == 2
         assert linhas[1]["reincidencia"]["total"] == 1
         assert "2ª massiva deste elemento" in resp.content.decode()
+
+
+# =============================================================================
+# Cabos candidatos (R5) — destravado pela geometria do spike R2
+# =============================================================================
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestCabosCandidatos:
+    def _cto(
+        self, org: Organization, *, external_id: str, lat: float, lon: float
+    ) -> NetworkElement:
+        set_current_organization(org)
+        return NetworkElement.objects.create(
+            organization=org, source_type="IXC", kind=NetworkElement.Kind.CTO,
+            external_id=external_id, name=f"CX {external_id}",
+            latitude=lat, longitude=lon,
+        )
+
+    def _cabo(
+        self, org: Organization, *, external_id: str, nome: str,
+        pontos: list[list[float]],
+    ) -> NetworkElementGeometry:
+        set_current_organization(org)
+        return NetworkElementGeometry.objects.create(
+            organization=org, source_type="IXC", kind=NetworkElement.Kind.CABLE,
+            external_id=external_id, name=nome, points=pontos,
+        )
+
+    def test_cabo_que_passa_na_caixa_afetada_vira_candidato(
+        self, organization_a: Organization
+    ) -> None:
+        self._cto(organization_a, external_id="CTO-1", lat=-23.5, lon=-47.4)
+        self._cabo(
+            organization_a, external_id="C1", nome="FIBRA AS80 12FO BACKBONE 18",
+            pontos=[[-23.5001, -47.4], [-23.4999, -47.4]],
+        )
+        self._cabo(
+            organization_a, external_id="C9", nome="CLIENTE DROP 1FO 30",
+            pontos=[[-23.5001, -47.4], [-23.4999, -47.4]],
+        )
+        quedas = [_drop(organization_a, login="a1", cto="CTO-1")]
+
+        c = compute_cabos_candidatos(organization_a, quedas)
+        assert c["determinavel"] is True
+        assert [cabo["external_id"] for cabo in c["cabos"]] == ["C1"]
+        assert c["cabos"][0]["classe"] == "BACKBONE"
+        assert c["ctos_sem_cabo"] == 0
+
+    def test_sem_caixa_com_coordenada_o_bloco_se_recusa(
+        self, organization_a: Organization
+    ) -> None:
+        """Sem ponto de partida não há distância a medir — e dizer isso é
+        diferente de dizer que não há cabo candidato."""
+        self._cabo(
+            organization_a, external_id="C1", nome="FIBRA BACKBONE 1",
+            pontos=[[-23.5, -47.4], [-23.4, -47.4]],
+        )
+        quedas = [_drop(organization_a, login="a1", cto="CTO-SEM-GEO")]
+        c = compute_cabos_candidatos(organization_a, quedas)
+        assert c["determinavel"] is False
+        assert "coordenada" in c["motivo"]
+
+    def test_sem_tracado_sincronizado_o_bloco_diz_isso(
+        self, organization_a: Organization
+    ) -> None:
+        """Estado diferente do anterior, e com ação diferente: aqui falta rodar
+        o sync da geometria, não falta cadastro de caixa."""
+        self._cto(organization_a, external_id="CTO-1", lat=-23.5, lon=-47.4)
+        quedas = [_drop(organization_a, login="a1", cto="CTO-1")]
+        c = compute_cabos_candidatos(organization_a, quedas)
+        assert c["determinavel"] is False
+        assert "sincronizado" in c["motivo"]
+
+    def test_caixa_longe_de_todo_cabo_e_declarada(
+        self, organization_a: Organization
+    ) -> None:
+        """~15% das caixas de produção não têm cabo a menos de 30 m. Sem esta
+        contagem, uma lista curta pareceria 'achamos pouco'."""
+        self._cto(organization_a, external_id="CTO-1", lat=-23.5, lon=-47.4)
+        self._cto(organization_a, external_id="CTO-2", lat=-23.6, lon=-47.5)
+        self._cabo(
+            organization_a, external_id="C1", nome="FIBRA BACKBONE 1",
+            pontos=[[-23.5001, -47.4], [-23.4999, -47.4]],
+        )
+        quedas = [
+            _drop(organization_a, login="a1", cto="CTO-1"),
+            _drop(organization_a, login="a2", cto="CTO-2"),
+        ]
+        c = compute_cabos_candidatos(organization_a, quedas)
+        assert c["ctos_com_coordenada"] == 2
+        assert c["ctos_sem_cabo"] == 1
+
+    def test_card_mostra_os_candidatos_sem_prometer_rompimento(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        outage = _outage(organization_a, affected=5)
+        self._cto(organization_a, external_id="CTO-1", lat=-23.5, lon=-47.4)
+        self._cabo(
+            organization_a, external_id="C1", nome="FIBRA AS80 12FO BACKBONE 18",
+            pontos=[[-23.5001, -47.4], [-23.4999, -47.4]],
+        )
+        for i in range(5):
+            drop = _drop(organization_a, login=f"cai{i}", cto="CTO-1")
+            OutageAffectedLogin.objects.create(
+                organization=organization_a, outage=outage, drop_event=drop,
+                login=drop.login, dropped_at=drop.dropped_at,
+            )
+        client.force_login(user_a)
+        html = client.get(URL).content.decode()
+        assert "Cabos candidatos" in html
+        assert "FIBRA AS80 12FO BACKBONE 18" in html
+        # A promessa que a tela nunca faz.
+        assert "cabo rompido" not in html.lower()
+
+    def test_mapa_desenha_o_tracado_do_candidato(
+        self, organization_a: Organization
+    ) -> None:
+        self._cto(organization_a, external_id="CTO-1", lat=-23.5, lon=-47.4)
+        self._cabo(
+            organization_a, external_id="C1", nome="FIBRA BACKBONE 1",
+            pontos=[[-23.5001, -47.4], [-23.4999, -47.4]],
+        )
+        quedas = [_drop(organization_a, login="a1", cto="CTO-1", lat=-23.5, lon=-47.4)]
+        mapa = compute_mapa(organization_a, quedas, cabos_candidatos=["C1"])
+        assert len(mapa["cabos"]) == 1
+        assert mapa["cabos"][0]["nome"] == "FIBRA BACKBONE 1"
+        assert len(mapa["cabos"][0]["pontos"]) == 2
+
+    def test_mapa_sem_candidato_nao_desenha_cabo(
+        self, organization_a: Organization
+    ) -> None:
+        """O mapa desenha os candidatos, não o cadastro inteiro: 1.191 cabos
+        seriam um borrão sem pergunta."""
+        self._cabo(
+            organization_a, external_id="C1", nome="FIBRA BACKBONE 1",
+            pontos=[[-23.5001, -47.4], [-23.4999, -47.4]],
+        )
+        quedas = [_drop(organization_a, login="a1", cto="CTO-1", lat=-23.5, lon=-47.4)]
+        assert compute_mapa(organization_a, quedas)["cabos"] == []

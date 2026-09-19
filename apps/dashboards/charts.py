@@ -2528,12 +2528,57 @@ def _map_dashed_trace(
     ]
 
 
+def _map_solid_path_trace(
+    tracados: list[dict[str, Any]], *, nome: str, cor: str, largura: float
+) -> list[go.Scattermap]:
+    """Linha CHEIA — e aqui ela é honesta, porque é traçado de verdade.
+
+    Todo o resto do mapa sai tracejado de propósito: ligação lógica não é o
+    caminho da fibra. O cabo é a exceção que o spike R2 abriu — a polilinha vem
+    do InMap, vértice a vértice, e cheia é exatamente como deve ser lida.
+
+    Continua sendo **cadastro**: por onde o projeto passa o cabo, não onde a
+    fibra está enterrada hoje nem onde ela rompeu.
+    """
+    if not tracados:
+        return []
+    lats: list[float | None] = []
+    lons: list[float | None] = []
+    rotulos: list[str] = []
+    for tracado in tracados:
+        pontos = tracado["pontos"]
+        for lat, lon in pontos:
+            lats.append(lat)
+            lons.append(lon)
+            rotulos.append(tracado["nome"])
+        # `None` quebra a linha: sem isso o último ponto de um cabo ligaria no
+        # primeiro do próximo, desenhando um cabo que não existe.
+        lats.append(None)
+        lons.append(None)
+        rotulos.append("")
+    return [
+        go.Scattermap(
+            lat=lats,
+            lon=lons,
+            mode="lines",
+            name=nome,
+            line={"width": largura, "color": cor},
+            text=rotulos,
+            hovertemplate="<b>%{text}</b><extra>cabo candidato</extra>",
+        )
+    ]
+
+
 def outage_map(mapa: dict[str, Any]) -> str:
     """Mapa da massiva — quem está fora, quem voltou, CTOs afetadas e POPs (#146).
 
     `scattermap` do Plotly (self-hosted em `static/vendor/`) sobre o basemap de
-    `_BASEMAP_STYLE`. Nenhum cabo é desenhado: a geometria não existe na API do
-    IXC (§2.3), e desenhar uma linha entre caixas seria inventar traçado.
+    `_BASEMAP_STYLE`.
+
+    Três tipos de linha, e a diferença entre elas é o ponto: **tracejada** é
+    inferência de cadastro (caixa → POP, trecho suspeito), **cheia** é o traçado
+    real do cabo, que existe desde o spike R2. Se um dia as duas virarem o mesmo
+    estilo, a tela volta a prometer o que não sabe.
     """
     # A ordem importa: o verde entra depois do vermelho pra que um cliente que
     # voltou fique por cima do ponto antigo — é assim que a equipe vê o mapa
@@ -2547,6 +2592,13 @@ def outage_map(mapa: dict[str, Any]) -> str:
     ]
     # As ligações entram ANTES dos pontos para ficarem por baixo deles.
     traces = [
+        # O cabo entra primeiro: é o que fica por baixo de tudo, como no papel.
+        *_map_solid_path_trace(
+            mapa.get("cabos") or [],
+            nome="Cabo candidato (traçado do projeto)",
+            cor="#7c3aed",
+            largura=3,
+        ),
         *_map_dashed_trace(
             mapa.get("ligacoes") or [],
             nome="Ligação lógica até o POP",

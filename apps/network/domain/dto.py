@@ -147,6 +147,50 @@ NETWORK_ELEMENT_KINDS: tuple[str, ...] = ("CTO", "POP", "PON", "OLT", "CABLE")
 
 
 @dataclass(frozen=True)
+class ElementGeometryDTO:
+    """O traçado de um elemento da planta — a polilinha do projeto.
+
+    Separado de `NetworkElementDTO` porque responde outra pergunta: o elemento
+    diz *o que é e de quem depende*, a geometria diz *por onde passa*. Cabo tem
+    traçado e não tem posição; CTO tem posição e não tem traçado.
+
+    `points` é `((lat, lon), ...)` **na ordem do traçado**. A ordem é o dado — na
+    origem ela vem no campo `sequencia`, e embaralhá-la transforma o cabo num
+    zigue-zague que atravessa a cidade.
+
+    Isto é cadastro, não medição: diz por onde o projeto passa o cabo, não onde a
+    fibra está hoje nem onde ela rompeu.
+    """
+
+    external_id: str
+    kind: str  # ver NETWORK_ELEMENT_KINDS
+    points: tuple[tuple[float, float], ...]
+
+    name: str = ""
+    project_external_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.external_id:
+            raise ValueError("ElementGeometryDTO.external_id não pode ser vazio")
+        if self.kind not in NETWORK_ELEMENT_KINDS:
+            raise ValueError(
+                f"ElementGeometryDTO.kind inválido: {self.kind!r} "
+                f"(esperado um de {NETWORK_ELEMENT_KINDS})"
+            )
+        if not self.points:
+            raise ValueError(
+                "ElementGeometryDTO.points vazio — elemento sem ponto não tem "
+                "traçado, e gravar a lista vazia faria a tela desenhar nada "
+                "achando que desenhou algo"
+            )
+
+    @property
+    def is_line(self) -> bool:
+        """Dois pontos são o mínimo para haver traçado; um ponto é posição."""
+        return len(self.points) >= 2
+
+
+@dataclass(frozen=True)
 class NetworkElementDTO:
     """Elemento da planta de rede — caixa FTTH, POP, porta PON, OLT ou cabo.
 
@@ -154,9 +198,10 @@ class NetworkElementDTO:
     (`parent_kind`/`parent_external_id`): é ela que permite subir a hierarquia
     POP → OLT → PON → CTO quando várias quedas coincidem no tempo.
 
-    `latitude`/`longitude` podem faltar — cabo nunca tem geometria acessível
-    (docs/massivas-plano.md §2.3). Por isso são `None` e não 0.0: um par (0, 0)
-    cairia no golfo da Guiné e entraria em cluster geográfico com tudo.
+    `latitude`/`longitude` podem faltar — o cabo não tem *posição*, tem traçado,
+    e o traçado mora em `ElementGeometryDTO`. Por isso são `None` e não 0.0: um
+    par (0, 0) cairia no golfo da Guiné e entraria em cluster geográfico com
+    tudo.
 
     Identidade composta na persistência: `(organization, source_type, kind,
     external_id)`. `kind` entra na chave porque os ids são sequências por tabela

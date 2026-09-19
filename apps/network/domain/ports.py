@@ -11,6 +11,7 @@ from apps.integrations.shared.enums import Capability, SourceType
 from .dto import (
     BandwidthUsageDTO,
     ConnectionDTO,
+    ElementGeometryDTO,
     NetworkElementDTO,
     OpticalSignalDTO,
 )
@@ -81,6 +82,16 @@ class NetworkElementSourcePort(Protocol):
 
     def list_network_elements(self) -> Iterator[NetworkElementDTO]:
         """Itera todos os elementos da planta."""
+        ...
+
+    def list_element_geometries(self) -> Iterator[ElementGeometryDTO]:
+        """Itera os traçados da planta — os elementos que são linha, não ponto.
+
+        Método separado, e não um campo do `NetworkElementDTO`, porque a
+        geometria tem outro volume e outra origem: na fonte ela vem de recursos
+        próprios, e um elemento pode ter dezenas de vértices. Fonte que não
+        conheça traçado devolve vazio, e a planta sincroniza como sempre.
+        """
         ...
 
 

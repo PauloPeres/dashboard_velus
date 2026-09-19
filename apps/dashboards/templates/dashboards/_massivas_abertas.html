@@ -99,6 +99,8 @@ debaixo do dedo de quem está lendo durante o reparo.
 
         {% include "dashboards/_massivas_reincidencia.html" with r=l.reincidencia %}
 
+        {% include "dashboards/_massivas_cabos.html" with c=l.cabos %}
+
         <p class="text-xs text-gray-400 mt-2">
           Começou às {{ l.started_at|date:"d/m H:i" }} ·
           confiança <span class="font-medium text-gray-600">{{ l.confidence_label }}</span> ·

@@ -39,11 +39,13 @@ import structlog
 from pydantic import BaseModel, ValidationError
 
 from apps.integrations.shared.enums import Capability, SourceType
-from apps.network.domain.dto import NetworkElementDTO
+from apps.network.domain.dto import ElementGeometryDTO, NetworkElementDTO
 
 from .client import IxcHttpClient
 from .schemas import (
     IxcCaixaFtthSchema,
+    IxcDfCoordenadaSchema,
+    IxcDfElementoCoordenadaSchema,
     IxcDfElementoSchema,
     IxcPortaPonSchema,
     IxcRadPopRadioSchema,
@@ -93,6 +95,97 @@ class IxcNetworkElementSource:
                 # o resto do inventário do InMap — 1.191 cabos num universo bem maior.
                 body_filter={"qtype": "df_elemento.tipo", "query": "CB", "oper": "="},
             )
+
+    # -------------------------------------------------------------------------
+    # Traçado (épico da geometria) — três recursos viram polilinha
+    # -------------------------------------------------------------------------
+    # Os tipos do InMap que têm traçado ou ponto próprio. CB é o que interessa
+    # para massiva; CA (caixa de emenda) entra porque é ela que marca onde o cabo
+    # é aberto, e uma emenda perto do trecho suspeito é informação de campo.
+    _GEOMETRY_TYPES: ClassVar[dict[str, str]] = {"CB": "CABLE"}
+
+    def list_element_geometries(self) -> Iterator[ElementGeometryDTO]:
+        """Monta a polilinha de cada cabo: elemento + vínculos + coordenadas.
+
+        As três listagens são carregadas inteiras antes de casar — 1.191 + 12.922
+        + 10.520 linhas, algo como 25 chamadas. A alternativa (uma consulta de
+        coordenadas por elemento) seria mais de mil chamadas para montar o mesmo
+        desenho.
+
+        Elemento sem ponto **não vira DTO**: o traçado vazio não é um traçado, e
+        gravá-lo faria a tela desenhar nada achando que desenhou algo.
+        """
+        with self._client_factory() as client:
+            coordenadas = self._coordinates(client)
+            vinculos = self._links(client)
+            emitidos = 0
+            sem_ponto = 0
+            for tipo, kind in self._GEOMETRY_TYPES.items():
+                for raw in client.paginate_ixc(
+                    "df_elemento",
+                    body_filter={"qtype": "df_elemento.tipo", "query": tipo, "oper": "="},
+                ):
+                    try:
+                        schema = IxcDfElementoSchema.model_validate(raw)
+                    except ValidationError as exc:
+                        _logger.warning(
+                            "ixc_geometry_schema_invalid_skipped",
+                            external_id=raw.get("id"),
+                            errors=exc.errors()[:1],
+                        )
+                        continue
+                    pontos = tuple(
+                        ponto
+                        for _, id_coordenada in sorted(vinculos.get(schema.id, []))
+                        if (ponto := coordenadas.get(id_coordenada)) is not None
+                    )
+                    if not pontos:
+                        sem_ponto += 1
+                        continue
+                    emitidos += 1
+                    yield ElementGeometryDTO(
+                        external_id=schema.id,
+                        kind=kind,
+                        points=pontos,
+                        name=schema.descricao,
+                        project_external_id=schema.id_projeto,
+                    )
+            _logger.info(
+                "ixc_geometry_done",
+                emitted=emitidos,
+                without_points=sem_ponto,
+                coordinates=len(coordenadas),
+            )
+
+    def _coordinates(self, client: IxcHttpClient) -> dict[str, tuple[float, float]]:
+        """`df_coordenada` inteira em memória: id → (lat, lon)."""
+        saida: dict[str, tuple[float, float]] = {}
+        for raw in client.paginate_ixc("df_coordenada"):
+            try:
+                schema = IxcDfCoordenadaSchema.model_validate(raw)
+            except ValidationError:
+                continue
+            if schema.has_position:
+                saida[schema.id] = (float(schema.latitude), float(schema.longitude))
+        return saida
+
+    def _links(self, client: IxcHttpClient) -> dict[str, list[tuple[int, str]]]:
+        """`df_elemento_coordenada` agrupada: elemento → [(sequencia, id_coordenada)].
+
+        A `sequencia` vem no par para que o `sorted` do chamador ordene o
+        traçado; ordenar por id daria a ordem de gravação, que não é a do cabo.
+        """
+        saida: dict[str, list[tuple[int, str]]] = {}
+        for raw in client.paginate_ixc("df_elemento_coordenada"):
+            try:
+                schema = IxcDfElementoCoordenadaSchema.model_validate(raw)
+            except ValidationError:
+                continue
+            if schema.id_elemento and schema.id_coordenada:
+                saida.setdefault(schema.id_elemento, []).append(
+                    (schema.sequencia, schema.id_coordenada)
+                )
+        return saida
 
     def _collect(
         self,

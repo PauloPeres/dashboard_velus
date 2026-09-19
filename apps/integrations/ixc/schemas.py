@@ -1153,10 +1153,10 @@ class IxcPortaPonSchema(BaseModel):
 class IxcDfElementoSchema(BaseModel):
     """Schema do registro `df_elemento` filtrado por `tipo=CB` — o cabo. 1.191 linhas.
 
-    Sem geometria: `df_elemento_coordenada` só mapeia elemento → id de
-    coordenada e a tabela de coordenadas não tem endpoint na API
-    (docs/massivas-plano.md §2.3). O cabo entra como rótulo de candidato ao
-    trecho suspeito, nunca como traçado no mapa.
+    **Tem geometria**, ao contrário do que este docstring afirmou até
+    2026-09-19: o traçado sai de `df_elemento_coordenada` + `df_coordenada`
+    (`IxcDfElementoCoordenadaSchema` e `IxcDfCoordenadaSchema`, abaixo). O que
+    esta linha não tem é *posição* — cabo é linha, não ponto.
     """
 
     model_config = ConfigDict(
@@ -1187,6 +1187,83 @@ class IxcDfElementoSchema(BaseModel):
 
     def get_extras(self) -> dict[str, Any]:
         return dict(self.model_extra or {})
+
+
+class IxcDfElementoCoordenadaSchema(BaseModel):
+    """Vínculo elemento → coordenada, do InMap. 12.922 linhas.
+
+    O campo que importa é `sequencia`: é a **ordem do vértice** no traçado.
+    Ordenar por `id` daria a ordem de gravação, que não é a do cabo.
+
+    Quirk de API: o filtro é `df_elemento_coordenada.id_elemento`. Pedir por
+    `id_df_elemento` devolve a página HTML de erro do IXC.
+    """
+
+    model_config = ConfigDict(
+        extra="allow", populate_by_name=True, str_strip_whitespace=True
+    )
+
+    id: str = Field(...)
+    id_elemento: str = Field(default="")
+    id_coordenada: str = Field(default="")
+    sequencia: int = Field(default=0)
+
+    @field_validator("id", "id_elemento", "id_coordenada", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("sequencia", mode="before")
+    @classmethod
+    def _coerce_int(cls, v: Any) -> int:
+        texto = _to_str(v)
+        try:
+            return int(texto)
+        except ValueError:
+            # Sequência ilegível vira 0 e o vértice vai para o começo. Descartar
+            # a linha seria pior: some um pedaço do cabo sem ninguém ver.
+            return 0
+
+
+class IxcDfCoordenadaSchema(BaseModel):
+    """O ponto — latitude e longitude. 10.520 linhas.
+
+    A existência deste endpoint é o achado do spike R2: o plano afirmava, sem
+    ter testado, que a tabela de coordenadas não era acessível pela API.
+    """
+
+    model_config = ConfigDict(
+        extra="allow", populate_by_name=True, str_strip_whitespace=True
+    )
+
+    id: str = Field(...)
+    latitude: float | None = Field(default=None)
+    longitude: float | None = Field(default=None)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+    @field_validator("latitude", "longitude", mode="before")
+    @classmethod
+    def _coerce_float(cls, v: Any) -> float | None:
+        texto = _to_str(v)
+        if not texto:
+            return None
+        try:
+            return float(texto)
+        except ValueError:
+            return None
+
+    @property
+    def has_position(self) -> bool:
+        # (0, 0) é ausência disfarçada: cairia no golfo da Guiné.
+        return (
+            self.latitude is not None
+            and self.longitude is not None
+            and (self.latitude, self.longitude) != (0.0, 0.0)
+        )
 
 
 class IxcOnuFibraSchema(BaseModel):

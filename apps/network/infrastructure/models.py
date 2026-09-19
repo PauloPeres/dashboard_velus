@@ -280,6 +280,72 @@ class NetworkElement(TenantModel):
         return self.latitude is not None and self.longitude is not None
 
 
+class NetworkElementGeometry(TenantModel):
+    """O traçado do elemento — a polilinha que o InMap desenha (épico da geometria).
+
+    Separado de `NetworkElement` porque é outro ciclo de vida e outro tamanho: o
+    elemento é uma linha com nome e pai, a geometria é uma lista de até 121
+    pontos que só existe para 1.191 cabos e algumas centenas de caixas de
+    emenda. Juntar os dois faria toda query de planta carregar polilinha.
+
+    **Os pontos ficam em JSON, não em tabela de vértice.** São 12.922 vínculos na
+    origem, mas ninguém pergunta por vértice: a geometria é lida inteira, para
+    desenhar ou para medir distância. Uma tabela de vértice seria 12.922 linhas
+    para responder exatamente as mesmas perguntas que 1.191 documentos.
+
+    Formato de `points`: `[[lat, lon], [lat, lon], ...]`, **na ordem do traçado**
+    (o `sequencia` da origem). A ordem é o dado — invertê-la ou embaralhá-la
+    transforma o cabo em zigue-zague.
+
+    Isto é **cadastro, não medição**: a linha diz por onde o projeto passa o
+    cabo, não por onde a fibra está enterrada hoje, e menos ainda onde ela
+    rompeu.
+    """
+
+    source_type = models.CharField(
+        max_length=32,
+        choices=SourceType.choices,
+        help_text=_("Sistema externo que originou este traçado."),
+    )
+    kind = models.CharField(max_length=16, choices=NetworkElement.Kind.choices)
+    external_id = models.CharField(
+        max_length=128,
+        help_text=_("ID do elemento na origem — o mesmo de NetworkElement."),
+    )
+
+    name = models.CharField(max_length=255, blank=True, default="")
+    project_external_id = models.CharField(max_length=128, blank=True, default="")
+
+    points = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=_("[[lat, lon], ...] na ordem do traçado."),
+    )
+
+    class Meta:
+        verbose_name = _("Traçado de elemento")
+        verbose_name_plural = _("Traçados de elementos")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "source_type", "kind", "external_id"],
+                name="unique_element_geometry_per_source",
+            ),
+        ]
+        indexes = [
+            # O acesso é sempre "todos os traçados deste tipo" — o candidato a
+            # cabo é escolhido por distância, em memória, sobre o conjunto todo.
+            models.Index(fields=["organization", "kind"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"traçado {self.kind} {self.name or self.external_id} ({len(self.points)} pontos)"
+
+    @property
+    def is_line(self) -> bool:
+        """Dois pontos são o mínimo para existir traçado; um ponto é posição."""
+        return len(self.points) >= 2
+
+
 class ConnectionDropEvent(TenantModel):
     """Uma queda de login (#143) — **estado de trabalho, não arquivo**.
 

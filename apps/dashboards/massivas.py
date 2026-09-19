@@ -37,6 +37,7 @@ from apps.network.infrastructure.models import (
     ConnectionDropEvent,
     ConnectionPollState,
     NetworkElement,
+    NetworkElementGeometry,
     OutageAffectedLogin,
     OutageEvent,
 )
@@ -170,6 +171,7 @@ def outage_row(
     veredito: dict[str, Any] | None = None,
     vizinhanca: dict[str, Any] | None = None,
     reincidencia: dict[str, Any] | None = None,
+    cabos: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Uma massiva pronta pro template, com escopo e fração já costurados.
 
@@ -248,6 +250,7 @@ def outage_row(
         "veredito": veredito,
         "vizinhanca": vizinhanca,
         "reincidencia": reincidencia,
+        "cabos": cabos,
     }
 
 
@@ -332,6 +335,14 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
         o.pk: compute_vizinhanca(org, quedas_por_massiva.get(o.pk, [])) for o in abertas
     }
     reincidencias = compute_reincidencia(org, abertas, now=now)
+    # Uma leitura só dos traçados para todas as massivas abertas.
+    tracados = tracados_de_cabo(org) if abertas else []
+    cabos_por_massiva = {
+        o.pk: compute_cabos_candidatos(
+            org, quedas_por_massiva.get(o.pk, []), tracados=tracados
+        )
+        for o in abertas
+    }
     linhas = [
         outage_row(
             o,
@@ -339,6 +350,7 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
             veredito=compute_veredito(quedas_por_massiva.get(o.pk, []), scope=o.scope),
             vizinhanca=vizinhancas.get(o.pk),
             reincidencia=reincidencias.get(o.pk),
+            cabos=cabos_por_massiva.get(o.pk),
         )
         for o in abertas
     ]
@@ -362,7 +374,18 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
         "causas_onu": compute_causas_onu(quedas_abertas),
         "motivos": compute_motivos(quedas_abertas),
         "mapa": compute_mapa(
-            org, quedas_no_mapa, vizinhas_intactas=list(intactas_no_mapa.values())
+            org,
+            quedas_no_mapa,
+            vizinhas_intactas=list(intactas_no_mapa.values()),
+            # O mapa da tela geral desenha os candidatos de todas as massivas
+            # abertas, sem repetir cabo: é o mesmo critério dos pontos.
+            cabos_candidatos=sorted(
+                {
+                    cabo_id
+                    for c in cabos_por_massiva.values()
+                    for cabo_id in c.get("ids_no_mapa", [])
+                }
+            ),
         ),
         "mapa_quedas_avulsas": quedas_avulsas,
         "mapa_voltaram": sum(1 for q in quedas_no_mapa if q.restored_at is not None),
@@ -917,11 +940,153 @@ def compute_reincidencia(
     return saida
 
 
+# =============================================================================
+# Cabos candidatos (R5) — destravado pela geometria (spike R2)
+# =============================================================================
+# Até 2026-09-19 esta pergunta não tinha resposta possível: nenhum campo liga
+# cabo a CTO, e "os 562 cabos do projeto" seria ruído. A geometria destravou o
+# vínculo por proximidade — 1.120 das 1.431 caixas estão a ≤10 m de um cabo, com
+# mediana 0,0 m.
+#
+# O que a tela pode dizer: "estes cabos passam pelas caixas que caíram". O que
+# ela não pode: que a fibra passa exatamente ali, que é esse cabo que alimenta a
+# caixa, ou que ele rompeu. Candidato é candidato.
+
+# Quantos cabos cabem no card antes de virar lista. Acima disto a informação
+# vira ruído — e uma massiva grande toca muitos cabos de atendimento.
+_MAX_CABOS_NO_CARD = 6
+
+
+def tracados_de_cabo(org: Any) -> list[Any]:
+    """Todos os traçados de cabo da organização, prontos para o domínio.
+
+    Fica separado porque a tela geral tem várias massivas abertas e o conjunto
+    de cabos é o mesmo para todas: carregá-lo uma vez por massiva seria reler
+    1.191 polilinhas do banco a cada card, a cada 3 min do auto-refresh.
+    """
+    from apps.network.domain.geometry import PathInput
+
+    return [
+        PathInput(
+            external_id=g.external_id,
+            name=g.name,
+            points=[(float(lat), float(lon)) for lat, lon in g.points],
+            project_external_id=g.project_external_id,
+        )
+        for g in NetworkElementGeometry.objects.filter(
+            organization=org, kind=NetworkElement.Kind.CABLE
+        ).only("external_id", "name", "points", "project_external_id")
+        if len(g.points) >= 2
+    ]
+
+
+def compute_cabos_candidatos(
+    org: Any,
+    quedas: list[ConnectionDropEvent],
+    *,
+    tracados: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Cabos cadastrados que passam perto das caixas afetadas.
+
+    Devolve `determinavel=False` quando não há caixa com coordenada ou não há
+    traçado sincronizado — dois estados diferentes, com motivos diferentes, e
+    nenhum deles é "nenhum cabo candidato".
+
+    `tracados` vem de fora quando a tela tem mais de uma massiva: é o mesmo
+    conjunto de cabos para todas.
+    """
+    from apps.network.domain.geometry import (
+        RAIO_CANDIDATO_METROS,
+        candidate_cables,
+        ctos_sem_cabo,
+    )
+
+    ctos_afetadas = {q.cto_external_id for q in quedas if q.cto_external_id}
+    pontos = [
+        (float(e.latitude), float(e.longitude))
+        for e in NetworkElement.objects.filter(
+            organization=org,
+            kind=NetworkElement.Kind.CTO,
+            external_id__in=ctos_afetadas,
+            latitude__isnull=False,
+            longitude__isnull=False,
+        ).only("latitude", "longitude")
+    ]
+    if not pontos:
+        return {
+            "determinavel": False,
+            "motivo": (
+                "Nenhuma caixa desta massiva tem coordenada no cadastro, então "
+                "não há de onde medir a proximidade de um cabo."
+            ),
+            "cabos": [],
+            "raio_m": int(RAIO_CANDIDATO_METROS),
+        }
+
+    if tracados is None:
+        tracados = tracados_de_cabo(org)
+    if not tracados:
+        return {
+            "determinavel": False,
+            "motivo": (
+                "O traçado dos cabos ainda não foi sincronizado nesta "
+                "organização — sem ele não há candidato a apontar."
+            ),
+            "cabos": [],
+            "raio_m": int(RAIO_CANDIDATO_METROS),
+        }
+
+    candidatos = candidate_cables(pontos, tracados)
+    sem_cabo = ctos_sem_cabo(pontos, tracados)
+    return {
+        "determinavel": True,
+        "motivo": "",
+        "cabos": [
+            {
+                "external_id": c.external_id,
+                "nome": c.name,
+                "classe": c.classe,
+                "distancia_m": c.distance_meters,
+                "ctos_tocadas": c.ctos_tocadas,
+            }
+            for c in candidatos[:_MAX_CABOS_NO_CARD]
+        ],
+        "total": len(candidatos),
+        "alem_do_card": max(len(candidatos) - _MAX_CABOS_NO_CARD, 0),
+        "raio_m": int(RAIO_CANDIDATO_METROS),
+        "ctos_com_coordenada": len(pontos),
+        # Caixa do evento sem cabo cadastrado por perto. Declarado porque uma
+        # lista curta de candidatos tem dois significados opostos: "achamos
+        # pouco" e "metade das caixas não tem cabo cadastrado".
+        "ctos_sem_cabo": sem_cabo,
+        # Os ids que o mapa desenha — só os candidatos. O mapa com os 1.191
+        # cabos do cadastro seria um borrão.
+        "ids_no_mapa": [c.external_id for c in candidatos[:_MAX_CABOS_NO_CARD]],
+    }
+
+
+def _tracados_do_mapa(org: Any, ids: list[str]) -> list[dict[str, Any]]:
+    """Polilinhas dos cabos candidatos, prontas para o Plotly."""
+    if not ids:
+        return []
+    return [
+        {
+            "nome": g.name or g.external_id,
+            "pontos": [[float(lat), float(lon)] for lat, lon in g.points],
+        }
+        for g in NetworkElementGeometry.objects.filter(
+            organization=org, kind=NetworkElement.Kind.CABLE, external_id__in=ids
+        ).only("external_id", "name", "points")
+        if len(g.points) >= 2
+    ]
+
+
 def compute_mapa(
     org: Any,
     quedas: list[ConnectionDropEvent],
     *,
     vizinhas_intactas: list[dict[str, Any]] | None = None,
+    cabos_candidatos: list[str] | None = None,
 ) -> dict[str, Any]:
     """Pontos e ligações do mapa: quem está fora, quem voltou, CTOs, POPs.
 
@@ -929,11 +1094,14 @@ def compute_mapa(
     precisa ver o vermelho virando verde. O carimbo de hora vai no rótulo do
     ponto (caiu às / voltou às) — sem ele, "verde" não diria *quando* voltou.
 
-    As **ligações** (R3) são o passo seguinte: da caixa até o POP que a alimenta,
-    e da caixa a montante até as demais afetadas. São retas entre dois pontos que
-    existem no cadastro, e **não são o caminho da fibra** — a geometria do cabo
-    não vem na API (§2.3). Por isso saem tracejadas: linha cheia leria como
-    traçado, e o técnico cavaria onde a linha passa.
+    As **ligações** (R3) são retas entre dois pontos do cadastro — caixa → POP e
+    caixa a montante → demais afetadas — e **não são o caminho da fibra**. Por
+    isso saem tracejadas: linha cheia leria como traçado, e o técnico cavaria
+    onde a linha passa.
+
+    O **traçado do cabo** (G5) é a exceção que agora existe: aquilo é geometria
+    de verdade, vinda do InMap, e sai em linha cheia. Só dos cabos candidatos —
+    desenhar os 1.191 do cadastro daria um borrão sem pergunta.
 
     `vizinhas_intactas` (R6) são as caixas da mesma PON que não caíram. Entram
     como ponto vazado: é o que delimita o trecho.
@@ -1000,6 +1168,7 @@ def compute_mapa(
         "vizinhas": vizinhas,
         "ligacoes": ligacoes,
         "trecho": trecho,
+        "cabos": _tracados_do_mapa(org, cabos_candidatos or []),
         "sem_coordenada": sem_coordenada,
         "total_quedas": len(quedas),
     }
@@ -1283,6 +1452,7 @@ def compute_massiva_detalhe(
         })
 
     quedas = [a.drop_event for a in afetados if a.drop_event]
+    cabos = compute_cabos_candidatos(org, quedas)
     return {
         "causas_onu": compute_causas_onu(quedas),
         "motivos": compute_motivos(quedas),
@@ -1294,6 +1464,7 @@ def compute_massiva_detalhe(
             reincidencia=compute_reincidencia(
                 org, [outage], now=now or timezone.now()
             ).get(outage.pk),
+            cabos=cabos,
         ),
         "linhas": linhas,
         "sinal_disponivel": _signal_fields_available(),
@@ -1305,6 +1476,7 @@ def compute_massiva_detalhe(
             org,
             quedas,
             vizinhas_intactas=compute_vizinhanca(org, quedas).get("intactas", []),
+            cabos_candidatos=cabos.get("ids_no_mapa", []),
         ),
     }
 

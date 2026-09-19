@@ -11,11 +11,17 @@ from apps.integrations.shared.enums import SourceType
 from apps.network.domain.dto import (
     BandwidthUsageDTO,
     ConnectionDTO,
+    ElementGeometryDTO,
     NetworkElementDTO,
 )
 from apps.tenancy.models import Organization
 
-from .models import BandwidthUsage, Connection, NetworkElement
+from .models import (
+    BandwidthUsage,
+    Connection,
+    NetworkElement,
+    NetworkElementGeometry,
+)
 
 
 class ConnectionRepository:
@@ -200,6 +206,45 @@ class BandwidthUsageRepository:
             defaults=defaults,
         )
         return usage, created
+
+
+class NetworkElementGeometryRepository:
+    """Persistência idempotente do traçado de um elemento.
+
+    Mesma chave composta do elemento — `(organization, source_type, kind,
+    external_id)` —, porque é o mesmo objeto visto de outro ângulo.
+
+    O traçado é **substituído**, nunca acumulado: cabo que perdeu vértice no
+    cadastro tem que perder aqui também. Acumular faria a linha crescer para
+    sempre e desenhar um caminho que o projeto não tem mais.
+    """
+
+    def __init__(self, organization: Organization) -> None:
+        self.organization = organization
+
+    @transaction.atomic
+    def upsert_from_dto(
+        self,
+        dto: ElementGeometryDTO,
+        *,
+        source_type: SourceType,
+    ) -> tuple[NetworkElementGeometry, bool]:
+        """Upsert idempotente. Retorna (geometry, created)."""
+        geometry, created = NetworkElementGeometry.objects.update_or_create(
+            organization=self.organization,
+            source_type=source_type.value,
+            kind=dto.kind,
+            external_id=dto.external_id,
+            defaults={
+                "name": dto.name,
+                "project_external_id": dto.project_external_id,
+                # Lista de listas, não de tuplas: o JSONField devolveria listas
+                # na próxima leitura de qualquer jeito, e gravar tupla faria o
+                # objeto em memória divergir do que o banco entrega.
+                "points": [[lat, lon] for lat, lon in dto.points],
+            },
+        )
+        return geometry, created
 
 
 class NetworkElementRepository:
