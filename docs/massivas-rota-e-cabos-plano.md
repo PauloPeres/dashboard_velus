@@ -6,6 +6,11 @@ desenhado no mapa, com os cabos candidatos nomeados".
 **Decidido em 2026-09-18:** R1 respondida (o prefixo do nome da CTO é área, não
 topologia) — R4 rebaixada e R5 bloqueada. Primeira tarefa a executar: **R7**.
 
+**Virada em 2026-09-19:** R2 derrubou a premissa central deste plano. A geometria
+do cabo **existe na API** e o vínculo cabo↔CTO sai por proximidade — R5 destrava
+e o traçado real (camada 3) deixa de ser hipótese. R3, R6, R7 e R8 já estão no
+ar; o que falta virou um épico de sync de geometria.
+
 **Regra que não muda (§2.3 do [massivas-plano.md](massivas-plano.md)):** a tela
 pode mostrar *ligação lógica* e *candidato*, nunca *traçado de cabo* nem
 "cabo X rompido". Uma linha no mapa que o técnico leia como o caminho real da
@@ -23,15 +28,18 @@ fibra, sem ser, é pior do que não desenhar nada — ele cava no lugar errado.
 | OLT   | 3     | **0 com lat/lon** | mas todas com `parent_kind=POP` → herda a coordenada do POP |
 | PON   | 307   | —   | `parent_kind=OLT` |
 | CTO   | 1.445 | 1.438 com lat/lon | **100% com `parent_kind=OLT`** |
-| CABLE | 1.191 | **sem geometria** | só id, descrição e projeto |
+| CABLE | 1.191 | **traçado completo** (R2) | 1.189 com ≥2 vértices, mediana 5 |
 
 ### O vínculo que falta
 
-- `df_elemento_coordenada` mapeia elemento → id de coordenada, mas **a tabela de
-  coordenadas não tem endpoint na API** (§2.3). Sem isso, cabo não tem traçado.
-- Não existe vínculo cabo↔CTO. O único campo comum é `project_external_id`, e
-  ele é grosso demais: **562 cabos no projeto 1, 318 no 7, 258 no 5**. "Os cabos
-  do projeto" seriam centenas de candidatos — ruído, não pista.
+- ~~`df_elemento_coordenada` mapeia elemento → id de coordenada, mas a tabela de
+  coordenadas não tem endpoint na API.~~ **Falso — R2 (2026-09-19) mediu o
+  contrário:** `df_coordenada` existe, são 10.520 pontos, e a cadeia dá o traçado
+  do cabo. A afirmação tinha entrado aqui sem teste.
+- ~~Não existe vínculo cabo↔CTO.~~ Não existe *por campo*; **existe por
+  geometria**: 1.120 das 1.431 CTOs a ≤10 m de um vértice de cabo, mediana 0,0 m.
+  O `project_external_id` continua grosso demais (562 cabos no projeto 1), mas
+  agora não é ele que estreita a lista.
 - CTO aponta para OLT, nunca para PON (§2.5c): a PON é propriedade do login.
 
 ### Dois achados novos que abrem caminho
@@ -85,8 +93,9 @@ terceira só com dado novo.
 2. **Trecho suspeito entre CTOs** (linha laranja, pontilhada, com seta). Liga a
    CTO a montante às demais integralmente fora — é o `suspected_segment_label` de
    hoje, desenhado em vez de escrito.
-3. **Traçado real do cabo** (linha cheia). Só existe se conseguirmos geometria —
-   ver tarefa R2. Sem ela, não desenhamos.
+3. **Traçado real do cabo** (linha cheia). **R2 achou a geometria** — existe e
+   está completa. Falta trazê-la para o nosso banco (épico próprio) antes de
+   desenhar; enquanto o dado não estiver sincronizado, a camada não entra.
 
 ---
 
@@ -160,16 +169,46 @@ foram rebaixadas abaixo.
 Ainda serve para uma coisa: dizer *onde* é ("massiva na área A34"), que é melhor
 que enfileirar 12 nomes de caixa. Mas não serve para dizer *qual trecho* rompeu.
 
-### R2 — Spike: existe alguma forma de obter geometria?
-Três caminhos a testar, em ordem de custo:
-- bater em `df_elemento_coordenada` e nas rotas vizinhas na API de produção e
-  registrar a resposta real (hoje a afirmação "não tem endpoint" está no plano
-  mas não tem evidência colada);
-- verificar se o InMap exporta o projeto em KML/KMZ — se exportar, um importador
-  manual (upload de arquivo) dá traçado de verdade, sem depender da API;
-- verificar se o banco do IXC é acessível por outro meio que não a API.
-**Entrega:** resposta sim/não por caminho, com o que foi tentado. Se algum der
-certo, vira épico próprio (traçado real muda tudo).
+### R2 — Spike: existe alguma forma de obter geometria? — **SIM** (2026-09-19)
+
+**Caminho 1 (API): sim, e resolve sozinho.** Os outros dois caminhos (export
+KML/KMZ do InMap, acesso ao banco do IXC) não foram testados e não precisam
+ser — o primeiro respondeu.
+
+A afirmação de que a tabela de coordenadas não tinha endpoint estava no plano
+**sem evidência**, e era falsa. Resposta crua da API de produção:
+
+    GET /webservice/v1/df_coordenada
+    {"id": "14607", "latitude": "-23.606832073821",
+     "longitude": "-47.489063081764", "ultima_atualizacao": "2026-09-18 19:54:43"}
+
+    GET /webservice/v1/df_elemento_coordenada  (filtro id_elemento = 2808)
+    {"sequencia": "1", "id": "22553", "id_elemento": "2808", "id_coordenada": "14605"}
+    {"sequencia": "2", "id": "22552", "id_elemento": "2808", "id_coordenada": "14604"}
+    {"sequencia": "0", "id": "22551", "id_elemento": "2808", "id_coordenada": "14603"}
+
+A cadeia é `df_elemento (tipo=CB) → df_elemento_coordenada (ordenado por
+`sequencia`) → df_coordenada`, e o `sequencia` é a ordem dos vértices: sai
+polilinha, não ponto.
+
+**Volumes medidos:** 10.520 coordenadas, 12.922 vínculos, 1.191 cabos —
+**1.189 com 2 ou mais vértices** (mediana 5, máximo 121). Também têm ponto as
+317 caixas de emenda (CA), 90 postes (PT) e 51 áreas (AR) do InMap.
+
+**E o vínculo cabo↔CTO, que se dava por inexistente, sai por geometria:** 1.120
+das 1.431 CTOs com coordenada estão a **≤10 m** de um vértice de cabo, e a
+mediana da distância é **0,0 m** — o cadastro do InMap usa exatamente o mesmo
+ponto da caixa. A ≤30 m são 1.211; o p90 é 81,5 m e o pior caso 574 m.
+
+**Quirk de API a lembrar:** o filtro tem que usar o nome exato da coluna.
+`df_elemento_coordenada.id_df_elemento` devolve a página HTML de erro do IXC; o
+campo certo é `id_elemento`.
+
+**Consequência:** R5 destrava (abaixo), a §2.3 do
+[massivas-plano.md](massivas-plano.md) foi reescrita, e o traçado real vira
+épico próprio — sync dos três recursos, modelo de geometria e a camada 3 do
+mapa. O que **não** muda: desenhar o cabo é leitura de cadastro; dizer que ele
+rompeu continua sendo inferência, e isso depende de R9.
 
 ### R3 — Desenhar as ligações lógicas no mapa — FEITA (2026-09-18)
 Camadas 1 e 2 da seção 2, com legenda explícita e estilo pontilhado.
@@ -205,13 +244,24 @@ lista de 12 caixas por "área A34 (2 caixas), A37 (1 caixa), a jusante de A31" �
 com o cuidado de não sugerir que a área é o trecho.
 **Prioridade baixa.** Cosmético, não diagnóstico.
 
-### R5 — Cabos candidatos (BLOQUEADA)
+### R5 — Cabos candidatos — DESTRAVADA por R2 (2026-09-19)
 A ideia era listar os cabos do projeto filtrados por classe (BACKBONE e
-ATENDIMENTO; DROP nunca). **Sem R1, não há como estreitar a lista**: o projeto 1
-tem 562 cabos e nenhum campo os liga a uma CTO. Um card com 562 candidatos não é
-pista, é ruído — e dá ao técnico a sensação falsa de que o sistema sabe algo.
+ATENDIMENTO; DROP nunca). Estava bloqueada porque nenhum campo ligava cabo a
+CTO, e "os 562 cabos do projeto" seria ruído.
 
-**Só destrava se R2 achar geometria.** Até lá, não implementar.
+**R2 achou geometria**, e com ela o vínculo: o cabo candidato é o que passa perto
+das caixas afetadas — 1.120 das 1.431 CTOs estão a ≤10 m de um vértice, mediana
+0,0 m. O card deixa de listar o projeto inteiro e passa a nomear os poucos cabos
+que tocam as caixas do evento.
+
+**Duas coisas que a tela vai ter de declarar:** ~15% das caixas não têm cabo
+cadastrado a menos de 30 m (ali não se nomeia candidato, e dizer isso é a
+resposta), e "candidato" continua sendo proximidade de cadastro — não é leitura
+de que a fibra passa por ali, nem de que rompeu.
+
+**Depende de:** o épico de sync da geometria (ver R2). Não implementar antes do
+dado estar no nosso banco — 24 mil registros por chamada de tela é sync, não
+consulta ao vivo.
 
 ### R6 — "Quem não caiu" no card e no mapa — FEITA (2026-09-18)
 Para cada massiva: irmãos do mesmo elemento que continuam de pé, com

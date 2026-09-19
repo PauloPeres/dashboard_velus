@@ -60,21 +60,35 @@ Medição de hoje: **237 logins ativos offline, 45 deles com queda na mesma hora
 | `rad_caixa_ftth` | CTO / caixa de atendimento | 1.445 | lat/lon, endereço, capacidade, `id_transmissor` |
 | `radpop` | POP / ponto de transmissão | 9 | lat/lon |
 | `radpop_radio_porta_fibra` | porta PON | 307 | via slot → transmissor |
-| `df_elemento` (`tipo=CB`) | cabo | 1.191 | **sem geometria** |
+| `df_elemento` (`tipo=CB`) | cabo | 1.191 | traçado via `df_elemento_coordenada` + `df_coordenada` (§2.3) |
 
 Hierarquia utilizável: `POP → transmissor (OLT) → slot → porta PON → CTO → porta → login`.
 
-### 2.3 Limite: geometria de cabo é inacessível
+### 2.3 ~~Limite: geometria de cabo é inacessível~~ — PREMISSA DERRUBADA (2026-09-19)
 
-`df_elemento_coordenada` só mapeia `id_elemento → id_coordenada`; a tabela de
-coordenadas **não tem endpoint na API**. Consequência de projeto:
+**O que se afirmava aqui:** `df_elemento_coordenada` só mapeia
+`id_elemento → id_coordenada` e a tabela de coordenadas não tem endpoint na API.
+**Isso era falso, e nunca tinha sido testado** — a afirmação entrou no plano sem
+resposta crua colada ao lado. O spike R2 bateu na API de produção:
 
-- cabo **não é desenhado** no mapa e **não é casado por proximidade**;
-- "cabo rompido" é **inferência de topologia**, nunca leitura: quando duas ou
-  mais CTOs vizinhas da mesma PON estão 100% fora, o trecho que as alimenta é o
-  suspeito. A UI diz "trecho suspeito", não "cabo X rompido".
+- **`df_coordenada` existe e devolve `latitude`/`longitude`** — 10.520 registros;
+- `df_elemento_coordenada` traz `sequencia`, que é a **ordem dos vértices** —
+  12.922 vínculos;
+- **1.189 dos 1.191 cabos têm 2 ou mais vértices** (mediana 5, máximo 121).
+  Nenhum cabo está sem ponto.
 
-Qualquer tela que prometer o traçado do cabo está mentindo. Não prometa.
+Ou seja: `df_elemento (CB) → df_elemento_coordenada (ordenado por sequencia) →
+df_coordenada` **é o traçado real do cabo**, e ele está disponível.
+
+O casamento cabo↔CTO, que também se dava por impossível, sai por geometria:
+**1.120 das 1.431 CTOs com coordenada estão a ≤10 m de um vértice de cabo** (a
+mediana da distância é 0,0 m — o InMap usa o mesmo ponto), 1.211 a ≤30 m, p90 de
+81,5 m. Sobram ~15% de caixas longe de qualquer cabo cadastrado, e é essa a
+cobertura que qualquer tela de cabo terá de declarar.
+
+**O que continua valendo:** a regra de não dizer "cabo X rompido" não vinha só da
+falta de traçado — vinha de não haver confirmação de causa (R9). Desenhar o cabo
+é leitura de cadastro; afirmar que ele rompeu continua sendo inferência.
 
 ### 2.4 Limite: `motivo_desconexao` é pobre
 

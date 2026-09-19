@@ -19,9 +19,15 @@ Quirk medido: `radpop_radio_porta_fibra` devolve a página HTML de erro do IXC
 ("Ocorreu um erro ao processar") quando recebe qualquer `qtype` — só aceita
 paginação pura. Por isso este é o único recurso aqui sem filtro possível.
 
-Cabo não tem geometria: `df_elemento_coordenada` só mapeia elemento → id de
-coordenada e a tabela de coordenadas não tem endpoint (plano §2.3). Guardamos
-nome e projeto; nada de traçado.
+Cabo **tem** geometria, ao contrário do que este arquivo dizia até 2026-09-19:
+`df_elemento_coordenada` (com `sequencia` = ordem dos vértices) mais
+`df_coordenada` (que existe e devolve lat/lon) dão a polilinha — 1.189 dos 1.191
+cabos têm 2 ou mais vértices. Aqui continuamos guardando só nome e projeto
+porque trazer o traçado é sync de outros dois recursos, com modelo próprio; ver
+R2 em `docs/massivas-rota-e-cabos-plano.md`.
+
+Quirk do filtro: a coluna é `df_elemento_coordenada.id_elemento`. Pedir por
+`id_df_elemento` devolve a página HTML de erro do IXC.
 """
 
 from __future__ import annotations
