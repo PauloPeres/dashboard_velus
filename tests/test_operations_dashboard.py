@@ -9,7 +9,7 @@ segue o filtro, e o que é estoque (chamados em aberto) fica marcado na UI como
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -29,9 +29,17 @@ def _ticket(
     status: str = "CLOSED",
     opened_offset_days: int = 3,
     resolution_hours: float | None = 1.0,
+    opened_at: datetime | None = None,
 ) -> Ticket:
+    """Chamado de teste. `opened_at` fixa o instante quando o dia importa.
+
+    O default (`agora - N dias`) é cômodo mas anda com o relógio: um chamado
+    aberto "há 1 dia" e fechado 1 h depois cai em **anteontem → ontem** quando o
+    teste roda perto da meia-noite, e some da janela "Ontem". Foi assim que o CI
+    quebrou às 23:49 de 18/09 — teste de véspera, não de código.
+    """
     set_current_organization(org)
-    opened_at = timezone.now() - timedelta(days=opened_offset_days)
+    opened_at = opened_at or (timezone.now() - timedelta(days=opened_offset_days))
     closed_at = (
         opened_at + timedelta(hours=resolution_hours)
         if status == "CLOSED" and resolution_hours is not None
@@ -74,9 +82,17 @@ class TestPeriodoEmDias:
     def test_kpi_de_fechados_segue_o_filtro_e_nao_o_mes_corrente(
         self, client: Any, user_a: User, organization_a: Organization
     ) -> None:
-        # Um fechado ontem, um fechado há 10 dias: os dois caem no mês corrente
-        # na maior parte do mês, mas só um cai na janela "Ontem".
-        _ticket(organization_a, external_id="1", opened_offset_days=1)
+        # Um fechado ontem, um fechado há 10 dias: os dois caem na janela de 30
+        # dias, mas só um cai na janela "Ontem".
+        #
+        # O de ontem é ancorado ao MEIO-DIA da véspera, no fuso da aplicação, e
+        # não a "agora menos 1 dia": rodando às 23:49, o fechamento uma hora
+        # depois da abertura pularia para hoje e o teste falharia por causa do
+        # relógio, não do código.
+        ontem_meio_dia = (timezone.localtime() - timedelta(days=1)).replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        _ticket(organization_a, external_id="1", opened_at=ontem_meio_dia)
         _ticket(organization_a, external_id="2", opened_offset_days=10)
 
         client.force_login(user_a)
