@@ -22,6 +22,7 @@ from apps.dashboards.massivas import (
 
 from . import PanelSpec, SlideSpec, register
 from .alerts import classificar
+from .atendimento import snapshot_atendimento, tem_atendimento
 
 # Acima disto o dado é velho o bastante para a tela avisar em vez de deixar a
 # sala supor que está tudo calmo. É o mesmo limite do poll (§7 do plano de
@@ -75,6 +76,9 @@ def _snapshot(org: Any, now: datetime) -> dict[str, Any]:
         "massivas": sorted(abertas, key=lambda linha: -linha["ainda_fora"]),
         "alerta": alerta,
         "base_de_clientes": base,
+        # A fila do atendimento (P10): é o sintoma que aparece antes de a
+        # massiva fechar escopo.
+        "atendimento": snapshot_atendimento(org, now),
         "timeline": dados["timeline"],
         "mapa": dados["mapa"],
         "mapa_quedas_avulsas": dados["mapa_quedas_avulsas"],
@@ -118,6 +122,15 @@ PANEL = register(
                 title="Últimas horas",
                 template="dashboards/panels/slides/_ultimas24h.html",
                 seconds=15,
+            ),
+            # Só entra onde existe atendimento sincronizado: três zeros numa TV
+            # se leem como "está tudo calmo", que é o oposto de "não sei".
+            SlideSpec(
+                key="atendimento",
+                title="Atendimento",
+                template="dashboards/panels/slides/_atendimento.html",
+                seconds=15,
+                only_when=tem_atendimento,
             ),
         ),
     )

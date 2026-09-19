@@ -1,0 +1,49 @@
+{% load humanize %}
+{% comment %}
+Fila do atendimento (P10).
+
+Três números, e só três: quem espera agora, há quanto tempo espera o mais
+antigo, e o volume da hora contra o normal daquela hora. O terceiro é o que
+transforma "muita gente ligando" em informação — "4,1× o normal" é sinal de
+massiva, "dentro do normal" é uma terça-feira.
+
+A hora corrente é parcial por natureza (às 14h10 ela tem dez minutos de volume
+contra uma hora de esperado), e a tela diz isso: sem a ressalva, toda hora
+começaria "abaixo do normal".
+{% endcomment %}
+<div class="h-full flex items-center justify-around gap-10 text-center">
+
+  <div>
+    <p class="text-[11px] uppercase tracking-[0.2em] text-slate-500">Na fila</p>
+    <p class="text-8xl font-black tabular-nums {% if snapshot.atendimento.na_fila %}text-slate-100{% else %}text-emerald-400{% endif %}">
+      {{ snapshot.atendimento.na_fila|intcomma }}
+    </p>
+  </div>
+
+  <div>
+    <p class="text-[11px] uppercase tracking-[0.2em] text-slate-500">Espera mais longa</p>
+    <p class="text-8xl font-black tabular-nums {% if snapshot.atendimento.espera_alerta %}text-amber-300{% else %}text-slate-100{% endif %}">
+      {{ snapshot.atendimento.espera_minutos }}<span class="text-3xl font-semibold"> min</span>
+    </p>
+  </div>
+
+  <div>
+    <p class="text-[11px] uppercase tracking-[0.2em] text-slate-500">Volume desta hora</p>
+    {% if snapshot.atendimento.volume.medivel %}
+    <p class="text-8xl font-black tabular-nums {% if snapshot.atendimento.volume.anomalia %}text-red-400{% else %}text-slate-100{% endif %}">
+      {{ snapshot.atendimento.volume.real }}
+    </p>
+    <p class="text-xl text-slate-400 mt-1">
+      {% if snapshot.atendimento.volume.ratio %}
+        {{ snapshot.atendimento.volume.ratio }}× o normal
+      {% else %}
+        esperado {{ snapshot.atendimento.volume.esperado }}
+      {% endif %}
+    </p>
+    <p class="text-sm text-slate-600 mt-1">hora em curso — ainda incompleta</p>
+    {% else %}
+    <p class="text-6xl font-black text-slate-600">—</p>
+    <p class="text-lg text-slate-500 mt-2">sem baseline para esta hora</p>
+    {% endif %}
+  </div>
+</div>

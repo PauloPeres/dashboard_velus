@@ -25,6 +25,7 @@ from django.test import Client
 from django.utils import timezone
 
 from apps.dashboards.panels import get_panel
+from apps.dashboards.panels.atendimento import tem_atendimento
 from apps.dashboards.panels.alerts import (
     NIVEL_ATENCAO,
     NIVEL_CRITICO,
@@ -456,3 +457,57 @@ class TestReconhecimento:
         assert resp.status_code == 404
         alheia.refresh_from_db()
         assert alheia.acknowledged_at is None
+
+
+# =============================================================================
+# P10 — o slide de atendimento
+# =============================================================================
+@pytest.mark.django_db
+class TestSlideDeAtendimento:
+    def _atendimento(self, org: Organization, *, minutos_atras: int, status: str) -> Any:
+        from apps.atendimento.infrastructure.models import Atendimento
+
+        set_current_organization(org)
+        return Atendimento.objects.create(
+            organization=org,
+            source_type="OPA",
+            external_id=f"at-{minutos_atras}-{status}",
+            customer_external_id="c1",
+            status=status,
+            opened_at=timezone.now() - timedelta(minutes=minutos_atras),
+        )
+
+    def test_sem_atendimento_sincronizado_o_slide_some(
+        self, organization_a: Organization
+    ) -> None:
+        """Três zeros numa TV se leem como 'está tudo calmo', que é o oposto de
+        'não sei'."""
+        from apps.dashboards.panels.atendimento import snapshot_atendimento
+
+        # O snapshot roda com a org no contexto (é o que a view faz antes de
+        # chamar o painel); aqui o ponto é a ORG SEM atendimento nenhum.
+        set_current_organization(organization_a)
+        dados = snapshot_atendimento(organization_a, timezone.now())
+        assert dados["disponivel"] is False
+        assert tem_atendimento({"atendimento": dados}) is False
+
+    def test_fila_conta_abertos_e_em_atendimento(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.atendimento.infrastructure.models import Atendimento
+        from apps.dashboards.panels.atendimento import snapshot_atendimento
+
+        self._atendimento(organization_a, minutos_atras=10, status=Atendimento.Status.OPEN)
+        self._atendimento(
+            organization_a, minutos_atras=45, status=Atendimento.Status.IN_PROGRESS
+        )
+        self._atendimento(
+            organization_a, minutos_atras=90, status=Atendimento.Status.CLOSED
+        )
+
+        dados = snapshot_atendimento(organization_a, timezone.now())
+        assert dados["disponivel"] is True
+        assert dados["na_fila"] == 2
+        # A espera é a do mais antigo da fila, não a do fechado.
+        assert 44 <= dados["espera_minutos"] <= 46
+        assert dados["espera_alerta"] is True

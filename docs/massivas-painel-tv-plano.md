@@ -351,13 +351,38 @@ madrugada. TV de NOC fica meses ligada e o Chrome trava.
 **Depende de:** P2.
 
 **Feito:** a recarga periódica da página (15 min), que já cobre o JS engasgado e
-traz os slides redesenhados. **Falta** o lado de fora do navegador: kiosk mode,
-autostart e watchdog do sistema operacional — isso é configuração da máquina da
-sala, não código.
+traz os slides redesenhados. O lado de fora do navegador — kiosk, autostart,
+watchdog, tela sempre acesa — é configuração da máquina da sala, e virou runbook:
+[painel-tv-operacao.md](painel-tv-operacao.md).
 
-### P10 — Slide de atendimento (Opa! Suite)
+Dois detalhes desse runbook que só aparecem quando a TV já está na parede:
+`--noerrdialogs` (depois de uma queda de energia o Chrome abre "o navegador não
+foi encerrado corretamente" **por cima do painel**, e numa sala sem teclado isso
+inutiliza a tela) e **nada de aba anônima** — a credencial da TV vive num cookie
+e o "já anunciei esta massiva" vive no `localStorage`; em anônima, a TV pede
+pareamento a cada reinício e repete o takeover do mesmo evento.
+
+### P10 — Slide de atendimento (Opa! Suite) — FEITA (19/09/2026)
 Fila, espera mais longa e pico anormal de contatos.
 **Depende de:** P3.
+
+**Como ficou.** Três números e só três: quem espera agora, há quanto tempo
+espera o mais antigo, e o volume da hora contra o normal **daquela** hora.
+
+O terceiro reaproveita o baseline sazonal da aba de Tendências
+(`atendimento_hora_esperado`) em vez de recalcular "o normal" aqui. Duas contas
+diferentes para a mesma pergunta fariam a TV e a aba discordarem — e no dia da
+discordância ninguém saberia em qual acreditar.
+
+Duas honestidades: a **hora em curso é parcial** (às 14h10 ela tem dez minutos de
+volume contra uma hora de esperado) e a tela diz isso, senão toda hora começaria
+"abaixo do normal"; e o slide **some da rotação** onde não há atendimento
+sincronizado, porque três zeros numa TV se leem como "está tudo calmo", que é o
+oposto de "não sei".
+
+Por que um slide de atendimento numa TV de rede: a fila é o sintoma que aparece
+**antes** de a massiva fechar escopo. Trinta pessoas ligando do mesmo bairro é
+evento de rede antes de ser evento de atendimento.
 
 ---
 
