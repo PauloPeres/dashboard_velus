@@ -155,6 +155,7 @@ def _build_topology() -> TopologyInput:
     """Denominadores e hierarquia — logins de `Connection`, planta de `NetworkElement`."""
     return TopologyInput(
         active_logins_per_cto=active_logins_per_cto(),
+        active_logins_per_pon=active_logins_per_pon(),
         cto_to_transmitter=_cto_to_transmitter(),
         cto_to_pop=_cto_to_pop(),
         cto_coordinates=_cto_coordinates(),
@@ -192,6 +193,39 @@ def active_logins_per_cto() -> dict[str, int]:
         if contract_id and contract_id in inativos:
             continue
         counts[cto_id] += 1
+    return dict(counts)
+
+
+def active_logins_per_pon() -> dict[str, int]:
+    """Quantos logins de contrato ATIVO cada porta PON tem.
+
+    A PON é propriedade do login (§2.5c), então ela se conta direto da
+    `Connection` — não pela caixa. Era isso que faltava: o denominador da PON
+    vinha da soma das caixas *que qualificaram no degrau de CTO*, enquanto o
+    numerador pegava todo login da porta, e a fração passava de 100% (225% na
+    PON 364, em produção).
+
+    *Medido em 2026-09-18:* 3.275 das 8.294 conexões têm `pon_external_id`. A
+    porta que não aparece aqui devolve 0, e o cálculo cai no denominador antigo
+    em vez de inventar cobertura que não existe.
+    """
+    from apps.customers.infrastructure.models import Contract
+
+    inativos = set(
+        Contract.objects
+        .exclude(status=Contract.Status.ACTIVE)
+        .values_list("external_id", flat=True)
+    )
+    counts: dict[str, int] = defaultdict(int)
+    rows = (
+        Connection.objects
+        .exclude(pon_external_id="")
+        .values_list("pon_external_id", "contract_external_id")
+    )
+    for pon_id, contract_id in rows:
+        if contract_id and contract_id in inativos:
+            continue
+        counts[pon_id] += 1
     return dict(counts)
 
 

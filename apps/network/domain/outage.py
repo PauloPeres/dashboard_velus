@@ -98,6 +98,12 @@ class TopologyInput:
     """Denominadores da topologia: quantos logins ATIVOS cada elemento tem."""
 
     active_logins_per_cto: Mapping[str, int] = field(default_factory=dict)
+    # Denominador da porta PON, contado direto do login — a PON é propriedade do
+    # login, não da caixa (§2.5c). Sem ele, o denominador da PON era a soma das
+    # caixas afetadas, o que produziu fração de 225% em produção: o numerador
+    # tem logins de caixas que não entraram na soma. Vazio, o cálculo cai no
+    # comportamento antigo e a fração continua sendo teto, não medida.
+    active_logins_per_pon: Mapping[str, int] = field(default_factory=dict)
     # Mantido pelo contrato, mas NÃO decide a PON de nenhum login: 26% das CTOs
     # são alimentadas por mais de uma porta (ver docstring de DropInput). Serve
     # só como sinal auxiliar de cadastro; o detector deriva PON dos logins.
@@ -182,6 +188,7 @@ class _ResolvedTopology:
         self,
         *,
         active_per_cto: Mapping[str, int],
+        active_per_pon: Mapping[str, int],
         cto_to_transmitter: Mapping[str, str],
         cto_to_pop: Mapping[str, str],
         cto_coordinates: Mapping[str, tuple[float, float]],
@@ -189,6 +196,7 @@ class _ResolvedTopology:
         pop_coordinates: Mapping[str, tuple[float, float]],
     ) -> None:
         self.active_per_cto = active_per_cto
+        self.active_per_pon = active_per_pon
         self.cto_to_transmitter = cto_to_transmitter
         self.cto_to_pop = cto_to_pop
         self.cto_coordinates = cto_coordinates
@@ -208,6 +216,7 @@ class _ResolvedTopology:
                 cto_to_pop[drop.cto_id] = drop.pop_id
         return cls(
             active_per_cto=dict(topology.active_logins_per_cto),
+            active_per_pon=dict(topology.active_logins_per_pon),
             cto_to_transmitter=cto_to_transmitter,
             cto_to_pop=cto_to_pop,
             cto_coordinates=dict(topology.cto_coordinates),
@@ -217,6 +226,10 @@ class _ResolvedTopology:
 
     def active_logins(self, cto_id: str) -> int:
         return int(self.active_per_cto.get(cto_id, 0))
+
+    def active_logins_on_pon(self, pon_id: str) -> int:
+        """Logins ativos cadastrados nesta porta — 0 quando a PON não é conhecida."""
+        return int(self.active_per_pon.get(pon_id, 0))
 
     def transmitter_of(self, cto_id: str) -> str:
         return self.cto_to_transmitter.get(cto_id, "")
@@ -435,7 +448,9 @@ def _topological_clusters(
                 ),
                 confidence=_confidence(len(members), denominator),
                 members=members,
-                fraction=_fraction(len(members), denominator),
+                fraction=_fraction(
+                    _affected_for_fraction(scope, element_id, members), denominator
+                ),
             )
         )
         used_logins.update(d.login_id for d in members)
@@ -490,17 +505,51 @@ def _denominator_for(
     if scope == SCOPE_CTO:
         return topology.active_logins(element_id)
     if scope == SCOPE_PON:
-        # Não existe contagem de logins ativos por porta PON — o melhor
-        # denominador disponível é o das caixas filiadas a ela. Superestima
-        # (a caixa pode ser alimentada por outra porta também), e superestimar
-        # puxa a fração pra baixo: erra pro lado conservador da confiança.
+        # O denominador certo é o da própria porta, contado do login (a PON é
+        # propriedade do login, §2.5c). A soma das caixas filiadas — que era o
+        # que se usava aqui — só enxerga as caixas que QUALIFICARAM no degrau de
+        # CTO, enquanto o numerador pega todo login da porta: em produção isso
+        # deu 225% na PON 364. Sem cobertura de PON no cadastro, cai na soma
+        # antiga, que é teto e não medida.
+        na_porta = topology.active_logins_on_pon(element_id)
+        if na_porta:
+            return na_porta
         ctos = [cto for cto, pon in cto_pon.items() if pon == element_id]
         return sum(topology.active_logins(cto) for cto in ctos)
     return sum(topology.active_logins(cto) for cto in topology.ctos_under(scope, element_id))
 
 
 def _fraction(affected: int, denominator: int) -> float:
-    return (affected / denominator) if denominator else 0.0
+    """Fração afetada, com teto em 100%.
+
+    O teto não é cosmético: numerador e denominador vêm de fontes diferentes (a
+    queda vem do poll, o denominador do cadastro), e um login que caiu mas cujo
+    contrato já está cancelado entra num e não no outro. Nesse resto, "100%" é a
+    leitura verdadeira — todo mundo que a gente conhece naquele elemento caiu.
+    Fração acima de 1 nunca é informação: é denominador errado, e foi assim que
+    apareceu na tela de produção (225% na PON 364).
+    """
+    if not denominator:
+        return 0.0
+    return min(affected / denominator, 1.0)
+
+
+def _affected_for_fraction(
+    scope: str, element_id: str, members: Sequence[DropInput]
+) -> int:
+    """Quantos dos afetados o denominador daquele escopo realmente cobre.
+
+    Quem entra no cluster e quem entra na fração não são a mesma pergunta. Um
+    login sem porta PON no cadastro pertence ao evento (caiu junto, na mesma
+    caixa), mas não pode contar numa fração cujo denominador é "os logins desta
+    porta" — ele não está lá. Contá-lo foi metade do 225%.
+    """
+    if scope != SCOPE_PON:
+        return len(members)
+    atribuiveis = sum(1 for d in members if d.pon_id == element_id)
+    # Nenhum membro traz a porta: a filiação veio da caixa, e aí o numerador é o
+    # cluster inteiro sobre o denominador de caixas (o caminho antigo).
+    return atribuiveis or len(members)
 
 
 def _confidence(affected: int, denominator: int) -> str:
@@ -682,9 +731,16 @@ def _by_cto(drops: Sequence[DropInput]) -> dict[str, list[DropInput]]:
 
 
 def _geo_fraction(drops: Sequence[DropInput], topology: _ResolvedTopology) -> float:
-    """No GEO não há elemento em escopo — o denominador é o das CTOs envolvidas."""
+    """No GEO não há elemento em escopo — o denominador é o das CTOs envolvidas.
+
+    Por isso o numerador também é só quem tem caixa: um login sem CTO no snapshot
+    caiu dentro do raio, mas não está em nenhuma das caixas que formam o
+    denominador. Contá-lo dava 8/7 em produção — 114% de uma "área" que nem
+    elemento tem.
+    """
     ctos = {d.cto_id for d in drops if d.cto_id}
-    return _fraction(len(drops), sum(topology.active_logins(cto) for cto in ctos))
+    com_cto = sum(1 for d in drops if d.cto_id)
+    return _fraction(com_cto, sum(topology.active_logins(cto) for cto in ctos))
 
 
 def haversine_meters(a: tuple[float, float], b: tuple[float, float]) -> float:

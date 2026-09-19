@@ -319,9 +319,33 @@ esperado e não alarma.
 
 ---
 
-## 4. Achado lateral a investigar
+## 4. Achado lateral — RESOLVIDO (2026-09-18)
 
-`affected_fraction = 1.55` na massiva PON 364 aberta agora — fração de 155%, o
-que não deveria existir. Ou o denominador (logins ativos da PON) está menor que o
-número de afetados, ou o campo está sendo gravado em escala diferente. Não é
-desta frente, mas contamina a confiança do detector: abrir separado.
+`affected_fraction` acima de 100% em quatro massivas: **PON 364 com 2,25**, PON
+385 com 1,29 e dois clusters GEO com 1,14. Não era escala — era **denominador**,
+e a causa é a mesma nos dois escopos: numerador e denominador falavam de
+populações diferentes.
+
+**Na PON.** O denominador era a soma dos logins das caixas filiadas à porta, mas
+só das caixas que *qualificaram no degrau de CTO* (≥70% fora). O numerador pegava
+todo login da porta, inclusive os de caixas que não qualificaram e os que não têm
+PON no cadastro. Com o denominador certo — contado direto do login, porque a PON
+é propriedade do login (§2.5c) — a PON 364 é **31 de 67 = 46%**, não 225%. A
+diferença entre os dois denominadores no mesmo evento: 598 (soma das caixas
+afetadas) contra 67 (logins da porta).
+
+**No GEO.** O denominador são as caixas envolvidas e o numerador era o cluster
+inteiro, incluindo login sem CTO no snapshot: 8/7 = 114% de uma "área" que nem
+elemento de cadastro tem. Agora os dois lados contam só quem está numa caixa.
+
+**O que entrou junto:** teto de 100% na fração (o resto que sobra é login de
+contrato cancelado que caiu — entra no numerador e não no denominador, e ali
+"100%" é a leitura verdadeira); a frase do GEO na tela passou a dizer o
+denominador por extenso ("dos logins das caixas envolvidas") em vez de "dos
+logins da área"; e `fix_outage_fractions`, comando para os registros já gravados,
+que a massiva encerrada ninguém recalcula. Ele recusa o recálculo quando o
+cadastro de hoje não sustenta número — deixar o valor impossível é melhor que
+escrever um inventado.
+
+*Cobertura a lembrar:* 3.275 das 8.294 conexões têm `pon_external_id`. Porta sem
+cobertura cai no denominador antigo, que é teto, não medida.

@@ -657,3 +657,129 @@ def test_cto_isolada_nunca_ganha_trecho_suspeito():
     )
     assert cluster.scope == SCOPE_CTO
     assert cluster.suspected_segment_label == ""
+
+
+# ---------------------------------------------------------------------------
+# Fração afetada: numerador e denominador da mesma população
+# ---------------------------------------------------------------------------
+# Em produção a PON 364 saiu com `affected_fraction = 2.25` e a PON 385 com
+# 1.29 — fração de 225% e 129%, que não deveriam existir. A causa não era
+# escala: o denominador da PON era a soma das caixas que qualificaram no degrau
+# de CTO, enquanto o numerador pegava todo login da porta, inclusive o de caixa
+# que não qualificou. Dois clusters GEO tinham 114% pelo mesmo motivo, com login
+# sem CTO no numerador e nenhuma caixa dele no denominador.
+
+
+def test_fracao_da_pon_usa_o_denominador_da_porta_e_nao_o_das_caixas():
+    # 3 caixas de 4 logins na porta P1; duas caem inteiras (8 logins), a terceira
+    # perde 1. O numerador da PON pega os 9; o denominador da porta tem 12.
+    drops = [
+        *cto_drops("CTO-A", 4, pon="P1", transmitter="T1"),
+        *cto_drops("CTO-B", 4, pon="P1", transmitter="T1", minutes=1),
+        drop("CTO-C-0", minutes=2, cto="CTO-C", pon="P1", transmitter="T1"),
+    ]
+    cluster = only(
+        detect_outages(
+            drops,
+            topology(
+                active_logins_per_cto={"CTO-A": 4, "CTO-B": 4, "CTO-C": 4},
+                active_logins_per_pon={"P1": 12},
+                cto_to_transmitter={"CTO-A": "T1", "CTO-B": "T1", "CTO-C": "T1"},
+            ),
+        )
+    )
+    assert cluster.scope == SCOPE_PON
+    assert cluster.affected_count == 9
+    # Sem a correção: 9 sobre as caixas qualificadas (8) = 112%.
+    assert cluster.affected_fraction == pytest.approx(9 / 12)
+
+
+def test_login_sem_porta_no_cadastro_entra_no_cluster_mas_nao_na_fracao():
+    """Quem entra no evento e quem entra na fração são perguntas diferentes.
+
+    Um login sem PON caiu junto, na mesma caixa, e pertence à massiva. Mas o
+    denominador é "os logins desta porta", e ele não está lá — contá-lo foi
+    metade dos 225%.
+    """
+    drops = [
+        *cto_drops("CTO-A", 4, pon="P1", transmitter="T1"),
+        *cto_drops("CTO-B", 4, pon="P1", transmitter="T1", minutes=1),
+        drop("sem-pon", minutes=2, cto="CTO-A", transmitter="T1"),
+    ]
+    cluster = only(
+        detect_outages(
+            drops,
+            topology(
+                active_logins_per_cto={"CTO-A": 5, "CTO-B": 4},
+                active_logins_per_pon={"P1": 9},
+                cto_to_transmitter={"CTO-A": "T1", "CTO-B": "T1"},
+            ),
+        )
+    )
+    assert cluster.scope == SCOPE_PON
+    assert cluster.affected_count == 9
+    assert cluster.affected_fraction == pytest.approx(8 / 9)
+
+
+def test_sem_cobertura_de_pon_no_cadastro_volta_ao_denominador_antigo():
+    """Porta que não aparece no cadastro não vira denominador zero (o que apagaria
+    a fração): cai na soma das caixas, que é teto e não medida."""
+    drops = cto_drops("CTO-A", 4, pon="P1", transmitter="T1") + cto_drops(
+        "CTO-B", 4, pon="P1", transmitter="T1", minutes=1
+    )
+    cluster = only(
+        detect_outages(
+            drops,
+            topology(
+                active_logins_per_cto={"CTO-A": 4, "CTO-B": 4},
+                cto_to_transmitter={"CTO-A": "T1", "CTO-B": "T1"},
+            ),
+        )
+    )
+    assert cluster.scope == SCOPE_PON
+    assert cluster.affected_fraction == pytest.approx(1.0)
+
+
+def test_fracao_nunca_passa_de_cem_por_cento():
+    """Login de contrato cancelado cai e entra no numerador sem estar no
+    denominador. O resto é teto, não informação: 100% já quer dizer 'todo mundo
+    que a gente conhece caiu'."""
+    drops = cto_drops("CTO-A", 6, transmitter="T1")
+    cluster = only(
+        detect_outages(
+            drops,
+            topology(
+                active_logins_per_cto={"CTO-A": 4},
+                cto_to_transmitter={"CTO-A": "T1"},
+            ),
+        )
+    )
+    assert cluster.affected_fraction == pytest.approx(1.0)
+
+
+def test_geo_conta_so_quem_tem_caixa_nos_dois_lados_da_divisao():
+    """No GEO o denominador são as caixas envolvidas, então o numerador também
+    só pode ter quem está numa delas — senão o login sem CTO no snapshot entra
+    numa divisão de que ele não faz parte (foi assim que saíram os 114%)."""
+    passo = 100 * DEG_PER_METER
+    # Seis caixas de 2 logins com 1 caído cada: ninguém qualifica no degrau de
+    # CTO (denominador pequeno e 50%), então o que sobra é o agrupamento
+    # geográfico. Mais dois logins caídos sem CTO no snapshot.
+    drops = [
+        drop(f"com-cto-{i}", minutes=i * 0.1, cto=f"CTO-{i}", lat=-23.5 + i * passo, lon=-47.4)
+        for i in range(6)
+    ] + [
+        drop(f"sem-cto-{i}", minutes=0.7 + i * 0.1, lat=-23.5 + (6 + i) * passo, lon=-47.4)
+        for i in range(2)
+    ]
+    cluster = only(
+        detect_outages(
+            drops, topology(active_logins_per_cto={f"CTO-{i}": 2 for i in range(6)})
+        )
+    )
+    assert cluster.scope == SCOPE_GEO
+    # Os 8 caíram e os 8 estão na massiva...
+    assert cluster.affected_count == 8
+    # ...mas a fração divide 6 caídos com caixa pelos 12 logins dessas caixas.
+    # Antes eram os 8 sobre os mesmos 12.
+    assert cluster.affected_fraction == pytest.approx(6 / 12)

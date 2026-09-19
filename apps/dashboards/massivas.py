@@ -192,11 +192,17 @@ def outage_row(
 
     elemento = outage.element_label or "elemento não identificado"
     # A frase é sempre "quem" + "quanto daquilo". Nunca só "quem".
-    elemento_frase = (
-        f"{elemento} — {fracao_str} dos logins da {escopo_nome}"
-        if outage.element_label
-        else f"Sem elemento em escopo — agrupamento por {escopo_nome}"
-    )
+    #
+    # GEO é a exceção e precisa dizer o denominador por extenso: o cluster de
+    # proximidade não é elemento de cadastro, então "X% dos logins da área" faria
+    # parecer que existe uma área com logins contáveis. O que o detector divide
+    # ali é pelas caixas que entraram no agrupamento — e é isso que vai escrito.
+    if outage.scope == OutageEvent.Scope.GEO:
+        elemento_frase = f"{elemento} — {fracao_str} dos logins das caixas envolvidas"
+    elif outage.element_label:
+        elemento_frase = f"{elemento} — {fracao_str} dos logins da {escopo_nome}"
+    else:
+        elemento_frase = f"Sem elemento em escopo — agrupamento por {escopo_nome}"
 
     trecho = outage.suspected_segment_label or ""
     ressalva = ""
