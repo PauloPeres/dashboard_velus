@@ -1,0 +1,223 @@
+{% load humanize %}<!DOCTYPE html>
+{% comment %}
+A casca dos painéis de parede — serve o NOC hoje e o executivo quando chegar.
+
+Nada aqui é específico de um painel: barra fixa, rotação, contador de frescor e
+o véu de dado velho nascem uma vez só, porque são exatamente as regras que não
+podem divergir entre as duas telas. Cada painel entrega os slides.
+
+Três decisões de tela (§2, §3 e §5 do docs/massivas-painel-tv-plano.md):
+
+1. **fundo escuro e tipo grande** — a leitura é a 4 metros, de pé, de relance;
+2. **a idade do dado é um contador que ANDA**, não um carimbo. Carimbo estático o
+   cérebro ignora; número que sobe sozinho, não;
+3. **quando o dado envelhece, a tela se cobre** em vez de continuar mostrando
+   números com cara de agora. Painel que pode mentir não sobe.
+{% endcomment %}
+<html lang="pt-br" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ panel.title }} · Velus</title>
+  <link rel="stylesheet" href="/static/css/tailwind.min.css">
+  <script src="/static/vendor/plotly-2.35.2.min.js"></script>
+  <style>
+    /* A TV não tem mouse: cursor escondido, nada rola, nada seleciona. */
+    html, body { height: 100%; overflow: hidden; cursor: none; background: #0b1220; }
+    .slide { display: none; }
+    .slide.ativo { display: flex; }
+  </style>
+</head>
+<body class="h-full text-slate-100 font-sans antialiased">
+
+<div id="painel" class="h-full flex flex-col">
+
+  <!-- ===================================================================
+       Barra fixa — os quatro indicadores que valem em qualquer slide.
+       =================================================================== -->
+  <header class="flex items-center gap-8 px-8 py-4 bg-slate-900/80 border-b border-slate-700">
+    <div>
+      <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400">Clientes fora</p>
+      <p id="barra-fora" class="text-4xl font-bold tabular-nums text-red-400">
+        {{ snapshot.barra.clientes_fora|intcomma }}
+      </p>
+    </div>
+    <div>
+      <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400">Massivas abertas</p>
+      <p id="barra-massivas"
+         class="text-4xl font-bold tabular-nums {% if snapshot.barra.massivas_abertas %}text-red-400{% else %}text-emerald-400{% endif %}">
+        {{ snapshot.barra.massivas_abertas|intcomma }}
+      </p>
+    </div>
+
+    <div class="ml-auto text-right">
+      <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400">Idade do dado</p>
+      {% comment %}
+      "—" quando não se sabe a idade. Zero aqui seria a mentira mais confortável
+      da tela: parece dado fresco.
+      {% endcomment %}
+      <p id="barra-idade" class="text-2xl font-semibold tabular-nums text-slate-200">—</p>
+    </div>
+    <div class="text-right">
+      <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400">Coleta</p>
+      <p id="barra-coleta"
+         class="text-2xl font-semibold {% if snapshot.barra.coleta_ok %}text-emerald-400{% else %}text-amber-400{% endif %}">
+        {% if snapshot.barra.coleta_ok %}ok{% else %}atenção{% endif %}
+      </p>
+    </div>
+  </header>
+
+  <!-- Faixa de dado velho: aparece por cima de tudo, sem tapar os números. -->
+  <div id="faixa-velha"
+       class="hidden px-8 py-2 bg-amber-500 text-slate-900 font-semibold text-lg text-center">
+    Dado velho — a tela não sabe o que está acontecendo agora.
+    <span id="faixa-velha-detalhe" class="font-normal"></span>
+  </div>
+
+  <main class="flex-1 relative">
+    {% for slide in slides %}
+    <section class="slide absolute inset-0 flex-col px-10 py-8 {% if forloop.first %}ativo{% endif %}"
+             data-slide="{{ slide.key }}" data-seconds="{{ slide.seconds }}">
+      <h2 class="text-[11px] uppercase tracking-[0.3em] text-slate-500 mb-4">{{ slide.title }}</h2>
+      <div class="flex-1 min-h-0">
+        {% include slide.template %}
+      </div>
+    </section>
+    {% endfor %}
+  </main>
+
+  <!-- Pontinhos da rotação: dizem quantos slides existem e onde está. -->
+  <footer class="flex items-center gap-3 px-8 py-3 bg-slate-900/80 border-t border-slate-700">
+    <span class="text-[11px] uppercase tracking-[0.2em] text-slate-500">{{ panel.title }}</span>
+    <div class="flex gap-1.5 ml-2">
+      {% for slide in slides %}
+      <span class="dot w-2 h-2 rounded-full bg-slate-600" data-dot="{{ slide.key }}"></span>
+      {% endfor %}
+    </div>
+    <span class="ml-auto text-[11px] text-slate-500">{{ panel.subtitle }}</span>
+  </footer>
+</div>
+
+{{ mapa_chart_json|json_script:"painel-mapa-data" }}
+{{ timeline_chart_json|json_script:"painel-timeline-data" }}
+
+<script>
+(function () {
+  "use strict";
+
+  // --- rotação -------------------------------------------------------------
+  // O relógio da rotação é independente do relógio do dado: a tela troca de
+  // slide mesmo quando o servidor para de responder, e é o véu de frescor que
+  // avisa que o conteúdo envelheceu. Fosse o contrário, uma queda de rede
+  // congelaria a TV num slide com números antigos e cara de vivo.
+  var slides = Array.prototype.slice.call(document.querySelectorAll(".slide"));
+  var dots = Array.prototype.slice.call(document.querySelectorAll(".dot"));
+  var atual = 0;
+
+  function mostrar(i) {
+    slides.forEach(function (s, idx) { s.classList.toggle("ativo", idx === i); });
+    dots.forEach(function (d, idx) {
+      d.classList.toggle("bg-slate-300", idx === i);
+      d.classList.toggle("bg-slate-600", idx !== i);
+    });
+    var evento = new CustomEvent("painel:slide", { detail: { key: slides[i].dataset.slide } });
+    window.dispatchEvent(evento);
+  }
+
+  function proximo() {
+    if (slides.length < 2) { return; }
+    atual = (atual + 1) % slides.length;
+    mostrar(atual);
+    agendar();
+  }
+
+  var timer = null;
+  function agendar() {
+    if (timer) { clearTimeout(timer); }
+    var segundos = parseInt(slides[atual].dataset.seconds, 10) || 15;
+    timer = setTimeout(proximo, segundos * 1000);
+  }
+
+  if (slides.length) { mostrar(0); agendar(); }
+
+  // --- frescor -------------------------------------------------------------
+  // `geradoEm` é o instante em que o SERVIDOR montou o snapshot. O contador
+  // cresce contra o relógio local, mas a base vem de lá — se a TV estiver com a
+  // hora errada, o erro aparece como número estranho em vez de virar silêncio.
+  var geradoEm = null;
+  var idadeBase = null;      // idade em segundos no momento do snapshot
+  var idadeConhecida = false;
+  var limiteVelho = {{ panel.extras.frescor_segundos|default:600 }};
+
+  var elIdade = document.getElementById("barra-idade");
+  var elFaixa = document.getElementById("faixa-velha");
+  var elFaixaDetalhe = document.getElementById("faixa-velha-detalhe");
+  var elFora = document.getElementById("barra-fora");
+  var elMassivas = document.getElementById("barra-massivas");
+  var elColeta = document.getElementById("barra-coleta");
+
+  function formatar(segundos) {
+    if (segundos < 60) { return "há " + segundos + "s"; }
+    var min = Math.floor(segundos / 60);
+    if (min < 60) { return "há " + min + " min"; }
+    return "há " + Math.floor(min / 60) + "h" + ("0" + (min % 60)).slice(-2);
+  }
+
+  function tique() {
+    if (!idadeConhecida || geradoEm === null) {
+      elIdade.textContent = "—";
+      return;
+    }
+    var deriva = Math.floor((Date.now() - geradoEm) / 1000);
+    var idade = idadeBase + Math.max(deriva, 0);
+    elIdade.textContent = formatar(idade);
+    var velho = idade > limiteVelho;
+    elIdade.className = "text-2xl font-semibold tabular-nums " + (velho ? "text-amber-300" : "text-slate-200");
+    elFaixa.classList.toggle("hidden", !velho);
+    if (velho) {
+      elFaixaDetalhe.textContent = "Última leitura " + formatar(idade) + ".";
+    }
+  }
+  setInterval(tique, 1000);
+
+  // --- snapshot ------------------------------------------------------------
+  // A tela busca só a barra: o conteúdo dos slides é redesenhado no recarregar
+  // completo, de tempos em tempos. Assim a rotação nunca consulta o banco.
+  function buscar() {
+    fetch("{{ snapshot_url }}", { credentials: "same-origin" })
+      .then(function (r) {
+        if (!r.ok) { throw new Error("status " + r.status); }
+        return r.json();
+      })
+      .then(function (dados) {
+        geradoEm = Date.now();
+        idadeBase = dados.idade_segundos || 0;
+        idadeConhecida = !!dados.idade_conhecida;
+        elFora.textContent = dados.barra.clientes_fora;
+        elMassivas.textContent = dados.barra.massivas_abertas;
+        elMassivas.className = "text-4xl font-bold tabular-nums " +
+          (dados.barra.massivas_abertas ? "text-red-400" : "text-emerald-400");
+        elColeta.textContent = dados.barra.coleta_ok ? "ok" : "atenção";
+        elColeta.className = "text-2xl font-semibold " +
+          (dados.barra.coleta_ok ? "text-emerald-400" : "text-amber-400");
+        tique();
+      })
+      .catch(function () {
+        // Sem resposta, o contador continua subindo a partir da última leitura
+        // boa — e é ele que vai acusar a idade. O pior desenho possível seria
+        // deixar o número parado como se nada tivesse acontecido.
+        idadeConhecida = idadeConhecida && geradoEm !== null;
+      });
+  }
+  buscar();
+  setInterval(buscar, 30000);
+
+  // --- recarga completa ----------------------------------------------------
+  // TV de NOC fica meses ligada; o navegador acumula memória e o JS eventualmente
+  // engasga. Recarregar a página inteira de tempos em tempos é o conserto mais
+  // barato — e de quebra traz os slides redesenhados com dado novo.
+  setTimeout(function () { window.location.reload(); }, 15 * 60 * 1000);
+})();
+</script>
+</body>
+</html>

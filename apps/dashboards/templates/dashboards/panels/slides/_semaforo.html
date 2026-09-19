@@ -1,0 +1,43 @@
+{% load humanize %}
+{% comment %}
+Slide casa do painel de NOC: está tudo bem?
+
+Com a rede saudável ele fica calmo e parado — e isso é deliberado. Silêncio é
+informação: é o que faz a sala acreditar no vermelho quando ele aparece.
+{% endcomment %}
+<div class="h-full flex flex-col items-center justify-center text-center">
+  {% if snapshot.semaforo.tudo_bem %}
+  <p class="text-[10rem] leading-none font-black text-emerald-400">OK</p>
+  <p class="text-3xl text-slate-300 mt-4">Nenhuma massiva aberta</p>
+  <p class="text-lg text-slate-500 mt-2">
+    {{ snapshot.barra.clientes_fora|intcomma }} cliente{{ snapshot.barra.clientes_fora|pluralize }} fora
+    agora, sem formar evento coletivo.
+  </p>
+  {% else %}
+  <p class="text-[10rem] leading-none font-black text-red-500">
+    {{ snapshot.barra.massivas_abertas }}
+  </p>
+  <p class="text-3xl text-slate-200">
+    massiva{{ snapshot.barra.massivas_abertas|pluralize }} aberta{{ snapshot.barra.massivas_abertas|pluralize }}
+  </p>
+  {% if snapshot.semaforo.maior %}
+  <p class="text-2xl text-amber-300 mt-6 max-w-5xl">{{ snapshot.semaforo.maior.destaque }}</p>
+  <p class="text-xl text-slate-400 mt-2">
+    {{ snapshot.semaforo.maior.ainda_fora|intcomma }} ainda fora de
+    {{ snapshot.semaforo.maior.affected_count|intcomma }} ·
+    desde {{ snapshot.semaforo.maior.started_at|date:"H:i" }}
+  </p>
+  {% endif %}
+  {% endif %}
+
+  {% if not snapshot.barra.coleta_ok %}
+  {% comment %}
+  A falha de coleta aparece no slide casa, não só na barra: sem isso, "OK"
+  grande e verde seria lido como "a rede está bem" quando o que houve foi a
+  gente parar de enxergar.
+  {% endcomment %}
+  <p class="mt-10 px-6 py-3 rounded-lg bg-amber-500/20 border border-amber-500 text-amber-200 text-xl max-w-4xl">
+    {{ snapshot.barra.coleta_mensagem }}
+  </p>
+  {% endif %}
+</div>

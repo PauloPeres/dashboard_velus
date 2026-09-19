@@ -36,6 +36,10 @@ dependencies = [
     "gunicorn>=23.0",
     "whitenoise>=6.8",
     "plotly>=6.7.0",
+    # QR do pareamento do painel de TV (#P0). Pura Python, sem dependências
+    # próprias, gera SVG inline — nada de serviço externo de QR, que mandaria o
+    # código de pareamento para fora. Decidido com o Paulo em 19/09/2026.
+    "segno>=1.6",
     "mcp>=1.27.2",
     "uvicorn>=0.48.0",
     "starlette>=1.2.1",

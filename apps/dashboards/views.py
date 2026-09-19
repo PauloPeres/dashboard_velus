@@ -3026,6 +3026,18 @@ def settings_view(request: HttpRequest) -> HttpResponse:
             .select_related("access_group")
             .order_by("-created_at")[:10]
         )
+        # TVs pareadas (P0 do painel). A lista existe para revogar: credencial
+        # que não se revoga é eterna, e TV some, muda de sala e é roubada.
+        from apps.tenancy.models import DisplayDevice
+
+        ctx["display_devices"] = list(
+            DisplayDevice.objects.filter(
+                organization=org, approved_at__isnull=False, revoked_at__isnull=True
+            )
+            .select_related("approved_by")
+            .order_by("-approved_at")
+        )
+        ctx["dispositivo_revogado"] = request.GET.get("dispositivo_revogado") == "1"
 
     return render(request, "dashboards/settings.html", ctx)
 

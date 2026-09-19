@@ -180,34 +180,115 @@ pequeno, tooltips). O painel é **uma tela nova**, não a tela atual em fullscre
 
 ## 6. Tarefas
 
-### P0 — Pareamento por QR code
+### P0 — Pareamento por QR code — FEITA (19/09/2026)
 Botão MODO TV na home pública e na página de massivas; tela de pareamento com QR;
 aprovação por quem faz login; emissão da credencial para o navegador da TV;
 listagem e revogação de dispositivos pareados. Ver os dois cuidados da seção 1.
 **Bloqueia:** P2 (a casca precisa de alguém autenticado para carregar dado).
 
-### P1 — Endpoint único de snapshot
+**Como ficou.** `DisplayDevice` (em `tenancy`, não em `dashboards`: é identidade,
+não tela) guarda **três segredos com papéis diferentes**, e a confusão entre eles
+era o buraco a evitar:
+
+| Segredo | Onde vive | Para que serve |
+|---|---|---|
+| `code` | **na tela da TV** | ser lido e digitado/escaneado. Efêmero (5 min), de uso único |
+| `device_token` | cookie da TV | provar, na consulta de status, que é a TV que pediu o pareamento |
+| `display_token` | cookie da TV | a credencial final, revogável |
+
+Os três são gravados como **hash**: um dump do banco não vira TV alheia no ar. E
+o código **vira NULL ao ser usado** — código que sobrevive ao uso dá a alguém uma
+segunda chance de aprovar a mesma TV.
+
+Quem fotografa a tela da TV não ganha acesso: ganha, no máximo, a chance de
+**aprovar** aquela TV, o que exige login e acesso à aba do painel. A credencial
+sai pelo outro canal, para o navegador que tem o `device_token`.
+
+**A credencial não expira sozinha**, e isso é decisão, não esquecimento: a TV
+fica ligada meses, e uma expiração silenciosa viraria painel apagado de
+madrugada sem ninguém para reparear. Ela morre por revogação explícita — a lista
+em Configurações existe desde o primeiro dia, com o último contato de cada TV.
+
+**Dependência nova:** `segno` (QR em Python puro, sem dependências próprias,
+SVG inline). Justificativa exigida pelo AGENT.md §0.3: gerar o QR aqui dentro
+evita mandar o código de pareamento para um serviço externo de QR — que seria
+publicá-lo fora.
+
+**Alfabeto do código sem 0/O/1/I/5/S:** ele é lido de longe, numa TV, e às vezes
+ditado por telefone. Ambiguidade aqui vira "não consigo parear" na sala.
+
+### P1 — Endpoint único de snapshot — FEITA (19/09/2026)
 Um JSON com tudo que os slides precisam, cache curto. A rotação **não** pode
 multiplicar consulta ao banco e ao IXC — a TV não pode virar carga.
 **Depende de:** nada.
 
-### P2 — Casca do painel: rota, layout escuro, barra fixa, rotação
+**Como ficou.** Cache de 20 s por painel **e por organização** — nunca global, ou
+uma TV veria o número de outra empresa. Duas TVs na mesma sala, mais o navegador
+de quem está conferindo, viram uma consulta só.
+
+O `gerado_em` vai **dentro** do snapshot: servido do cache, ele continua dizendo
+a idade real do dado. Se viesse do relógio de quem lê, o cache transformaria dado
+de 19 s atrás em "agora".
+
+Responde **403 com corpo JSON**, nunca 302 para o login: um redirecionamento aqui
+viraria painel congelado sem explicação na parede.
+
+### P2 — Casca do painel: rota, layout escuro, barra fixa, rotação — FEITA (19/09/2026)
 Tela cheia, tema próprio, barra fixa com os 4 indicadores, motor de rotação com
 fixar-slide. Sem dado ainda — só a casca e o relógio.
 **Depende de:** P0, P1.
 
-### P3 — Slides 1, 2 e 6 (semáforo, massivas, últimas 24h)
+**Como ficou, e o que fica valendo para o painel executivo.** A casca é de
+`PanelSpec`, não do NOC: rota (`/paineis/<key>/`), pareamento, cache, barra,
+rotação e frescor nascem uma vez. Um painel novo registra um spec com seu
+snapshot e seus slides e herda tudo — que é exatamente o que **não pode
+divergir** entre as duas telas.
+
+Um slide pode se declarar condicional (`only_when`): o mapa só entra na rotação
+quando há massiva aberta. Slide sem pergunta treina a sala a ignorar a TV.
+
+**O relógio da rotação é independente do relógio do dado.** A tela troca de slide
+mesmo quando o servidor para de responder, e quem avisa que o conteúdo envelheceu
+é o contador de frescor. O contrário congelaria a TV num slide com números
+antigos e cara de vivo.
+
+E a página **se recarrega inteira a cada 15 min**: TV de NOC fica meses ligada, o
+navegador acumula memória e o JS engasga (é o P9, adiantado porque é uma linha).
+
+### P3 — Slides 1, 2 e 6 (semáforo, massivas, últimas 24h) — FEITA (19/09/2026)
 O núcleo. Com isso o painel já é útil.
 **Depende de:** P2.
 
-### P4 — Frescor e falha de coleta (seção 3)
+**Como ficou.** Semáforo (OK gigante e verde, ou o número de massivas em
+vermelho com a maior delas), massivas abertas ordenadas por quem tem mais gente
+fora — a ordem em que a sala deve agir, no máximo 5 linhas —, mapa (só com
+evento) e as últimas horas.
+
+O tema escuro dos gráficos é aplicado **no cliente**: o mesmo gráfico serve a aba
+(fundo claro) e a TV (fundo escuro). Duplicar a figura no servidor faria as duas
+divergirem no dia em que uma fosse corrigida.
+
+### P4 — Frescor e falha de coleta (seção 3) — FEITA (19/09/2026)
 Contador crescente, faixa de dado velho, véu, "—" em vez de 0, tela de sem
 conexão. **Vai junto com P3, não depois** — painel que pode mentir não sobe.
 **Depende de:** P2.
 
-### P5 — Slide de mapa, com pulo automático
+**Como ficou.** A idade é um contador que **anda**, recalculado a cada segundo a
+partir do que o servidor disse. Passando de 10 min, o número fica âmbar e uma
+faixa atravessa a tela: *"Dado velho — a tela não sabe o que está acontecendo
+agora."*
+
+Quando a idade é **desconhecida** (nenhum poll bem-sucedido), a barra mostra
+**"—"**. Zero ali seria a mentira mais confortável da tela: parece dado fresco.
+
+Se o snapshot para de responder, o contador continua subindo a partir da última
+leitura boa — é ele que vai acusar. O pior desenho possível seria deixar o número
+parado como se nada tivesse acontecido.
+
+### P5 — Slide de mapa, com pulo automático — FEITA (19/09/2026)
 Reaproveita o mapa atual, já escopado às massivas abertas. Sai da rotação quando
-não há evento.
+não há evento — via `only_when` do `SlideSpec`, que é da casca e serve a qualquer
+painel.
 **Depende de:** P3.
 
 ### P6 — Alertas: níveis, supressão, dedup, takeover
@@ -226,10 +307,15 @@ Primeiro ponto de entrada de dados do painel. Cruza com R9 da frente de rota
 (causa confirmada) — mesmo modelo, decidir junto.
 **Depende de:** P6, R9.
 
-### P9 — Operação da TV
+### P9 — Operação da TV — PARCIAL (19/09/2026)
 Kiosk mode, autostart, watchdog que recarrega se o JS congelar, reload de
 madrugada. TV de NOC fica meses ligada e o Chrome trava.
 **Depende de:** P2.
+
+**Feito:** a recarga periódica da página (15 min), que já cobre o JS engasgado e
+traz os slides redesenhados. **Falta** o lado de fora do navegador: kiosk mode,
+autostart e watchdog do sistema operacional — isso é configuração da máquina da
+sala, não código.
 
 ### P10 — Slide de atendimento (Opa! Suite)
 Fila, espera mais longa e pico anormal de contatos.

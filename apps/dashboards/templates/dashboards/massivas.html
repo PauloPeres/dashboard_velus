@@ -12,6 +12,14 @@
       atualiza sozinha a cada minuto
     </p>
   </div>
+  {% comment %}
+  Botão MODO TV: abre o painel de parede. Numa TV ele cai no pareamento; aqui,
+  para quem já está logado, abre o painel direto.
+  {% endcomment %}
+  <a href="{% url 'dashboards:panel' 'noc' %}" target="_blank"
+     class="shrink-0 text-xs px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50">
+    MODO TV
+  </a>
 </div>
 
 {% comment %}

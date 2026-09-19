@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+{% comment %}
+Tela de pareamento da TV (P0).
+
+O código aparece grande porque alguém vai lê-lo de pé, a alguns metros, e às
+vezes ditá-lo por telefone. O QR existe para evitar digitar — mas o código por
+extenso fica junto, porque celular de operação nem sempre tem câmera boa e a
+sala nem sempre tem luz.
+
+O que está na tela é só o CÓDIGO DE PAREAMENTO. A credencial de acesso nunca
+aparece aqui: ela é entregue ao navegador desta TV, pela consulta de status.
+Quem fotografa esta tela não ganha acesso — ganha, no máximo, a chance de
+aprovar esta TV, o que exige login.
+{% endcomment %}
+<html lang="pt-br" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parear TV · {{ panel.title }}</title>
+  <link rel="stylesheet" href="/static/css/tailwind.min.css">
+  <style>html, body { height: 100%; background: #0b1220; cursor: none; }</style>
+</head>
+<body class="h-full text-slate-100 flex items-center justify-center">
+  <div class="text-center px-10">
+    <p class="text-[11px] uppercase tracking-[0.3em] text-slate-500">Painel {{ panel.title }}</p>
+    <h1 class="text-4xl font-bold mt-3">Aponte a câmera do celular</h1>
+    <p class="text-lg text-slate-400 mt-2">
+      Faça login e aprove esta TV. O acesso continua valendo depois, sem repetir isto.
+    </p>
+
+    <div class="inline-block bg-white rounded-2xl p-6 mt-8">{{ qr_svg|safe }}</div>
+
+    <p class="text-slate-400 mt-8 text-lg">ou abra <span class="text-slate-200">{{ request.get_host }}/paineis/aprovar/</span> e digite</p>
+    <p class="text-7xl font-black tracking-[0.2em] text-slate-100 mt-3">{{ codigo }}</p>
+    <p class="text-slate-500 mt-6" id="estado">O código vale por 5 minutos.</p>
+  </div>
+
+<script>
+(function () {
+  var estado = document.getElementById("estado");
+  // A TV pergunta sozinha se já foi aprovada. É por este canal — autenticado
+  // pelo segredo que só este navegador tem — que a credencial chega; nunca pelo
+  // QR, que qualquer um na sala pode fotografar.
+  function consultar() {
+    fetch("{{ status_url }}", { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.estado === "pareado") { window.location.href = d.url; return; }
+        if (d.estado === "expirado") {
+          estado.textContent = "Código expirado. Recarregando…";
+          setTimeout(function () { window.location.reload(); }, 2000);
+        }
+      })
+      .catch(function () { /* sem rede: a próxima tentativa resolve */ });
+  }
+  setInterval(consultar, 3000);
+  // Se ninguém parear, a tela se renova sozinha antes de o código morrer — TV
+  // não tem quem aperte F5.
+  setTimeout(function () { window.location.reload(); }, 4 * 60 * 1000);
+})();
+</script>
+</body>
+</html>

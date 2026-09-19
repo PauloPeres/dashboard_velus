@@ -129,6 +129,51 @@
       </table>
     </div>
   </div>
+  {% comment %}
+  TVs pareadas (P0 do painel de parede). A lista existe sobretudo para revogar:
+  a credencial de uma TV não expira sozinha — ela fica ligada meses, e uma
+  expiração silenciosa viraria painel apagado de madrugada sem ninguém para
+  reparear. Quem some com ela é quem administra.
+  {% endcomment %}
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+    <h2 class="text-sm font-semibold text-gray-700 mb-1">TVs pareadas</h2>
+    <p class="text-xs text-gray-400 mb-3 leading-relaxed">
+      Telas que mostram um painel sem precisar de login. Revogue ao tirar uma TV de
+      operação — a credencial não expira sozinha.
+    </p>
+
+    {% if dispositivo_revogado %}
+    <p class="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-3 py-2 mb-3">
+      Dispositivo revogado. A tela dele volta para o pareamento no próximo carregamento.
+    </p>
+    {% endif %}
+
+    {% if display_devices %}
+    <ul class="divide-y divide-gray-100 text-sm">
+      {% for d in display_devices %}
+      <li class="py-2 flex flex-wrap items-center gap-2">
+        <span class="font-medium text-gray-800">{{ d.name|default:"TV sem nome" }}</span>
+        <span class="text-xs text-gray-500">painel {{ d.panel_key }}</span>
+        <span class="text-xs text-gray-400">
+          pareada em {{ d.approved_at|date:"d/m/Y H:i" }}
+          {% if d.approved_by %}por {{ d.approved_by.email }}{% endif %}
+          {% if d.last_seen_at %}· vista {{ d.last_seen_at|timesince }} atrás{% else %}· nunca apareceu{% endif %}
+        </span>
+        <form method="post" action="{% url 'dashboards:panel_device_revoke' d.id %}" class="ml-auto"
+              onsubmit="return confirm('Revogar esta TV? Ela volta para a tela de pareamento.');">
+          {% csrf_token %}
+          <button type="submit" class="text-xs text-red-600 hover:underline">revogar</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-xs text-gray-400">
+      Nenhuma TV pareada. Abra <span class="text-gray-600">{{ request.get_host }}/paineis/noc/</span>
+      na TV e aprove pelo celular.
+    </p>
+    {% endif %}
+  </div>
   {% endif %}
 </div>
 {% endblock %}

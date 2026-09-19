@@ -5,6 +5,7 @@ from __future__ import annotations
 from django.urls import path
 
 from . import views
+from .panels import views as panel_views
 
 app_name = "dashboards"
 
@@ -93,4 +94,36 @@ urlpatterns = [
     path("customers/<int:customer_id>/", views.customer_detail, name="customer_detail"),
     path("settings/", views.settings_view, name="settings"),
     path("settings/acesso/", views.access_management, name="access_management"),
+    # =========================================================================
+    # Painéis de parede (modo TV). A casca serve qualquer painel — o NOC hoje,
+    # o executivo quando chegar —, por isso a rota é `<panel_key>` e não uma
+    # rota por painel. Ver `apps/dashboards/panels/__init__.py`.
+    # =========================================================================
+    # As rotas FIXAS vêm antes da genérica: `paineis/<panel_key>/` casaria com
+    # "paineis/aprovar/" e responderia 404 de painel inexistente.
+    #
+    # A aprovação não leva o painel na URL: quem escaneia o QR chega por aqui
+    # com o código, e é o código que diz qual painel é.
+    path("paineis/aprovar/", panel_views.panel_approve, name="panel_approve"),
+    path(
+        "paineis/dispositivos/<int:device_id>/revogar/",
+        panel_views.panel_device_revoke,
+        name="panel_device_revoke",
+    ),
+    path(
+        "paineis/<str:panel_key>/parear/",
+        panel_views.panel_pair,
+        name="panel_pair",
+    ),
+    path(
+        "paineis/<str:panel_key>/parear/status/",
+        panel_views.panel_pair_status,
+        name="panel_pair_status",
+    ),
+    path(
+        "paineis/<str:panel_key>/snapshot/",
+        panel_views.panel_snapshot,
+        name="panel_snapshot",
+    ),
+    path("paineis/<str:panel_key>/", panel_views.panel_view, name="panel"),
 ]

@@ -1,0 +1,28 @@
+{% comment %}
+O mapa das massivas abertas. Só entra na rotação quando há evento — sem massiva
+ele seria um mapa bonito sem pergunta, e slide sem pergunta treina a sala a
+ignorar a TV.
+
+É o mesmo mapa da aba, com o mesmo escopo e as mesmas linhas: tracejado é
+inferência de cadastro, cheio é traçado do cabo.
+{% endcomment %}
+<div id="painel-mapa" class="h-full w-full rounded-xl overflow-hidden"></div>
+<script>
+(function () {
+  var node = document.getElementById("painel-mapa-data");
+  var el = document.getElementById("painel-mapa");
+  if (!node || !el || !node.textContent) { return; }
+  try {
+    var raw = JSON.parse(node.textContent);
+    var parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
+    var layout = parsed.layout || {};
+    layout.paper_bgcolor = "rgba(0,0,0,0)";
+    layout.font = { color: "#cbd5e1", size: 14 };
+    layout.showlegend = false;
+    Plotly.newPlot(el, parsed.data || [], layout, { displayModeBar: false, responsive: true });
+    window.addEventListener("painel:slide", function (ev) {
+      if (ev.detail.key === "mapa") { Plotly.Plots.resize(el); }
+    });
+  } catch (e) { /* idem: melhor slide sem mapa que painel quebrado */ }
+})();
+</script>

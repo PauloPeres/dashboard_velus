@@ -87,6 +87,12 @@ _ROUTE_TO_KEY.update({
     # Restringir a causa a um grupo menor deixaria a fila parada justamente com
     # quem esteve no reparo e sabe a resposta.
     ("dashboards", "massiva_causa"): "massivas",
+    # Os painéis de parede (modo TV) NÃO entram aqui de propósito. Eles têm dois
+    # tipos de visitante — a pessoa logada e a TV pareada, que não tem usuário —
+    # e o middleware só sabe raciocinar sobre o primeiro: uma TV cairia no
+    # redirecionamento para o login e a parede ficaria mostrando tela de senha.
+    # A autorização deles mora em `panels/views.py`, que confere a credencial de
+    # display ou a aba do painel (`PanelSpec.access_key`), nesta ordem.
     # CRUD de eventos de rede (#78) mora na página de Tendências.
     ("dashboards", "evento_rede_novo"): "atendimento_tendencias",
     ("dashboards", "evento_rede_editar"): "atendimento_tendencias",

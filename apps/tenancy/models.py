@@ -372,3 +372,88 @@ class OrganizationDataSource(models.Model):
     def set_credentials(self, credentials: dict[str, Any]) -> None:
         """Serializa pra JSON e armazena (criptografia é automática pelo field)."""
         self.credentials_encrypted = json.dumps(credentials, ensure_ascii=False)
+
+
+class DisplayDevice(models.Model):
+    """Uma TV pareada a um painel de parede (P0 do plano do painel de TV).
+
+    Não é `TenantModel` de propósito: o dispositivo **nasce sem organização** —
+    na tela de pareamento ele ainda não pertence a ninguém, e só ganha dono
+    quando alguém autenticado aprova. Um TenantModel exigiria org no contexto
+    justamente no momento em que ela não existe.
+
+    Três segredos, com papéis diferentes, e a confusão entre eles é o buraco que
+    o desenho evita:
+
+    - `code` é o que **aparece na TV**. Curto, efêmero, de uso único. Quem
+      fotografa a tela consegue no máximo tentar aprovar um pareamento — o que
+      exige login;
+    - `device_token_hash` autentica **a TV consultando o status**. Fica só no
+      navegador dela, nunca na tela, e é o que garante que a credencial vá para
+      quem pediu o pareamento, não para quem fotografou o QR;
+    - `display_token_hash` é a **credencial final**, emitida na aprovação. Vive
+      num cookie do navegador da TV e é revogável.
+
+    Os três são guardados como hash: um dump do banco não vira TV alheia no ar.
+    """
+
+    panel_key = models.CharField(
+        max_length=32,
+        help_text=_("Painel que esta TV abre — uma TV do NOC não abre o executivo."),
+    )
+    name = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+        help_text=_("Como a sala chama esta TV ('TV da bancada')."),
+    )
+
+    code = models.CharField(
+        max_length=12,
+        unique=True,
+        null=True,
+        blank=True,
+        help_text=_(
+            "Código curto mostrado na TV. Efêmero e de uso único — vira NULL "
+            "quando é consumido, porque código que sobrevive ao uso dá a alguém "
+            "uma segunda chance de aprovar a mesma TV."
+        ),
+    )
+    device_token_hash = models.CharField(max_length=64)
+    display_token_hash = models.CharField(max_length=64, blank=True, default="")
+
+    organization = models.ForeignKey(
+        "tenancy.Organization",
+        on_delete=models.CASCADE,
+        related_name="display_devices",
+        null=True,
+        blank=True,
+    )
+    approved_by = models.ForeignKey(
+        "tenancy.User",
+        on_delete=models.SET_NULL,
+        related_name="approved_displays",
+        null=True,
+        blank=True,
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Dispositivo de painel")
+        verbose_name_plural = _("Dispositivos de painel")
+        indexes = [
+            models.Index(fields=["organization", "revoked_at"]),
+        ]
+
+    def __str__(self) -> str:
+        estado = "revogada" if self.revoked_at else ("pareada" if self.approved_at else "aguardando")
+        return f"TV {self.name or self.code} ({estado})"
+
+    @property
+    def is_active(self) -> bool:
+        return bool(self.approved_at) and self.revoked_at is None

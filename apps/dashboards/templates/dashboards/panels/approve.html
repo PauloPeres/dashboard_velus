@@ -1,0 +1,50 @@
+{% extends "dashboards/base.html" %}
+{% comment %}
+Aprovação da TV, feita por quem escaneou o QR e fez login normalmente.
+
+É aqui que o dispositivo ganha dono: antes disto ele não pertence a organização
+nenhuma e não enxerga dado nenhum.
+{% endcomment %}
+{% block title %}Aprovar TV · Velus{% endblock %}
+
+{% block content %}
+<div class="max-w-lg mx-auto">
+  {% if aprovado %}
+  <div class="bg-white rounded-xl shadow-sm border border-emerald-200 p-6">
+    <h1 class="text-xl font-bold text-gray-900">TV aprovada</h1>
+    <p class="text-sm text-gray-600 mt-2 leading-relaxed">
+      {% if nome %}"{{ nome }}"{% else %}A TV{% endif %} já está entrando no painel
+      {{ panel.title }}. Ela continua valendo depois de desligar e religar — e pode ser
+      derrubada a qualquer momento em Configurações.
+    </p>
+  </div>
+
+  {% elif erro %}
+  <div class="bg-white rounded-xl shadow-sm border border-amber-200 p-6">
+    <h1 class="text-xl font-bold text-gray-900">Não deu para aprovar</h1>
+    <p class="text-sm text-amber-800 mt-2 leading-relaxed">{{ erro }}</p>
+  </div>
+
+  {% else %}
+  <form method="post" class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+    {% csrf_token %}
+    <h1 class="text-xl font-bold text-gray-900">Aprovar esta TV?</h1>
+    <p class="text-sm text-gray-600 mt-2 leading-relaxed">
+      Ela vai mostrar o painel <strong>{{ panel.title }}</strong> da sua organização,
+      sem precisar de login, até alguém revogar. Aprove só se você está vendo este
+      código na tela da TV.
+    </p>
+    <p class="text-3xl font-black tracking-[0.2em] text-gray-900 my-5 text-center">{{ codigo }}</p>
+    <input type="hidden" name="code" value="{{ codigo }}">
+    <label class="text-xs text-gray-500 block">Nome desta TV (opcional)
+      <input type="text" name="name" maxlength="120" placeholder="TV da bancada"
+             class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
+    </label>
+    <button type="submit"
+            class="mt-4 w-full text-sm px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">
+      Aprovar
+    </button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}
