@@ -214,3 +214,36 @@ Sai em linha cheia, por cima do traçado. **Se nenhum cabo servir às duas ponta
 não se desenha** e a reta tracejada continua valendo: um trecho que começa a
 300 m da caixa não é o caminho dela, e desenhá-lo mandaria o técnico para a rua
 errada — o erro que a regra de não prometer traçado existia para evitar.
+
+**Na primeira verificação em produção, não desenhou nada — e o motivo mudou o
+desenho do trecho.** *Medido em 19/09/2026:* os cabos do cadastro têm mediana de
+**201 m** (p90 738 m), enquanto as pontas dos trechos daquele momento estavam a
+**11 km** uma da outra na mediana, a menor delas a 1,9 km. Cada cabo encostava em
+uma ponta a 0,0 m e ficava a 2 km da outra: nenhum cobre as duas.
+
+A causa não era a geometria, era a regra do trecho — ver G10.
+
+### G10 — O trecho virou cadeia, não estrela
+Até 19/09/2026 o trecho ligava a caixa mais próxima do POP a **cada uma** das
+demais. Isso produz pares distantes por construção: numa massiva espalhada, a
+"estrela" atravessa a cidade em linha reta e nenhum cabo consegue cobrir um par.
+
+Agora o trecho é uma **cadeia**: começa na caixa mais próxima do POP e salta de
+vizinha em vizinha (a mais próxima ainda não visitada). Cada par vira o pulo real
+de uma caixa para a seguinte, que é a distância que um cabo de 200 m cobre.
+
+É heurística de **desenho**, não de topologia: a ordem real de alimentação não
+está no cadastro. A cadeia mostra por onde o problema se espalha; ela não afirma
+a sequência em que a rede alimenta as caixas.
+
+### O que fica documentado para uma decisão futura
+Se a cadeia ainda deixar trechos sem cabo, a saída seguinte é **encadear cabos**:
+juntar cabos cujas pontas estão próximas — e usar as 317 caixas de emenda, que
+são exatamente onde cabos se juntam — para montar o caminho completo entre duas
+caixas distantes.
+
+Isso resolveria o caso de 11 km, mas **é inferência de topologia**: dois cabos
+que passam perto um do outro não estão necessariamente emendados, e um caminho
+montado assim pode mandar o técnico por uma rota que não existe. Não foi feito
+por essa razão; se um dia for, tem que entrar declarado na tela como caminho
+*inferido*, em estilo diferente do traçado lido do cadastro.

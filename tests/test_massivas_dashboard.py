@@ -1360,6 +1360,39 @@ class TestLigacoesDoMapa:
         assert mapa["trecho"][0]["de"] == (-23.502, -47.450)
         assert mapa["trecho"][0]["para"] == (-23.560, -47.450)
 
+    def test_trecho_e_uma_cadeia_de_caixa_vizinha_em_caixa_vizinha(
+        self, organization_a: Organization
+    ) -> None:
+        """Era uma estrela (montante ligada a cada uma das outras) até 19/09/2026.
+
+        A estrela desenhava pares distantes por construção — em produção, 11 km
+        entre as pontas na mediana, contra cabos de 201 m. Em cadeia, cada par é
+        o pulo real de uma caixa para a seguinte, e o trecho passa a poder
+        seguir o cabo.
+        """
+        set_current_organization(organization_a)
+        self._planta(organization_a)
+        # Uma terceira caixa, mais longe ainda: em estrela, ela sairia ligada
+        # direto à de cima; em cadeia, sai ligada à do meio.
+        NetworkElement.objects.create(
+            organization=organization_a, source_type="IXC",
+            kind=NetworkElement.Kind.CTO, external_id="CTO-XL", name="mais longe",
+            latitude=-23.600, longitude=-47.450,
+            parent_kind=NetworkElement.Kind.OLT, parent_external_id="OLT-1",
+        )
+        quedas = [
+            _drop(organization_a, login="a", cto="CTO-P", lat=-23.502, lon=-47.450),
+            _drop(organization_a, login="b", cto="CTO-L", lat=-23.560, lon=-47.450),
+            _drop(organization_a, login="c", cto="CTO-XL", lat=-23.600, lon=-47.450),
+        ]
+        mapa = compute_mapa(organization_a, quedas)
+        assert len(mapa["trecho"]) == 2
+        # Começa na mais próxima do POP e segue pela vizinha, não pela distante.
+        assert mapa["trecho"][0]["de"] == (-23.502, -47.450)
+        assert mapa["trecho"][0]["para"] == (-23.560, -47.450)
+        assert mapa["trecho"][1]["de"] == (-23.560, -47.450)
+        assert mapa["trecho"][1]["para"] == (-23.600, -47.450)
+
     def test_uma_caixa_so_nao_tem_trecho(self, organization_a: Organization) -> None:
         self._planta(organization_a)
         quedas = [
