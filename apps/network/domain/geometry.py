@@ -209,3 +209,47 @@ def ctos_sem_cabo(
         for p in cto_points
         if min(distance_to_path(p, path.points) for path in paths) > radius_meters
     )
+
+
+def sub_path_between(
+    path: Sequence[tuple[float, float]],
+    a: tuple[float, float],
+    b: tuple[float, float],
+    *,
+    radius_meters: float = RAIO_CANDIDATO_METROS,
+) -> list[tuple[float, float]]:
+    """O pedaço do traçado entre os dois pontos — [] se o cabo não serve aos dois.
+
+    É o que transforma "trecho suspeito" de reta entre caixas em **pedaço de
+    cabo**: se existe um cabo que passa pelas duas caixas, o trecho entre elas é
+    o caminho que a fibra faz, com as curvas do projeto, e não a linha reta que
+    atravessa quarteirão.
+
+    Devolve vazio quando alguma das pontas está longe do cabo: um "trecho" que
+    começa a 300 m da caixa não é o caminho dela, e desenhá-lo mandaria o
+    técnico para a rua errada — exatamente o erro que a regra de não prometer
+    traçado existia para evitar.
+
+    As pontas do recorte são os vértices, não a projeção exata sobre o segmento:
+    a diferença é de metros, e vértice é ponto que existe no cadastro.
+    """
+    if len(path) < 2:
+        return []
+    if distance_to_path(a, path) > radius_meters:
+        return []
+    if distance_to_path(b, path) > radius_meters:
+        return []
+
+    def vertice_mais_perto(ponto: tuple[float, float]) -> int:
+        return min(
+            range(len(path)),
+            key=lambda i: _distance_to_segment(ponto, path[i], path[i]),
+        )
+
+    i, j = vertice_mais_perto(a), vertice_mais_perto(b)
+    if i == j:
+        # As duas caixas caem no mesmo vértice: não há pedaço de cabo entre
+        # elas, e devolver um ponto só desenharia nada.
+        return []
+    inicio, fim = (i, j) if i < j else (j, i)
+    return list(path[inicio : fim + 1])

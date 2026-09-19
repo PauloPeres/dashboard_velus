@@ -75,7 +75,12 @@ class TestTracadoDoCabo:
             ])
         )
 
-        geometrias = list(_fonte().list_element_geometries())
+        # O adapter pede `df_elemento` uma vez por tipo (CB para cabo, CA para
+        # caixa de emenda) e o mock responde o mesmo para os dois — por isso o
+        # filtro por kind aqui, em vez de assumir uma geometria só.
+        geometrias = [
+            g for g in _fonte().list_element_geometries() if g.kind == "CABLE"
+        ]
 
         assert len(geometrias) == 1
         geo = geometrias[0]
@@ -130,7 +135,7 @@ class TestTracadoDoCabo:
             return_value=_pagina([{"id": "5", "descricao": "FIBRA BACKBONE 3", "tipo": "CB"}])
         )
 
-        geo = next(iter(_fonte().list_element_geometries()))
+        geo = next(g for g in _fonte().list_element_geometries() if g.kind == "CABLE")
         assert geo.points == ((-23.5000, -47.4000), (-23.5020, -47.4020))
 
     def test_coordenada_em_zero_zero_e_ausencia_disfarcada(
@@ -154,7 +159,7 @@ class TestTracadoDoCabo:
             return_value=_pagina([{"id": "5", "descricao": "FIBRA BACKBONE 3", "tipo": "CB"}])
         )
 
-        geo = next(iter(_fonte().list_element_geometries()))
+        geo = next(g for g in _fonte().list_element_geometries() if g.kind == "CABLE")
         assert geo.points == ((-23.5010, -47.4010),)
         assert geo.is_line is False
 
@@ -189,7 +194,7 @@ class TestClasseVemDoTipo:
             ])
         )
 
-        geo = next(iter(_fonte().list_element_geometries()))
+        geo = next(g for g in _fonte().list_element_geometries() if g.kind == "CABLE")
         assert geo.name == "01FO"
         assert geo.type_name == "CLIENTE DROP 1FO"
 
@@ -215,5 +220,49 @@ class TestClasseVemDoTipo:
             ])
         )
 
-        geo = next(iter(_fonte().list_element_geometries()))
+        geo = next(g for g in _fonte().list_element_geometries() if g.kind == "CABLE")
         assert geo.type_name == ""
+
+
+class TestCaixaDeEmenda:
+    def test_emenda_vira_geometria_de_um_ponto(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        """A caixa de emenda (tipo CA) é onde o cabo é aberto. Vem com um ponto
+        só — é posição, não traçado — e por isso `is_line` é falso."""
+        respx_mock.get(f"{API_URL}/df_tipo_elemento").mock(
+            return_value=_pagina([{"id": "43", "nome_tipo": "CAIXA DE EMENDA 24FO"}])
+        )
+        respx_mock.get(f"{API_URL}/df_coordenada").mock(
+            return_value=_pagina([
+                {"id": "10", "latitude": "-23.6068", "longitude": "-47.4890"}
+            ])
+        )
+        respx_mock.get(f"{API_URL}/df_elemento_coordenada").mock(
+            return_value=_pagina([
+                {"id": "1", "id_elemento": "2812", "id_coordenada": "10", "sequencia": "0"}
+            ])
+        )
+
+        def por_tipo(request: Any) -> Response:
+            corpo = request.content.decode()
+            if '"query": "CA"' in corpo:
+                return _pagina([
+                    {
+                        "id": "2812",
+                        "descricao": "Caixa de Emenda Vermelha 142",
+                        "tipo": "CA",
+                        "id_tipo_elemento": "43",
+                    }
+                ])
+            return _pagina([])
+
+        respx_mock.get(f"{API_URL}/df_elemento").mock(side_effect=por_tipo)
+
+        emendas = [
+            g for g in _fonte().list_element_geometries() if g.kind == "SPLICE"
+        ]
+        assert len(emendas) == 1
+        assert emendas[0].name == "Caixa de Emenda Vermelha 142"
+        assert emendas[0].points == ((-23.6068, -47.4890),)
+        assert emendas[0].is_line is False

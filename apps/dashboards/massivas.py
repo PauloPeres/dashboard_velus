@@ -1105,6 +1105,57 @@ def compute_cabos_candidatos(
     }
 
 
+# Raio para mostrar uma caixa de emenda no mapa. Maior que o dos cabos (30 m)
+# porque a emenda não precisa encostar na caixa afetada para explicá-la: ela
+# fica no poste da esquina, no meio do trecho. Medido contra a realidade do
+# cadastro: 150 m é a distância em que a emenda ainda é "aquela ali" para quem
+# está na rua.
+RAIO_EMENDA_METROS = 150.0
+
+
+def emendas_proximas(org: Any, quedas: list[ConnectionDropEvent]) -> list[dict[str, Any]]:
+    """Caixas de emenda perto das caixas afetadas — onde o cabo é aberto.
+
+    A emenda é o primeiro lugar que o técnico abre quando o trecho passa por
+    ali: é onde a fibra foi cortada e refeita, e onde uma fusão mal feita
+    aparece meses depois. São 317 no cadastro; mostrar todas seria um mapa de
+    pontos sem pergunta, então só entram as que estão perto do evento.
+    """
+    from apps.network.domain.geometry import distance_to_path
+
+    pontos_afetados = [
+        (float(e.latitude), float(e.longitude))
+        for e in NetworkElement.objects.filter(
+            organization=org,
+            kind=NetworkElement.Kind.CTO,
+            external_id__in={q.cto_external_id for q in quedas if q.cto_external_id},
+            latitude__isnull=False,
+            longitude__isnull=False,
+        ).only("latitude", "longitude")
+    ]
+    if not pontos_afetados:
+        return []
+
+    saida = []
+    for emenda in NetworkElementGeometry.objects.filter(
+        organization=org, kind=NetworkElement.Kind.SPLICE
+    ).only("external_id", "name", "points"):
+        if not emenda.points:
+            continue
+        ponto = (float(emenda.points[0][0]), float(emenda.points[0][1]))
+        distancia = min(distance_to_path(p, [ponto]) for p in pontos_afetados)
+        if distancia > RAIO_EMENDA_METROS:
+            continue
+        saida.append({
+            "lat": ponto[0],
+            "lon": ponto[1],
+            "label": f"{emenda.name or emenda.external_id} · emenda a {distancia:.0f} m",
+            "distancia_m": round(distancia),
+        })
+    saida.sort(key=lambda e: e["distancia_m"])
+    return saida
+
+
 def _tracados_do_mapa(org: Any, ids: list[str]) -> list[dict[str, Any]]:
     """Polilinhas dos cabos candidatos, prontas para o Plotly."""
     if not ids:
@@ -1196,6 +1247,9 @@ def compute_mapa(
     ]
 
     ligacoes, trecho = _ligacoes_do_mapa(org, ctos_afetadas)
+    # O trecho suspeito sobre o CABO (e não a reta entre caixas), quando existe
+    # um cabo candidato que passa pelas duas pontas.
+    trecho_no_cabo = _trecho_sobre_o_cabo(org, trecho, cabos_candidatos or [])
 
     # Quantos clientes fora ficaram FORA do mapa. Sem isso, um mapa com 3 pontos
     # sobre 40 quedas seria lido como "a massiva é pequena".
@@ -1209,9 +1263,56 @@ def compute_mapa(
         "ligacoes": ligacoes,
         "trecho": trecho,
         "cabos": _tracados_do_mapa(org, cabos_candidatos or []),
+        "trecho_no_cabo": trecho_no_cabo,
+        "emendas": emendas_proximas(org, quedas),
         "sem_coordenada": sem_coordenada,
         "total_quedas": len(quedas),
     }
+
+
+def _trecho_sobre_o_cabo(
+    org: Any, trecho: list[dict[str, Any]], cabos_candidatos: list[str]
+) -> list[dict[str, Any]]:
+    """O trecho suspeito desenhado **sobre o cabo**, quando há cabo que sirva.
+
+    A reta entre duas caixas atravessa quarteirão; o cabo faz a curva da rua. Com
+    a geometria no banco, dá para dizer "o trecho é este pedaço do cabo X" — que
+    é o que o técnico precisa para saber por onde andar.
+
+    Só sai quando um cabo candidato passa pelas **duas** pontas do trecho. Se
+    nenhum passar, a reta tracejada continua valendo e o mapa segue dizendo o
+    que sempre disse: ligação lógica, não caminho da fibra.
+    """
+    from apps.network.domain.geometry import sub_path_between
+
+    if not trecho or not cabos_candidatos:
+        return []
+
+    tracados = [
+        (g.name or g.external_id, [(float(lat), float(lon)) for lat, lon in g.points])
+        for g in NetworkElementGeometry.objects.filter(
+            organization=org,
+            kind=NetworkElement.Kind.CABLE,
+            external_id__in=cabos_candidatos,
+        ).only("external_id", "name", "points")
+        if len(g.points) >= 2
+    ]
+
+    saida: list[dict[str, Any]] = []
+    for segmento in trecho:
+        for nome, pontos in tracados:
+            pedaco = sub_path_between(pontos, segmento["de"], segmento["para"])
+            if not pedaco:
+                continue
+            saida.append({
+                "nome": f"{segmento['label']} · pelo {nome}",
+                "pontos": [[lat, lon] for lat, lon in pedaco],
+            })
+            # Um cabo por trecho: o primeiro que serve às duas pontas é o
+            # candidato, e empilhar todos os que passam por ali transformaria a
+            # pista em rabisco.
+            break
+    return saida
 
 
 def _ligacoes_do_mapa(

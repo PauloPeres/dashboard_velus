@@ -184,3 +184,33 @@ como sem classe na tela.
 **Um campo que não serve:** `cabo_numero_fibras` é inconsistente — o tipo
 "FIBRA AS80 24FO" declara 6 fibras e o "144FO" declara 12. Parece ser fibras por
 tubo. Não use para capacidade.
+
+
+---
+
+## 3. Depois do épico (19/09/2026)
+
+### G8 — Caixas de emenda no mapa
+As 317 caixas de emenda (`df_elemento` tipo CA) do InMap passam a ser
+sincronizadas como geometria de **um ponto** (kind `SPLICE`) e aparecem no mapa
+quando estão a até **150 m** de alguma caixa afetada.
+
+O raio é maior que o dos cabos (30 m) de propósito: a emenda não precisa encostar
+na caixa para explicá-la — ela fica no poste da esquina, no meio do trecho. E só
+entram as próximas do evento: as 317 no mapa seriam pontos sem pergunta.
+
+Por que ela importa: é onde o cabo é **aberto e refeito**. Quando o trecho
+suspeito passa por uma emenda, é ali que o técnico abre primeiro, e é ali que uma
+fusão mal feita aparece meses depois.
+
+### G9 — Trecho suspeito sobre o cabo
+Até aqui o trecho era uma **reta** entre duas caixas — que atravessa quarteirão.
+Com a geometria, quando um cabo candidato passa pelas duas pontas, o trecho passa
+a ser **o pedaço daquele cabo entre elas**, com as curvas do projeto. É a
+diferença entre "o problema está entre estas duas caixas" e "o problema está
+neste pedaço de cabo, que faz este caminho".
+
+Sai em linha cheia, por cima do traçado. **Se nenhum cabo servir às duas pontas,
+não se desenha** e a reta tracejada continua valendo: um trecho que começa a
+300 m da caixa não é o caminho dela, e desenhá-lo mandaria o técnico para a rua
+errada — o erro que a regra de não prometer traçado existia para evitar.

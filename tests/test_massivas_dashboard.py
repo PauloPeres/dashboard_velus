@@ -1697,3 +1697,84 @@ class TestCabosCandidatos:
         c = compute_cabos_candidatos(organization_a, quedas)
         assert c["cabos"][0]["classe"] == ""
         assert c["sem_classe"] == 1
+
+    def test_emenda_perto_da_massiva_entra_no_mapa(
+        self, organization_a: Organization
+    ) -> None:
+        """A emenda é onde o cabo é aberto — o primeiro lugar que o técnico abre
+        quando o trecho passa por ali."""
+        set_current_organization(organization_a)
+        self._cto(organization_a, external_id="CTO-1", lat=-23.5, lon=-47.4)
+        NetworkElementGeometry.objects.create(
+            organization=organization_a, source_type="IXC",
+            kind=NetworkElement.Kind.SPLICE, external_id="E1",
+            name="Caixa de Emenda Vermelha 142", points=[[-23.5004, -47.4]],
+        )
+        NetworkElementGeometry.objects.create(
+            organization=organization_a, source_type="IXC",
+            kind=NetworkElement.Kind.SPLICE, external_id="E2",
+            name="Emenda de outro bairro", points=[[-23.6, -47.5]],
+        )
+        quedas = [_drop(organization_a, login="a1", cto="CTO-1", lat=-23.5, lon=-47.4)]
+
+        mapa = compute_mapa(organization_a, quedas)
+        assert len(mapa["emendas"]) == 1
+        assert "Vermelha 142" in mapa["emendas"][0]["label"]
+
+    def test_trecho_passa_a_seguir_o_cabo_quando_ha_cabo_nas_duas_pontas(
+        self, organization_a: Organization
+    ) -> None:
+        """A reta entre caixas atravessa quarteirão; o cabo faz a curva da rua."""
+        set_current_organization(organization_a)
+        # Duas caixas afetadas, ambas sobre o mesmo cabo, e o POP que define o
+        # sentido do trecho.
+        self._cto(organization_a, external_id="CTO-1", lat=-23.5000, lon=-47.4)
+        self._cto(organization_a, external_id="CTO-2", lat=-23.5018, lon=-47.4)
+        NetworkElement.objects.create(
+            organization=organization_a, source_type="IXC",
+            kind=NetworkElement.Kind.OLT, external_id="OLT-1",
+            parent_kind=NetworkElement.Kind.POP, parent_external_id="POP-1",
+        )
+        for cto in ("CTO-1", "CTO-2"):
+            NetworkElement.objects.filter(
+                organization=organization_a, external_id=cto
+            ).update(parent_kind=NetworkElement.Kind.OLT, parent_external_id="OLT-1")
+        NetworkElement.objects.create(
+            organization=organization_a, source_type="IXC",
+            kind=NetworkElement.Kind.POP, external_id="POP-1", name="POP Centro",
+            latitude=-23.4990, longitude=-47.4,
+        )
+        # O cabo passa pelas duas, com um vértice no meio (a curva da rua).
+        self._cabo(
+            organization_a, external_id="C1", nome="FIBRA AS80 12FO BACKBONE 18",
+            pontos=[[-23.5000, -47.4], [-23.5009, -47.4002], [-23.5018, -47.4]],
+        )
+        quedas = [
+            _drop(organization_a, login="a1", cto="CTO-1", lat=-23.5000, lon=-47.4),
+            _drop(organization_a, login="a2", cto="CTO-2", lat=-23.5018, lon=-47.4),
+        ]
+
+        mapa = compute_mapa(organization_a, quedas, cabos_candidatos=["C1"])
+        assert len(mapa["trecho_no_cabo"]) == 1
+        # O vértice do meio está no desenho: é ele que faz o trecho seguir a rua.
+        assert len(mapa["trecho_no_cabo"][0]["pontos"]) == 3
+        assert "pelo FIBRA AS80 12FO BACKBONE 18" in mapa["trecho_no_cabo"][0]["nome"]
+        # E a reta tracejada continua lá, dizendo a mesma coisa por baixo.
+        assert mapa["trecho"]
+
+    def test_sem_cabo_nas_duas_pontas_so_resta_a_reta(
+        self, organization_a: Organization
+    ) -> None:
+        set_current_organization(organization_a)
+        self._cto(organization_a, external_id="CTO-1", lat=-23.5, lon=-47.4)
+        self._cto(organization_a, external_id="CTO-2", lat=-23.52, lon=-47.42)
+        self._cabo(
+            organization_a, external_id="C1", nome="FIBRA BACKBONE 1",
+            pontos=[[-23.5001, -47.4], [-23.4999, -47.4]],
+        )
+        quedas = [
+            _drop(organization_a, login="a1", cto="CTO-1", lat=-23.5, lon=-47.4),
+            _drop(organization_a, login="a2", cto="CTO-2", lat=-23.52, lon=-47.42),
+        ]
+        mapa = compute_mapa(organization_a, quedas, cabos_candidatos=["C1"])
+        assert mapa["trecho_no_cabo"] == []

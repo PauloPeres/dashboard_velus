@@ -28,7 +28,8 @@ tem: aqui o mapa renderiza mesmo vazio, e o vazio é informação.
   <p class="text-xs text-gray-400 mb-1 leading-relaxed">
     Vermelho: fora agora. Verde: já voltou. Laranja: caixa (CTO) afetada.
     Verde-escuro: caixa vizinha da mesma PON que continua no ar — é ela que
-    delimita o trecho. Azul: POP.
+    delimita o trecho. Roxo pequeno: caixa de emenda perto do evento, onde o cabo
+    é aberto. Azul: POP.
   </p>
   {% comment %}
   As linhas são a parte mais fácil de ler errado da tela inteira, então o aviso
@@ -52,6 +53,13 @@ tem: aqui o mapa renderiza mesmo vazio, e o vazio é informação.
     nunca onde ela rompeu. A tela aponta <em>trecho suspeito</em> e <em>cabo candidato</em>,
     nunca "cabo X rompido".
   </p>
+  {% if mapa.trecho_no_cabo %}
+  <p class="text-xs text-gray-400 mb-1 leading-relaxed">
+    A linha <strong>laranja e cheia</strong> é o trecho suspeito desenhado sobre o cabo —
+    o caminho que a fibra faz entre as duas caixas, com as curvas do projeto, em vez da reta
+    que atravessa quarteirão. Ela só aparece quando um cabo candidato passa pelas duas pontas.
+  </p>
+  {% endif %}
   {% if mapa_nota %}
   <p class="text-xs text-gray-400 mb-1 leading-relaxed">{{ mapa_nota }}</p>
   {% endif %}

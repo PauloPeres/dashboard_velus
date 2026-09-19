@@ -221,6 +221,11 @@ class NetworkElement(TenantModel):
         PON = "PON", _("Porta PON")
         OLT = "OLT", _("Transmissor (OLT)")
         CABLE = "CABLE", _("Cabo")
+        # A caixa de emenda é onde o cabo é aberto e refeito — o lugar que o
+        # técnico abre primeiro quando o trecho suspeito passa por ali. Vem do
+        # InMap (`df_elemento` tipo CA), com posição própria, e por isso entra
+        # como elemento de planta e não como detalhe do cabo.
+        SPLICE = "SPLICE", _("Caixa de emenda")
 
     source_type = models.CharField(
         max_length=32,

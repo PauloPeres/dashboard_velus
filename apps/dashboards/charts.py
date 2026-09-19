@@ -2588,6 +2588,10 @@ def outage_map(mapa: dict[str, Any]) -> str:
         ("voltaram", "Já voltou", "#16a34a", 9),
         ("ctos", "CTO afetada", "#f59e0b", 13),
         ("vizinhas", "Caixa vizinha no ar", "#059669", 13),
+        # A emenda é onde o cabo é aberto — o primeiro lugar que o técnico abre
+        # quando o trecho passa por ali. Só aparecem as que estão perto do
+        # evento; as 317 do cadastro seriam pontos sem pergunta.
+        ("emendas", "Caixa de emenda", "#7c3aed", 11),
         ("pops", "POP", "#2563eb", 15),
     ]
     # As ligações entram ANTES dos pontos para ficarem por baixo deles.
@@ -2604,6 +2608,16 @@ def outage_map(mapa: dict[str, Any]) -> str:
             nome="Ligação lógica até o POP",
             cor="#6b7280",
             largura=2,
+        ),
+        # O trecho sobre o cabo entra CHEIO e por cima do traçado: aqui a linha
+        # é o caminho de verdade da fibra entre as duas caixas, com as curvas do
+        # projeto. Quando ele existe, a reta tracejada abaixo vira redundância
+        # honesta — as duas dizem a mesma coisa, uma por cima da outra.
+        *_map_solid_path_trace(
+            mapa.get("trecho_no_cabo") or [],
+            nome="Trecho suspeito sobre o cabo",
+            cor="#ea580c",
+            largura=5,
         ),
         *_map_dashed_trace(
             mapa.get("trecho") or [],

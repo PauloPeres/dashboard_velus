@@ -168,3 +168,45 @@ class TestCaixasSemCabo:
         """30 m não é número redondo escolhido a esmo: a ≤30 m estão 1.211 das
         1.431 caixas, e o p90 (81,5 m) já traria o cabo de outra rua."""
         assert RAIO_CANDIDATO_METROS == 30.0
+
+
+class TestPedacoDoCaboEntreDuasCaixas:
+    """O trecho suspeito deixa de ser reta e vira pedaço de cabo.
+
+    A reta entre duas caixas atravessa quarteirão; o cabo faz a curva da rua. Com
+    a geometria, o trecho passa a ser o caminho que a fibra faz — que é o que o
+    técnico precisa para saber por onde andar.
+    """
+
+    def test_devolve_o_pedaco_entre_as_duas_pontas(self) -> None:
+        from apps.network.domain.geometry import sub_path_between
+
+        cabo = [
+            _ponto(),
+            _ponto(metros_norte=50),
+            _ponto(metros_norte=100),
+            _ponto(metros_norte=150),
+        ]
+        pedaco = sub_path_between(cabo, _ponto(metros_norte=50), _ponto(metros_norte=100))
+        assert pedaco == [_ponto(metros_norte=50), _ponto(metros_norte=100)]
+
+    def test_ordem_das_pontas_nao_importa(self) -> None:
+        from apps.network.domain.geometry import sub_path_between
+
+        cabo = [_ponto(), _ponto(metros_norte=50), _ponto(metros_norte=100)]
+        a, b = _ponto(metros_norte=100), _ponto()
+        assert len(sub_path_between(cabo, a, b)) == 3
+
+    def test_caixa_longe_do_cabo_nao_gera_trecho(self) -> None:
+        """Um "trecho" que começa a 300 m da caixa não é o caminho dela —
+        desenhá-lo mandaria o técnico para a rua errada."""
+        from apps.network.domain.geometry import sub_path_between
+
+        cabo = [_ponto(), _ponto(metros_norte=100)]
+        assert sub_path_between(cabo, _ponto(), _ponto(metros_leste=300)) == []
+
+    def test_duas_caixas_no_mesmo_vertice_nao_viram_trecho(self) -> None:
+        from apps.network.domain.geometry import sub_path_between
+
+        cabo = [_ponto(), _ponto(metros_norte=100)]
+        assert sub_path_between(cabo, _ponto(metros_leste=1), _ponto(metros_leste=2)) == []

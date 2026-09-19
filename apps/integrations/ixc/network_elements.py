@@ -100,10 +100,13 @@ class IxcNetworkElementSource:
     # -------------------------------------------------------------------------
     # Traçado (épico da geometria) — três recursos viram polilinha
     # -------------------------------------------------------------------------
-    # Os tipos do InMap que têm traçado ou ponto próprio. CB é o que interessa
-    # para massiva; CA (caixa de emenda) entra porque é ela que marca onde o cabo
-    # é aberto, e uma emenda perto do trecho suspeito é informação de campo.
-    _GEOMETRY_TYPES: ClassVar[dict[str, str]] = {"CB": "CABLE"}
+    # Os tipos do InMap que têm traçado ou ponto próprio.
+    #
+    # CB é o cabo, com polilinha. CA é a caixa de emenda, com um ponto só — e
+    # ela entra porque é onde o cabo é aberto e refeito: quando o trecho
+    # suspeito passa por uma emenda, é ali que o técnico abre primeiro. São 317
+    # em produção, todas com coordenada.
+    _GEOMETRY_TYPES: ClassVar[dict[str, str]] = {"CB": "CABLE", "CA": "SPLICE"}
 
     def list_element_geometries(self) -> Iterator[ElementGeometryDTO]:
         """Monta a polilinha de cada cabo: elemento + vínculos + coordenadas.
