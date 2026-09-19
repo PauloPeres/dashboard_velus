@@ -1,0 +1,50 @@
+{% comment %}
+O placar do veredito (C5) — quanto o palpite automático acerta.
+
+É o número que justifica ter pedido a alguém para preencher a causa. Enquanto
+não existia causa confirmada, o veredito energia/fibra era uma opinião sem
+retorno: ninguém sabia se ajudava ou atrapalhava.
+
+Duas honestidades embutidas:
+
+- só entram na conta as massivas em que o veredito **opinou** (ele se recusa
+  quando a base é fraca) e cuja causa confirmada é comparável — energia ou
+  rompimento. Manutenção, equipamento e falso positivo não são o que ele tenta
+  adivinhar, e contá-los como erro seria punir o palpite por uma pergunta que
+  ele não faz;
+- com menos de 10 comparações a tela mostra a fração crua e diz que é pouco, em
+  vez de uma porcentagem que pula 20 pontos a cada linha nova.
+
+Espera `placar_veredito` (dict de compute_placar_do_veredito).
+{% endcomment %}
+{% if placar_veredito.tem_amostra %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <h2 class="text-sm font-semibold text-gray-700">O palpite automático está acertando?</h2>
+  <p class="text-2xl font-bold text-gray-900 mt-1 tabular-nums">
+    {{ placar_veredito.acertos }} de {{ placar_veredito.comparadas }}
+    {% if not placar_veredito.amostra_pequena %}
+    <span class="text-base font-medium text-gray-500">({{ placar_veredito.pct }}%)</span>
+    {% endif %}
+  </p>
+  <p class="text-xs text-gray-400 mt-1 leading-relaxed">
+    Massivas em que o veredito nomeou energia ou fibra e alguém depois confirmou a causa.
+    {% if placar_veredito.amostra_pequena %}
+    Amostra ainda pequena — a porcentagem só aparece a partir de 10 comparações, porque
+    abaixo disso ela oscila mais do que informa.
+    {% endif %}
+    {% if placar_veredito.fora_da_comparacao %}
+    Outras {{ placar_veredito.fora_da_comparacao }} ficaram fora da conta: a causa confirmada
+    (manutenção, equipamento, falso positivo) não é o que o veredito tenta adivinhar.
+    {% endif %}
+  </p>
+</div>
+{% elif placar_veredito.total %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <h2 class="text-sm font-semibold text-gray-700">O palpite automático está acertando?</h2>
+  <p class="text-xs text-gray-500 mt-1 leading-relaxed">
+    Ainda não dá para dizer. Há {{ placar_veredito.total }} massiva{{ placar_veredito.total|pluralize }}
+    com causa confirmada, mas em nenhuma delas o veredito chegou a nomear energia ou fibra —
+    ele se recusa a opinar quando a base é fraca, e é assim que deve ser.
+  </p>
+</div>
+{% endif %}

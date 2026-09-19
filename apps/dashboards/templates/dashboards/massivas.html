@@ -20,6 +20,12 @@ ela mostra é o registro das massivas encerradas, no fim — a ferramenta é de
 tempo real e não responde pergunta sobre o passado (§1 do plano).
 {% endcomment %}
 
+{% comment %}
+A fila de causa vem ANTES do tempo real, e de propósito: é a única parte da tela
+que pede algo de quem está lendo. Depois do mapa, ninguém rola de volta.
+{% endcomment %}
+{% include "dashboards/_massivas_sem_causa.html" %}
+
 {% include "dashboards/_massivas_abertas.html" %}
 
 {% include "dashboards/_massivas_mapa.html" %}
@@ -39,6 +45,8 @@ tempo real e não responde pergunta sobre o passado (§1 do plano).
   </p>
   <div id="massivas-timeline-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
 </div>
+
+{% include "dashboards/_massivas_placar.html" %}
 
 <!-- Histórico: o agregado das massivas encerradas, e só ele -->
 <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
@@ -89,6 +97,22 @@ tempo real e não responde pergunta sobre o passado (§1 do plano).
             {% if h.reincidencia.reincidente %}
             <p class="text-xs text-orange-700 mt-0.5">
               {{ h.reincidencia.frase }} · a anterior em {{ h.reincidencia.ultima_anterior|date:"d/m H:i" }}
+            </p>
+            {% endif %}
+            {% comment %}
+            Causa confirmada (R9). Aparece ao lado do registro, não no lugar do
+            veredito automático: é a divergência entre os dois que mede o quanto
+            o palpite vale, e apagar o palpite ao saber a resposta destruiria a
+            única aferição que teremos.
+            {% endcomment %}
+            {% if h.confirmed_cause %}
+            <p class="text-xs text-indigo-700 mt-0.5">
+              causa confirmada: <strong>{{ h.confirmed_cause_label }}</strong>{% for t in h.cause_tags %} · {{ t }}{% endfor %}
+              {% if h.cause_note %}<span class="text-gray-400">— {{ h.cause_note }}</span>{% endif %}
+            </p>
+            {% elif h.is_expected %}
+            <p class="text-xs text-blue-700 mt-0.5">
+              dentro de manutenção programada{% if h.maintenance_label %} · {{ h.maintenance_label }}{% endif %}
             </p>
             {% endif %}
           </td>

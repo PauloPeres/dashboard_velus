@@ -80,6 +80,13 @@ urlpatterns = [
         views.massiva_detalhe,
         name="massiva_detalhe",
     ),
+    # A primeira escrita de dados da ferramenta (R9): a causa confirmada de uma
+    # massiva encerrada. Herda a permissão da aba — ver `_ROUTE_TO_KEY`.
+    path(
+        "operations/massivas/<int:outage_id>/causa/",
+        views.massiva_causa,
+        name="massiva_causa",
+    ),
     path("network/", views.network, name="network"),
     path("sales/", views.sales, name="sales"),
     path("customers/", views.customers, name="customers"),

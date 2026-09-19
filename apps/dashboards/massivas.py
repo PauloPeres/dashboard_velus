@@ -251,6 +251,21 @@ def outage_row(
         "vizinhanca": vizinhanca,
         "reincidencia": reincidencia,
         "cabos": cabos,
+        # Causa confirmada (R9) e manutenção programada (R10). A causa NÃO
+        # substitui o veredito na tela: é a divergência entre os dois que mede
+        # o quanto o palpite automático acerta.
+        "confirmed_cause": outage.confirmed_cause,
+        "confirmed_cause_label": outage.get_confirmed_cause_display()
+        if outage.confirmed_cause
+        else "",
+        "cause_tags": tag_labels(outage.cause_tags),
+        "cause_note": outage.cause_note,
+        "cause_confirmed_at": outage.cause_confirmed_at,
+        "cause_confirmed_by": (
+            outage.cause_confirmed_by.email if outage.cause_confirmed_by_id else ""
+        ),
+        "is_expected": outage.is_expected,
+        "maintenance_label": outage.maintenance_label,
     }
 
 
@@ -1486,6 +1501,147 @@ def compute_massiva_detalhe(
             vizinhas_intactas=compute_vizinhanca(org, quedas).get("intactas", []),
             cabos_candidatos=cabos.get("ids_no_mapa", []),
         ),
+    }
+
+
+# =============================================================================
+# Causa confirmada (R9) — a primeira entrada de dados desta ferramenta
+# =============================================================================
+# O veredito automático (R7) diz "provável energia" e nunca fica sabendo se
+# acertou. A reincidência (R8) conta eventos sem saber o que eram. É este campo,
+# preenchido por gente depois que a massiva encerra, que fecha o ciclo — e que
+# vira rótulo de modelo quando houver passado suficiente.
+#
+# Vocabulário fechado (decidido com o operador em 19/09/2026): causa exclusiva,
+# porque é ela que o modelo vai prever, mais tags livres da lista abaixo, que
+# carregam o contexto que a causa não cabe. Se tudo fosse tag, nada seria a
+# resposta.
+
+CAUSE_TAGS: tuple[tuple[str, str], ...] = (
+    ("vandalismo", "vandalismo"),
+    ("troca_de_poste", "troca de poste"),
+    ("terceiro", "terceiro (obra, acidente)"),
+    ("concessionaria", "concessionária"),
+    ("energia_propria", "energia própria/nobreak"),
+    ("chuva", "chuva"),
+)
+_CAUSE_TAG_KEYS = {chave for chave, _ in CAUSE_TAGS}
+
+# Quantas massivas sem causa a fila mostra. Fila longa não é cobrança, é
+# paisagem: some da vista e deixa de ser feita.
+_MAX_NA_FILA = 8
+
+
+def tag_labels(tags: list[str] | None) -> list[str]:
+    """Nomes legíveis das tags gravadas, ignorando o que saiu do vocabulário."""
+    nomes = dict(CAUSE_TAGS)
+    return [nomes[t] for t in (tags or []) if t in nomes]
+
+
+def normalize_tags(valores: list[str]) -> list[str]:
+    """Filtra o que veio do formulário contra o vocabulário, preservando a ordem.
+
+    Tag fora da lista é descartada em silêncio: o campo é rótulo de treino, e
+    aceitar texto livre aqui encheria o vocabulário de sinônimos ("vandalismo",
+    "vandalizado", "roubo de cabo") que nenhum modelo consegue juntar depois.
+    """
+    return [chave for chave, _ in CAUSE_TAGS if chave in set(valores)]
+
+
+def compute_sem_causa(org: Any, *, limit: int = _MAX_NA_FILA) -> dict[str, Any]:
+    """Massivas encerradas esperando alguém dizer o que elas eram.
+
+    Fica no topo da aba porque cobrança que não aparece não é cobrança. E conta
+    o total, não só as que cabem na tela: "8 na fila" e "8 de 40" pedem ações
+    diferentes.
+    """
+    pendentes = OutageEvent.objects.filter(
+        organization=org, ended_at__isnull=False, confirmed_cause=""
+    ).order_by("-ended_at")
+    total = pendentes.count()
+    eventos = list(pendentes[:limit])
+    referencias = element_references(org, eventos)
+    linhas = [
+        outage_row(o, referencia=referencias.get(o.pk, ""))
+        for o in eventos
+    ]
+    return {
+        "linhas": linhas,
+        "total": total,
+        "alem_da_lista": max(total - len(linhas), 0),
+        "causas": OutageEvent.Cause.choices,
+        "tags": CAUSE_TAGS,
+    }
+
+
+def compute_placar_do_veredito(org: Any) -> dict[str, Any]:
+    """Quanto o veredito automático acerta, medido contra a causa confirmada.
+
+    É o número que justifica ter pedido a alguém para preencher o campo. Ele só
+    existe onde as duas coisas existem: massiva com causa confirmada E veredito
+    que não se recusou a opinar.
+
+    Enquanto a amostra for pequena, a tela diz o tamanho dela em vez de exibir
+    uma porcentagem que oscila 20 pontos a cada linha nova.
+    """
+    confirmadas = list(
+        OutageEvent.objects.filter(organization=org)
+        .exclude(confirmed_cause="")
+        .only("id", "scope", "confirmed_cause")
+    )
+    if not confirmadas:
+        return {"tem_amostra": False, "total": 0}
+
+    quedas_por_massiva: dict[int, list[ConnectionDropEvent]] = {}
+    for afetado in (
+        OutageAffectedLogin.objects.filter(
+            organization=org, outage__in=confirmadas
+        )
+        .select_related("drop_event", "drop_event__connection")
+        .only(
+            "outage",
+            "drop_event",
+            "drop_event__connection",
+            "drop_event__connection__onu_last_drop_cause",
+            "drop_event__dropped_at",
+        )
+    ):
+        if afetado.drop_event is not None:
+            quedas_por_massiva.setdefault(afetado.outage_id, []).append(afetado.drop_event)
+
+    # O veredito só nomeia energia ou fibra; as outras causas confirmadas não
+    # são comparáveis e ficam de fora da conta em vez de contar como erro.
+    comparavel = {
+        OutageEvent.Cause.ENERGIA.value: "energia",
+        OutageEvent.Cause.ROMPIMENTO.value: "fibra",
+    }
+    acertos = 0
+    comparadas = 0
+    opinou_e_nao_deu_pra_comparar = 0
+    for outage in confirmadas:
+        veredito = compute_veredito(
+            quedas_por_massiva.get(outage.pk, []), scope=outage.scope
+        )
+        palpite = veredito.get("veredito", "")
+        if palpite not in ("energia", "fibra"):
+            continue
+        esperado = comparavel.get(outage.confirmed_cause)
+        if esperado is None:
+            opinou_e_nao_deu_pra_comparar += 1
+            continue
+        comparadas += 1
+        if palpite == esperado:
+            acertos += 1
+
+    return {
+        "tem_amostra": comparadas > 0,
+        "total": len(confirmadas),
+        "comparadas": comparadas,
+        "acertos": acertos,
+        "pct": round(acertos * 100 / comparadas) if comparadas else 0,
+        "fora_da_comparacao": opinou_e_nao_deu_pra_comparar,
+        # Abaixo disto a porcentagem oscila demais para ser lida como taxa.
+        "amostra_pequena": comparadas < 10,
     }
 
 

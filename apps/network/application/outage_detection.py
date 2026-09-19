@@ -312,7 +312,44 @@ def _apply_cluster(
         opened, grown = 1, 0
 
     _link_drops(organization, outage, eventos, cluster=cluster, now=now)
+    if opened:
+        _mark_if_expected(organization, outage, cluster=cluster)
     return (opened, grown, merged)
+
+
+def _mark_if_expected(
+    organization: Any, outage: OutageEvent, *, cluster: OutageCluster
+) -> None:
+    """Marca a massiva que nasceu dentro de uma janela de manutenção (R10).
+
+    Só no nascimento, e de propósito: uma janela cadastrada depois do evento não
+    marca nada retroativamente. O registro guarda o que se sabia quando a
+    massiva apareceu, e reescrever isso apagaria a diferença entre "avisamos
+    antes" e "explicamos depois" — que é justamente o que a janela existe para
+    medir.
+    """
+    # O cadastro de manutenção vive no contexto de atendimento; aqui se pergunta
+    # por um serviço, sem importar o model do outro app (AGENT.md §1.1).
+    from apps.atendimento.application.manutencao import janela_que_cobre
+
+    janela = janela_que_cobre(
+        organization,
+        scope=cluster.scope,
+        element_external_id=cluster.element_id,
+        moment=outage.started_at,
+    )
+    if janela is None:
+        return
+    outage.maintenance_event_id = janela.id
+    outage.maintenance_label = janela.titulo
+    outage.save(update_fields=["maintenance_event_id", "maintenance_label", "updated_at"])
+    _logger.info(
+        "outage_expected_by_maintenance",
+        outage=outage.pk,
+        maintenance_event=janela.id,
+        scope=cluster.scope,
+        element=cluster.element_id,
+    )
 
 
 def _open_outages_sharing(eventos: list[ConnectionDropEvent]) -> list[OutageEvent]:

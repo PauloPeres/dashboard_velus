@@ -111,6 +111,9 @@ from .massivas import (
     compute_historico,
     compute_massiva_detalhe,
     compute_massivas_agora,
+    compute_placar_do_veredito,
+    compute_sem_causa,
+    normalize_tags,
     poll_snapshot,
 )
 from .period import TZ, Period, get_period, set_period_extra_params
@@ -1639,6 +1642,7 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
     própria (esses parâmetros só sobrevivem como compatibilidade de URL antiga).
     """
     from apps.atendimento.infrastructure.models import EventoRede
+    from apps.network.infrastructure.models import OutageEvent
 
     org_or_redirect = _require_org(request)
     if not hasattr(org_or_redirect, "slug"):
@@ -1742,6 +1746,9 @@ def atendimento_tendencias(request: HttpRequest) -> HttpResponse:
             "horario_json": charts.atendimento_horario_sazonal(horario, eventos),
             "eventos_rede": eventos,
             "evento_tipos": EventoRede.Tipo.choices,
+            # Escopos possíveis de uma manutenção programada (R10) — o mesmo
+            # vocabulário das massivas, que é contra quem a janela é comparada.
+            "evento_escopos": OutageEvent.Scope.choices,
             "pode_editar_eventos": pode_editar_eventos,
             "evento_erro": request.GET.get("evento_erro") == "1",
             "evento_default_inicio": timezone.localtime(
@@ -2166,6 +2173,20 @@ def _evento_org(request: HttpRequest) -> Any:
     return membership.organization
 
 
+def _evento_scope(valor: str) -> str:
+    """Escopo do evento de rede, validado contra o vocabulário das massivas.
+
+    O mesmo vocabulário do `OutageEvent.Scope`, porque é contra ele que a janela
+    de manutenção é comparada. Valor fora da lista vira "" (toda a rede) em vez
+    de ser gravado: escopo inventado nunca casaria com massiva nenhuma, e a
+    equipe acharia que avisou.
+    """
+    from apps.network.infrastructure.models import OutageEvent
+
+    valor = (valor or "").strip().upper()
+    return valor if valor in OutageEvent.Scope.values else ""
+
+
 @login_required
 @never_cache
 @require_POST
@@ -2193,6 +2214,11 @@ def evento_rede_novo(request: HttpRequest) -> HttpResponse:
         descricao=request.POST.get("descricao", "").strip(),
         started_at=started_at,
         ended_at=ended_at,
+        # Escopo e elemento (R10): é o que permite à aba de Massivas saber qual
+        # massiva esta janela explica. Vazio continua valendo — o evento segue
+        # sendo anotação de gráfico, como todos os anteriores.
+        scope=_evento_scope(request.POST.get("scope", "")),
+        element_external_id=request.POST.get("element_external_id", "").strip()[:128],
         created_by=request.user,
     )
     return HttpResponseRedirect(_evento_redirect_url(request))
@@ -2236,9 +2262,13 @@ def evento_rede_editar(request: HttpRequest, evento_id: int) -> HttpResponse:
     evento.descricao = request.POST.get("descricao", "").strip()
     evento.started_at = started_at
     evento.ended_at = ended_at
+    evento.scope = _evento_scope(request.POST.get("scope", ""))
+    evento.element_external_id = request.POST.get(
+        "element_external_id", ""
+    ).strip()[:128]
     evento.save(
         update_fields=["titulo", "tipo", "descricao", "started_at", "ended_at",
-                       "updated_at"]
+                       "scope", "element_external_id", "updated_at"]
     )
     return HttpResponseRedirect(_evento_redirect_url(request))
 
@@ -3156,9 +3186,64 @@ def massivas(request: HttpRequest) -> HttpResponse:
             # um mapa velho encostado numa lista viva mente por omissão.
             "desenhado_as": now,
             "historico": compute_historico(org),
+            # A fila de causa (R9) e o placar do veredito (C5) ficam FORA do
+            # partial de auto-refresh: são do passado, não mudam a cada 3 min, e
+            # um formulário meio preenchido não pode sumir debaixo do dedo de
+            # quem está digitando.
+            "sem_causa": compute_sem_causa(org),
+            "placar_veredito": compute_placar_do_veredito(org),
             "refresh_url": reverse("dashboards:massivas_abertas"),
         },
     )
+
+
+@login_required
+@never_cache
+@require_POST
+def massiva_causa(request: HttpRequest, outage_id: int) -> HttpResponse:
+    """Grava a causa confirmada de uma massiva encerrada (R9).
+
+    **A primeira escrita de dados desta ferramenta.** Até aqui tudo o que a tela
+    mostra vem do IXC ou do warehouse; isto é alguém dizendo o que a massiva era
+    de verdade, para que o veredito automático possa um dia ser medido.
+
+    Permissão: quem enxerga a aba. Registrada em `pages._ROUTE_TO_KEY`, então o
+    `PageAccessMiddleware` já barra quem não tem — aqui basta a org do contexto.
+    """
+    from apps.network.infrastructure.models import OutageEvent
+
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    outage = get_object_or_404(
+        OutageEvent.objects.filter(organization=org), pk=outage_id
+    )
+    destino = f"{reverse('dashboards:massivas')}#causa"
+
+    causa = request.POST.get("confirmed_cause", "")
+    if causa not in OutageEvent.Cause.values:
+        # Causa fora do vocabulário não vira "outro" nem vazio silencioso: o
+        # campo é rótulo de treino, e um valor inventado contamina a série.
+        return HttpResponseRedirect(f"{destino}&erro=1" if "?" in destino else f"{destino}?erro=1")
+
+    outage.confirmed_cause = causa
+    outage.cause_tags = normalize_tags(request.POST.getlist("cause_tags"))
+    outage.cause_note = request.POST.get("cause_note", "").strip()[:2000]
+    outage.cause_confirmed_by = request.user
+    outage.cause_confirmed_at = timezone.now()
+    outage.save(
+        update_fields=[
+            "confirmed_cause",
+            "cause_tags",
+            "cause_note",
+            "cause_confirmed_by",
+            "cause_confirmed_at",
+            "updated_at",
+        ]
+    )
+    return HttpResponseRedirect(destino)
 
 
 @login_required

@@ -83,6 +83,10 @@ _ROUTE_TO_KEY.update({
     # Detalhe de uma massiva e o partial de auto-refresh herdam a aba (#146).
     ("dashboards", "massiva_detalhe"): "massivas",
     ("dashboards", "massivas_abertas"): "massivas",
+    # Quem enxerga a aba pode dizer o que a massiva era (decisão de 19/09/2026).
+    # Restringir a causa a um grupo menor deixaria a fila parada justamente com
+    # quem esteve no reparo e sabe a resposta.
+    ("dashboards", "massiva_causa"): "massivas",
     # CRUD de eventos de rede (#78) mora na página de Tendências.
     ("dashboards", "evento_rede_novo"): "atendimento_tendencias",
     ("dashboards", "evento_rede_editar"): "atendimento_tendencias",

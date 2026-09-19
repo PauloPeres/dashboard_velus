@@ -1,0 +1,107 @@
+{% comment %}
+Fila "massivas sem causa" (R9) — a primeira entrada de dados desta ferramenta.
+
+Até aqui o dashboard era leitura: tudo vinha do IXC ou do warehouse. Aqui alguém
+digita o que a massiva era de verdade, e a razão é declarada em voz alta na
+própria tela: sem isso, o veredito automático (energia vs. fibra) adivinha para
+sempre e nunca fica sabendo se acerta.
+
+Fica no TOPO da aba porque cobrança que não aparece não é cobrança — e fora do
+partial de auto-refresh, senão um formulário meio preenchido sumiria debaixo do
+dedo de quem está digitando.
+
+A massiva encerra sozinha quando ≥90% volta, então ninguém "fecha" à mão: esta
+fila é o único momento em que a resposta é pedida.
+
+Espera `sem_causa` (dict de compute_sem_causa).
+{% endcomment %}
+{% load humanize %}
+{% if sem_causa.total %}
+<div id="causa" class="bg-white rounded-xl shadow-sm border border-indigo-200 p-5 mb-6">
+  <div class="flex flex-wrap items-baseline gap-2 mb-1">
+    <h2 class="text-sm font-semibold text-gray-700">Massivas esperando causa</h2>
+    <span class="text-[10px] font-medium bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">
+      {{ sem_causa.total|intcomma }} na fila
+    </span>
+  </div>
+  <p class="text-xs text-gray-400 mb-4 leading-relaxed">
+    O sistema chuta a causa (energia ou fibra) e nunca fica sabendo se acertou. Quem
+    esteve no reparo sabe. Dois cliques aqui viram, com o tempo, a medida de quanto o
+    palpite automático vale — e o histórico que um modelo pode aprender.
+  </p>
+
+  {% if request.GET.erro %}
+  <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3">
+    Escolha uma causa da lista. O campo é rótulo de treino: valor fora do vocabulário
+    contamina a série e por isso não é aceito.
+  </p>
+  {% endif %}
+
+  <div class="divide-y divide-gray-100">
+    {% for l in sem_causa.linhas %}
+    <form method="post" action="{% url 'dashboards:massiva_causa' l.id %}" class="py-3">
+      {% csrf_token %}
+      <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <a href="{% url 'dashboards:massiva_detalhe' l.id %}"
+           class="text-sm font-medium text-gray-900 hover:text-blue-600">{{ l.destaque }}</a>
+        <span class="text-xs text-gray-400">
+          {{ l.started_at|date:"d/m H:i" }} · {{ l.affected_count|intcomma }} cliente{{ l.affected_count|pluralize }} ·
+          {{ l.duracao_min|intcomma }} min
+        </span>
+        {% if l.is_expected %}
+        <span class="text-[10px] uppercase tracking-wider bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">
+          dentro de manutenção programada
+        </span>
+        {% endif %}
+      </div>
+
+      <div class="mt-2 flex flex-wrap items-center gap-2">
+        {% comment %}
+        Uma causa, exclusiva: é ela que vira o rótulo do modelo. O `required`
+        é deliberado — meia resposta gravada é pior que nenhuma, porque a
+        massiva sai da fila sem ninguém ter respondido.
+        {% endcomment %}
+        <select name="confirmed_cause" required
+                class="text-xs border border-gray-300 rounded px-2 py-1 bg-white">
+          <option value="">O que era…</option>
+          {% for valor, rotulo in sem_causa.causas %}
+          <option value="{{ valor }}"
+            {% if l.is_expected and valor == "MANUTENCAO" %}selected{% endif %}>{{ rotulo }}</option>
+          {% endfor %}
+        </select>
+
+        <input type="text" name="cause_note" maxlength="2000" placeholder="observação (opcional)"
+               class="text-xs border border-gray-300 rounded px-2 py-1 flex-1 min-w-[12rem]">
+
+        <button type="submit"
+                class="text-xs bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700">
+          Registrar
+        </button>
+      </div>
+
+      {% comment %}
+      Tags são o contexto que a causa exclusiva não carrega ("rompimento" +
+      "vandalismo" + "troca de poste"). Várias, opcionais, vocabulário fechado:
+      texto livre viraria sinônimo ("vandalismo", "vandalizado", "roubo de
+      cabo") que nenhum modelo junta depois.
+      {% endcomment %}
+      <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+        {% for chave, rotulo in sem_causa.tags %}
+        <label class="text-[11px] text-gray-500 flex items-center gap-1">
+          <input type="checkbox" name="cause_tags" value="{{ chave }}" class="rounded border-gray-300">
+          {{ rotulo }}
+        </label>
+        {% endfor %}
+      </div>
+    </form>
+    {% endfor %}
+  </div>
+
+  {% if sem_causa.alem_da_lista %}
+  <p class="text-xs text-gray-400 mt-3">
+    e mais {{ sem_causa.alem_da_lista|intcomma }} massiva{{ sem_causa.alem_da_lista|pluralize }} sem causa —
+    a fila mostra as mais recentes primeiro.
+  </p>
+  {% endif %}
+</div>
+{% endif %}

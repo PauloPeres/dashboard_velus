@@ -409,6 +409,27 @@ class EventoRede(TenantModel):
         null=True, blank=True,
         help_text=_("Fim do evento; vazio = evento pontual."),
     )
+    # -- Escopo (R10) ---------------------------------------------------------
+    # Acrescentado quando a aba de Massivas passou a ler daqui: uma manutenção
+    # programada só consegue explicar uma massiva se disser ONDE ela mexe. Sem
+    # escopo o evento continua valendo como anotação de gráfico — é assim que
+    # todos os que já existiam ficaram.
+    #
+    # O vocabulário é o mesmo do `OutageEvent.Scope` (CTO/PON/OLT/POP), porque é
+    # contra ele que a comparação é feita. Escopo vazio = toda a rede.
+    scope = models.CharField(
+        max_length=8,
+        blank=True,
+        default="",
+        help_text=_("CTO, PON, OLT ou POP. Vazio = toda a rede."),
+    )
+    element_external_id = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text=_("Id do elemento no IXC. Vazio = todo o escopo."),
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

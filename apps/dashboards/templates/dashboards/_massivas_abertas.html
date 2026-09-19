@@ -87,6 +87,18 @@ debaixo do dedo de quem está lendo durante o reparo.
         {% if l.referencia %}<p class="text-sm text-gray-500 mt-1">{{ l.referencia }}</p>{% endif %}
         {% endif %}
 
+        {% comment %}
+        Manutenção programada (R10): a massiva esperada sai do alarme, não da
+        tela. Ela continua sendo registro do que aconteceu com os clientes —
+        escondê-la faria a estatística de disponibilidade mentir para melhor.
+        {% endcomment %}
+        {% if l.is_expected %}
+        <p class="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded px-2 py-1 mt-2 leading-relaxed">
+          Esperada: dentro de manutenção programada{% if l.maintenance_label %} — {{ l.maintenance_label }}{% endif %}.
+          Os clientes estão fora de verdade; o alarme é que não é novidade.
+        </p>
+        {% endif %}
+
         {% if l.ressalva_escopo %}
         <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2 leading-relaxed">
           {{ l.ressalva_escopo }}

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
@@ -224,3 +225,65 @@ def test_leitura_falha_nao_cria_massiva(rede: Organization) -> None:
     assert resultado.failed is True
     assert OutageEvent.objects.count() == 0
     assert ConnectionDropEvent.objects.count() == 0
+
+
+@pytest.mark.django_db
+class TestManutencaoProgramada:
+    """A massiva que nasce dentro de uma janela avisada (R10).
+
+    Sem isto, toda janela programada vira "massiva": envenena a estatística de
+    disponibilidade e treina a equipe a ignorar alarme. A janela é o evento de
+    rede que a equipe já cadastra na aba de Tendências — um cadastro só, porque
+    dois garantiriam o dia em que alguém avisa num lugar e a massiva alarma do
+    outro.
+    """
+
+    def _janela(
+        self, org: Organization, *, scope: str = "", element_id: str = ""
+    ) -> Any:
+        from apps.atendimento.infrastructure.models import EventoRede
+
+        set_current_organization(org)
+        return EventoRede.objects.create(
+            organization=org,
+            tipo=EventoRede.Tipo.MANUTENCAO,
+            titulo="Troca de cordoalha na CX 1606",
+            started_at=AGORA - timedelta(hours=1),
+            ended_at=AGORA + timedelta(hours=3),
+            scope=scope,
+            element_external_id=element_id,
+        )
+
+    def test_massiva_dentro_da_janela_nasce_marcada(self, rede: Organization) -> None:
+        janela = self._janela(rede, scope=OutageEvent.Scope.CTO, element_id=CTO)
+        poll(rede, caidos(LOGINS[:5], dropped_at=AGORA), now=AGORA)
+
+        massiva = OutageEvent.objects.get()
+        assert massiva.maintenance_event_id == janela.pk
+        assert massiva.is_expected is True
+        assert massiva.maintenance_label == "Troca de cordoalha na CX 1606"
+
+    def test_janela_de_outro_elemento_nao_marca(self, rede: Organization) -> None:
+        self._janela(rede, scope=OutageEvent.Scope.CTO, element_id="outra-caixa")
+        poll(rede, caidos(LOGINS[:5], dropped_at=AGORA), now=AGORA)
+
+        massiva = OutageEvent.objects.get()
+        assert massiva.is_expected is False
+
+    def test_janela_cadastrada_depois_nao_marca_retroativamente(
+        self, rede: Organization
+    ) -> None:
+        """O registro guarda o que se sabia quando a massiva apareceu.
+
+        Reescrever isso apagaria a diferença entre "avisamos antes" e
+        "explicamos depois" — que é justamente o que a janela existe para medir.
+        """
+        poll(rede, caidos(LOGINS[:5], dropped_at=AGORA), now=AGORA)
+        self._janela(rede, scope=OutageEvent.Scope.CTO, element_id=CTO)
+
+        # Segundo poll, com a massiva já aberta: continua não marcada.
+        depois = AGORA + timedelta(minutes=3)
+        poll(rede, caidos(LOGINS[:5], dropped_at=AGORA), now=depois)
+
+        massiva = OutageEvent.objects.get()
+        assert massiva.is_expected is False

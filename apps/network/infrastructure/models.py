@@ -574,6 +574,61 @@ class OutageEvent(TenantModel):
 
     confidence = models.CharField(max_length=8, choices=Confidence.choices)
 
+    # -- Causa confirmada (R9) ------------------------------------------------
+    # A primeira entrada de dados desta ferramenta. O veredito automático (R7)
+    # adivinha energia ou fibra e nunca fica sabendo se acertou; é este campo,
+    # preenchido por gente, que fecha o ciclo — e que vira rótulo de modelo
+    # quando houver passado suficiente.
+    #
+    # Fica no próprio evento, e não em tabela à parte, porque é 1:1 com ele e
+    # porque a pergunta "quais massivas ainda não têm causa" precisa ser um
+    # filtro, não um join.
+    class Cause(models.TextChoices):
+        ROMPIMENTO = "ROMPIMENTO", _("Rompimento de fibra")
+        ENERGIA = "ENERGIA", _("Falta de energia")
+        EQUIPAMENTO = "EQUIPAMENTO", _("Equipamento (OLT)")
+        MANUTENCAO = "MANUTENCAO", _("Manutenção programada")
+        FALSO_POSITIVO = "FALSO_POSITIVO", _("Falso positivo")
+
+    confirmed_cause = models.CharField(
+        max_length=20,
+        choices=Cause.choices,
+        blank=True,
+        default="",
+        help_text=_("O que a massiva era de verdade — preenchido por pessoa, nunca pelo sistema."),
+    )
+    # Tags são o contexto que a causa exclusiva não carrega ("rompimento" +
+    # "vandalismo" + "troca de poste"). Ficam fora da causa de propósito: se
+    # tudo fosse tag, nada seria a resposta e o modelo não teria o que prever.
+    cause_tags = models.JSONField(default=list, blank=True)
+    cause_note = models.TextField(blank=True, default="")
+    cause_confirmed_by = models.ForeignKey(
+        "tenancy.User",
+        on_delete=models.SET_NULL,
+        related_name="outage_causes_confirmed",
+        null=True,
+        blank=True,
+        help_text=_("Quem preencheu. Rótulo sem autor não se audita."),
+    )
+    cause_confirmed_at = models.DateTimeField(null=True, blank=True)
+
+    # -- Manutenção programada (R10) ------------------------------------------
+    # A janela de manutenção é o **evento de rede** que a equipe já cadastra na
+    # aba de Tendências (`atendimento.EventoRede` com tipo MANUTENCAO). Um
+    # cadastro só: dois cadastros paralelos garantiriam o dia em que alguém
+    # avisa num lugar e a massiva alarma do outro.
+    #
+    # Guardado como id solto, e não como FK: o vínculo atravessa bounded
+    # contexts, e o network não importa models do atendimento (AGENT.md §1.1) —
+    # ele pergunta por um serviço de aplicação. O rótulo vem junto para a tela
+    # não depender da outra base para dizer qual manutenção era.
+    maintenance_event_id = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text=_("EventoRede que explica esta massiva — gravado no nascimento dela."),
+    )
+    maintenance_label = models.CharField(max_length=255, blank=True, default="")
+
     affected_count = models.PositiveIntegerField(default=0)
     restored_count = models.PositiveIntegerField(default=0)
     affected_fraction = models.FloatField(
@@ -603,6 +658,20 @@ class OutageEvent(TenantModel):
     @property
     def restored_fraction(self) -> float:
         return (self.restored_count / self.affected_count) if self.affected_count else 0.0
+
+    @property
+    def has_confirmed_cause(self) -> bool:
+        return bool(self.confirmed_cause)
+
+    @property
+    def is_expected(self) -> bool:
+        """Nasceu dentro de uma janela de manutenção programada.
+
+        Esperada sai do alarme, não da tela: continua sendo registro do que
+        aconteceu com os clientes, e escondê-la faria a estatística de
+        disponibilidade mentir para melhor.
+        """
+        return self.maintenance_event_id is not None
 
 
 class OutageAffectedLogin(TenantModel):

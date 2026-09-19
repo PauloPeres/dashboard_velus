@@ -156,6 +156,18 @@
               <input type="datetime-local" name="ended_at" value="{{ e.ended_at_input }}"
                      class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
             </label>
+            <label class="text-xs text-gray-500">Escopo (manutenção)
+              <select name="scope" class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+                <option value="">— toda a rede —</option>
+                {% for value, label in evento_escopos %}
+                <option value="{{ value }}" {% if value == e.scope %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="text-xs text-gray-500">Elemento (id no IXC)
+              <input type="text" name="element_external_id" value="{{ e.element_external_id }}" maxlength="128"
+                     class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+            </label>
             <label class="text-xs text-gray-500 sm:col-span-4">Descrição
               <input type="text" name="descricao" value="{{ e.descricao }}"
                      class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
@@ -194,6 +206,24 @@
         </label>
         <label class="text-xs text-gray-500">Fim (opcional)
           <input type="datetime-local" name="ended_at"
+                 class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+        </label>
+        {% comment %}
+        Escopo e elemento (R10). Só a manutenção programada os usa: é o que
+        permite à aba de Massivas saber QUAL massiva esta janela explica. Deixar
+        em branco continua valendo — o evento segue sendo anotação de gráfico,
+        que é o que todos os anteriores a 19/09/2026 são.
+        {% endcomment %}
+        <label class="text-xs text-gray-500">Escopo (manutenção)
+          <select name="scope" class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
+            <option value="">— toda a rede —</option>
+            {% for value, label in evento_escopos %}
+            <option value="{{ value }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="text-xs text-gray-500">Elemento (id no IXC)
+          <input type="text" name="element_external_id" maxlength="128" placeholder="ex.: 364"
                  class="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2 py-1">
         </label>
         <label class="text-xs text-gray-500 sm:col-span-4">Descrição
