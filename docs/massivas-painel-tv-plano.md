@@ -291,10 +291,33 @@ não há evento — via `only_when` do `SlideSpec`, que é da casca e serve a qu
 painel.
 **Depende de:** P3.
 
-### P6 — Alertas: níveis, supressão, dedup, takeover
+### P6 — Alertas: níveis, supressão, dedup, takeover — FEITA (19/09/2026)
 Sem som ainda — só visual, para medir se o critério de severidade está calibrado
 antes de fazer barulho na sala.
 **Depende de:** P3.
+
+**Como ficou.** Os três níveis saem de `panels/alerts.py`, com todos os limiares
+em constantes nomeadas num lugar só — eles vieram da consultoria e são **ponto
+de partida a calibrar na sala**, não medida.
+
+As quatro recusas, que importam mais que os limiares:
+
+- **só CRÍTICO toma a tela.** É o que separa "largue o que está fazendo" de
+  "está na lista";
+- **evento com menos de 5 min não interrompe** (supressão por persistência:
+  mata flap e reboot de OLT) — mas aparece na lista desde o primeiro segundo.
+  Suprimir o alarme não é esconder o evento;
+- **um evento, um alerta.** A TV guarda o que já anunciou em `localStorage`, e
+  por isso a massiva não volta a tomar a tela nem depois da recarga de 15 min. O
+  registro é por **tela**, não por servidor: duas TVs na sala devem anunciar
+  cada uma a sua vez;
+- **manutenção programada nunca passa de INFO** e **reconhecida para de
+  gritar** — as duas pelo mesmo motivo: alarmar o que já foi avisado ou já tem
+  dono é o caminho mais curto para a equipe ignorar a tela.
+
+O piscar dura 10 s e fica sólido, a ~1 Hz — nunca acima de 3 Hz, por fadiga e
+fotossensibilidade. O takeover devolve a tela em 45 s: takeover permanente mata
+o painel, porque a sala para de ver o resto.
 
 ### P7 — Som e escalonamento para Telegram
 Só depois de P6 rodar algumas semanas e os limiares estarem ajustados. Com
@@ -302,10 +325,25 @@ plantão 24/7, o Telegram é **escalonamento**, não canal principal: severidade
 crítica ou evento sem reconhecimento há N minutos.
 **Depende de:** P6.
 
-### P8 — Reconhecimento ("ciente, Fulano está tratando")
+### P8 — Reconhecimento ("ciente, Fulano está tratando") — FEITA (19/09/2026)
 Primeiro ponto de entrada de dados do painel. Cruza com R9 da frente de rota
 (causa confirmada) — mesmo modelo, decidir junto.
 **Depende de:** P6, R9.
+
+**Como ficou.** Campo próprio (`acknowledged_by`/`acknowledged_at`), e **não**
+junto da causa confirmada, apesar de terem chegado no mesmo dia: reconhecimento
+é afirmação sobre **agora** ("estou tratando") e causa é sobre o **passado**
+("era rompimento"). Guardar as duas no mesmo lugar perderia a única coisa que o
+reconhecimento mede — o tempo entre o evento aparecer e alguém assumir.
+
+O **primeiro a assumir é quem fica**: sobrescrever apagaria quem realmente pegou
+o evento. E o `next` do formulário só aceita caminho interno, porque o link chega
+do celular de quem está na rua e URL absoluta ali viraria redirect aberto.
+
+No painel, o evento reconhecido troca a borda para índigo e mostra "em
+tratamento com Fulano" — continua na lista, para de interromper. Segundo o
+especialista, é o que mais aumenta o uso real do painel: evita a terceira ligação
+para o mesmo técnico.
 
 ### P9 — Operação da TV — PARCIAL (19/09/2026)
 Kiosk mode, autostart, watchdog que recarrega se o JS congelar, reload de

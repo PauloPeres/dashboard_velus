@@ -88,6 +88,13 @@ urlpatterns = [
         views.massiva_causa,
         name="massiva_causa",
     ),
+    # "Ciente, estou tratando" (P8 do painel de TV) — chega do celular de quem
+    # está na rua tanto quanto da aba.
+    path(
+        "operations/massivas/<int:outage_id>/ciente/",
+        views.massiva_ciente,
+        name="massiva_ciente",
+    ),
     path("network/", views.network, name="network"),
     path("sales/", views.sales, name="sales"),
     path("customers/", views.customers, name="customers"),

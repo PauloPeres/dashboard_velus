@@ -74,6 +74,32 @@ Três decisões de tela (§2, §3 e §5 do docs/massivas-painel-tv-plano.md):
     <span id="faixa-velha-detalhe" class="font-normal"></span>
   </div>
 
+  {% comment %}
+  Takeover (P6): o evento crítico toma a tela por alguns segundos e devolve.
+  Takeover permanente mata o painel — a sala para de ver o resto —, e por isso o
+  tempo é curto e a volta é automática.
+
+  Ele NÃO aparece quando a massiva já foi reconhecida: alguém assumiu, e
+  insistir transforma o painel em barulho.
+  {% endcomment %}
+  {% if snapshot.alerta.takeover %}
+  <div id="takeover"
+       class="hidden absolute inset-0 z-50 bg-red-950/95 flex-col items-center justify-center text-center px-16"
+       data-outage="{{ snapshot.alerta.takeover.id }}"
+       data-seconds="{{ snapshot.alerta.takeover_segundos }}">
+    <p id="takeover-piscante" class="text-[11px] uppercase tracking-[0.4em] text-red-300">Crítico</p>
+    <p class="text-8xl font-black text-red-100 mt-4 tabular-nums">
+      {{ snapshot.alerta.takeover.ainda_fora|intcomma }}
+    </p>
+    <p class="text-3xl text-red-200 mt-2">clientes fora</p>
+    <p class="text-2xl text-red-100 mt-8 max-w-5xl">{{ snapshot.alerta.takeover.destaque }}</p>
+    <p class="text-xl text-red-300 mt-3">
+      desde {{ snapshot.alerta.takeover.started_at|date:"H:i" }}
+      {% if snapshot.alerta.takeover.veredito.rotulo %} · {{ snapshot.alerta.takeover.veredito.rotulo }}{% endif %}
+    </p>
+  </div>
+  {% endif %}
+
   <main class="flex-1 relative">
     {% for slide in slides %}
     <section class="slide absolute inset-0 flex-col px-10 py-8 {% if forloop.first %}ativo{% endif %}"
@@ -139,6 +165,51 @@ Três decisões de tela (§2, §3 e §5 do docs/massivas-painel-tv-plano.md):
   }
 
   if (slides.length) { mostrar(0); agendar(); }
+
+  // --- takeover ------------------------------------------------------------
+  // Um evento, um alerta: a massiva que já tomou a tela não toma de novo, nem
+  // depois da recarga de 15 min. O registro é local (localStorage) porque é
+  // por TELA — duas TVs na mesma sala devem anunciar cada uma a sua vez.
+  var takeover = document.getElementById("takeover");
+  if (takeover) {
+    var chave = "painel_alertado_" + takeover.dataset.outage;
+    var jaAnunciado = false;
+    try { jaAnunciado = !!localStorage.getItem(chave); } catch (e) { jaAnunciado = false; }
+
+    if (!jaAnunciado) {
+      try { localStorage.setItem(chave, String(Date.now())); } catch (e) { /* TV sem storage ainda alerta */ }
+      if (timer) { clearTimeout(timer); }
+      takeover.classList.remove("hidden");
+      takeover.classList.add("flex");
+
+      // Piscar por 10 s e ficar sólido: piscar sem fim é fadiga, e acima de
+      // 3 Hz há risco de fotossensibilidade. Aqui é ~1 Hz.
+      var piscante = document.getElementById("takeover-piscante");
+      var pisca = setInterval(function () {
+        piscante.style.visibility = piscante.style.visibility === "hidden" ? "visible" : "hidden";
+      }, 500);
+      setTimeout(function () {
+        clearInterval(pisca);
+        piscante.style.visibility = "visible";
+      }, 10000);
+
+      var segundos = parseInt(takeover.dataset.seconds, 10) || 45;
+      setTimeout(function () {
+        takeover.classList.add("hidden");
+        takeover.classList.remove("flex");
+        agendar();
+      }, segundos * 1000);
+    }
+
+    // Limpeza: chaves de massivas que já não existem não podem se acumular no
+    // navegador de uma TV ligada meses.
+    try {
+      var viva = "painel_alertado_" + takeover.dataset.outage;
+      Object.keys(localStorage).forEach(function (k) {
+        if (k.indexOf("painel_alertado_") === 0 && k !== viva) { localStorage.removeItem(k); }
+      });
+    } catch (e) { /* sem storage, nada a limpar */ }
+  }
 
   // --- frescor -------------------------------------------------------------
   // `geradoEm` é o instante em que o SERVIDOR montou o snapshot. O contador

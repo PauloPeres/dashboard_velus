@@ -617,6 +617,24 @@ class OutageEvent(TenantModel):
     )
     cause_confirmed_at = models.DateTimeField(null=True, blank=True)
 
+    # -- Reconhecimento (P8 do painel de TV) ----------------------------------
+    # "Ciente, o Fulano está tratando". Converte o painel de gritador em
+    # coordenador: quem chega na sala vê que alguém já pegou o evento, em vez de
+    # ligar para o mesmo técnico pela terceira vez.
+    #
+    # É diferente da causa confirmada (R9): esta é uma afirmação sobre AGORA
+    # ("estou tratando"), aquela é sobre o passado ("era rompimento"). Guardar as
+    # duas no mesmo campo perderia a única coisa que o reconhecimento mede — o
+    # tempo entre o evento aparecer e alguém assumir.
+    acknowledged_by = models.ForeignKey(
+        "tenancy.User",
+        on_delete=models.SET_NULL,
+        related_name="outages_acknowledged",
+        null=True,
+        blank=True,
+    )
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+
     # -- Manutenção programada (R10) ------------------------------------------
     # A janela de manutenção é o **evento de rede** que a equipe já cadastra na
     # aba de Tendências (`atendimento.EventoRede` com tipo MANUTENCAO). Um
@@ -667,6 +685,10 @@ class OutageEvent(TenantModel):
     @property
     def has_confirmed_cause(self) -> bool:
         return bool(self.confirmed_cause)
+
+    @property
+    def is_acknowledged(self) -> bool:
+        return self.acknowledged_at is not None
 
     @property
     def is_expected(self) -> bool:

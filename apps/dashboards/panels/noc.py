@@ -14,9 +14,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from apps.dashboards.massivas import compute_massivas_agora, poll_snapshot
+from apps.dashboards.massivas import (
+    base_de_clientes,
+    compute_massivas_agora,
+    poll_snapshot,
+)
 
 from . import PanelSpec, SlideSpec, register
+from .alerts import classificar
 
 # Acima disto o dado é velho o bastante para a tela avisar em vez de deixar a
 # sala supor que está tudo calmo. É o mesmo limite do poll (§7 do plano de
@@ -41,6 +46,10 @@ def _snapshot(org: Any, now: datetime) -> dict[str, Any]:
 
     abertas = dados["linhas"]
     maior = dados.get("maior_massiva")
+    # Severidade e takeover (P6). A classificação anota o nível em cada linha,
+    # então tem que rodar antes de a tela desenhar a lista.
+    base = base_de_clientes(org)
+    alerta = classificar(abertas, base_de_clientes=base, agora=now)
     return {
         "gerado_em": now,
         # A barra fixa, visível em todos os slides.
@@ -64,6 +73,8 @@ def _snapshot(org: Any, now: datetime) -> dict[str, Any]:
         # Ordenadas por impacto: quem tem mais gente fora primeiro. É a ordem em
         # que a sala deve agir.
         "massivas": sorted(abertas, key=lambda linha: -linha["ainda_fora"]),
+        "alerta": alerta,
+        "base_de_clientes": base,
         "timeline": dados["timeline"],
         "mapa": dados["mapa"],
         "mapa_quedas_avulsas": dados["mapa_quedas_avulsas"],

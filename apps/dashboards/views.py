@@ -3212,6 +3212,47 @@ def massivas(request: HttpRequest) -> HttpResponse:
 @login_required
 @never_cache
 @require_POST
+def massiva_ciente(request: HttpRequest, outage_id: int) -> HttpResponse:
+    """"Ciente — estou tratando" (P8 do painel de TV).
+
+    Converte o painel de gritador em coordenador: quem chega na sala vê que
+    alguém já pegou o evento, em vez de ligar para o mesmo técnico pela terceira
+    vez. No painel, o evento reconhecido **para de interromper** — continua
+    visível, deixa de tomar a tela.
+
+    É afirmação sobre AGORA ("estou tratando"), diferente da causa confirmada,
+    que é sobre o passado ("era rompimento"). Por isso campo próprio: juntar as
+    duas perderia o tempo entre o evento aparecer e alguém assumir, que é a
+    única coisa que o reconhecimento mede.
+    """
+    from apps.network.infrastructure.models import OutageEvent
+
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    outage = get_object_or_404(
+        OutageEvent.objects.filter(organization=org), pk=outage_id
+    )
+    # Primeiro a assumir fica registrado. Sobrescrever faria o segundo a clicar
+    # apagar quem realmente pegou o evento.
+    if outage.acknowledged_at is None:
+        outage.acknowledged_by = request.user
+        outage.acknowledged_at = timezone.now()
+        outage.save(update_fields=["acknowledged_by", "acknowledged_at", "updated_at"])
+
+    destino = request.POST.get("next") or reverse("dashboards:massivas")
+    if not destino.startswith("/"):
+        # `next` só aceita caminho interno: URL absoluta aqui viraria redirect
+        # aberto, e o link chega de um celular na rua.
+        destino = reverse("dashboards:massivas")
+    return HttpResponseRedirect(destino)
+
+
+@login_required
+@never_cache
+@require_POST
 def massiva_causa(request: HttpRequest, outage_id: int) -> HttpResponse:
     """Grava a causa confirmada de uma massiva encerrada (R9).
 

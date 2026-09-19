@@ -283,6 +283,13 @@ def outage_row(
         ),
         "is_expected": outage.is_expected,
         "maintenance_label": outage.maintenance_label,
+        # Reconhecimento (P8): "alguém já assumiu". Vale para a tela e para o
+        # painel, que para de interromper quando isto existe.
+        "acknowledged_at": outage.acknowledged_at,
+        "acknowledged_by": (
+            outage.acknowledged_by.email if outage.acknowledged_by_id else ""
+        ),
+        "is_acknowledged": outage.is_acknowledged,
     }
 
 
@@ -1686,6 +1693,29 @@ def normalize_tags(valores: list[str]) -> list[str]:
     "vandalizado", "roubo de cabo") que nenhum modelo consegue juntar depois.
     """
     return [chave for chave, _ in CAUSE_TAGS if chave in set(valores)]
+
+
+def base_de_clientes(org: Any) -> int:
+    """Quantos logins ativos a operação tem — o denominador do "% da base".
+
+    Mesma regra do denominador do detector: contrato cancelado deixa login para
+    trás no ERP e inflaria a base, fazendo toda massiva parecer pequena.
+    """
+    from apps.customers.infrastructure.models import Contract
+
+    inativos = set(
+        Contract.objects.filter(organization=org)
+        .exclude(status=Contract.Status.ACTIVE)
+        .values_list("external_id", flat=True)
+    )
+    total = 0
+    for contrato_id in Connection.objects.filter(organization=org).values_list(
+        "contract_external_id", flat=True
+    ):
+        if contrato_id and contrato_id in inativos:
+            continue
+        total += 1
+    return total
 
 
 def compute_sem_causa(org: Any, *, limit: int = _MAX_NA_FILA) -> dict[str, Any]:

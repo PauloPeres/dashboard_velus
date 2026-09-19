@@ -118,6 +118,27 @@ debaixo do dedo de quem está lendo durante o reparo.
           confiança <span class="font-medium text-gray-600">{{ l.confidence_label }}</span> ·
           mensalidade dos afetados R$ {{ l.mrr_at_risk|floatformat:2|intcomma }}
         </p>
+
+        {% comment %}
+        Reconhecimento (P8 do painel de TV). Aqui ele é uma linha; na TV, é o que
+        faz o evento parar de tomar a tela. Quem assume fica registrado — e o
+        primeiro a clicar é quem fica, porque sobrescrever apagaria quem
+        realmente pegou o evento.
+        {% endcomment %}
+        {% if l.is_acknowledged %}
+        <p class="text-xs text-indigo-700 mt-2">
+          Em tratamento com <strong>{{ l.acknowledged_by }}</strong> desde
+          {{ l.acknowledged_at|date:"H:i" }}.
+        </p>
+        {% else %}
+        <form method="post" action="{% url 'dashboards:massiva_ciente' l.id %}" class="mt-2">
+          {% csrf_token %}
+          <button type="submit"
+                  class="text-xs px-3 py-1 rounded-lg border border-indigo-300 text-indigo-700 hover:bg-indigo-50">
+            Ciente — estou tratando
+          </button>
+        </form>
+        {% endif %}
       </div>
 
       <div class="shrink-0 lg:text-right">

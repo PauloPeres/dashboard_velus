@@ -25,7 +25,17 @@ from django.test import Client
 from django.utils import timezone
 
 from apps.dashboards.panels import get_panel
+from apps.dashboards.panels.alerts import (
+    NIVEL_ATENCAO,
+    NIVEL_CRITICO,
+    NIVEL_INFO,
+    classificar,
+    deve_interromper,
+    nivel_da_massiva,
+)
 from apps.dashboards.panels.pairing import COOKIE_NOME, hash_segredo, novo_segredo
+from apps.network.infrastructure.models import OutageEvent
+from apps.shared.context import set_current_organization
 from apps.tenancy.models import (
     AccessGroup,
     DisplayDevice,
@@ -280,3 +290,169 @@ class TestFrescorEConteudo:
         assert "Idade do dado" in html
         assert "Coleta" in html
         assert "Dado velho" in html
+
+
+# =============================================================================
+# P6 — alertas sem fadiga
+# =============================================================================
+def _linha(**kwargs: Any) -> dict[str, Any]:
+    base = {
+        "id": 1,
+        "scope": "CTO",
+        "affected_count": 5,
+        "ainda_fora": 5,
+        "started_at": timezone.now() - timedelta(minutes=30),
+        "is_expected": False,
+        "acknowledged_at": None,
+    }
+    base.update(kwargs)
+    return base
+
+
+class TestSeveridade:
+    def test_olt_e_pop_sao_criticos_por_escopo(self) -> None:
+        """Uma OLT fora é evento de infraestrutura, independentemente de quantos
+        clientes o detector já viu."""
+        assert nivel_da_massiva(_linha(scope="OLT"), base_de_clientes=8000) == NIVEL_CRITICO
+        assert nivel_da_massiva(_linha(scope="POP"), base_de_clientes=8000) == NIVEL_CRITICO
+
+    def test_fracao_da_base_sobe_o_nivel(self) -> None:
+        assert nivel_da_massiva(
+            _linha(affected_count=400), base_de_clientes=8000
+        ) == NIVEL_CRITICO  # 5%
+        assert nivel_da_massiva(
+            _linha(affected_count=80), base_de_clientes=8000
+        ) == NIVEL_ATENCAO  # 1%
+        assert nivel_da_massiva(
+            _linha(affected_count=5), base_de_clientes=8000
+        ) == NIVEL_INFO
+
+    def test_manutencao_programada_nunca_passa_de_info(self) -> None:
+        """Alarmar o que foi avisado é o caminho mais curto para a equipe parar
+        de olhar a tela."""
+        linha = _linha(scope="OLT", affected_count=500, is_expected=True)
+        assert nivel_da_massiva(linha, base_de_clientes=8000) == NIVEL_INFO
+
+    def test_sem_base_conhecida_nao_inventa_fracao(self) -> None:
+        assert nivel_da_massiva(_linha(affected_count=500), base_de_clientes=0) == NIVEL_INFO
+
+
+class TestInterrupcao:
+    def test_so_critico_toma_a_tela(self) -> None:
+        linha = _linha(nivel=NIVEL_ATENCAO)
+        assert deve_interromper(linha, agora=timezone.now()) is False
+
+    def test_evento_jovem_nao_interrompe(self) -> None:
+        """Supressão por persistência: mata flap e reboot de OLT, que se
+        resolvem sozinhos antes disso."""
+        linha = _linha(nivel=NIVEL_CRITICO, started_at=timezone.now() - timedelta(minutes=2))
+        assert deve_interromper(linha, agora=timezone.now()) is False
+
+    def test_evento_persistente_interrompe(self) -> None:
+        linha = _linha(nivel=NIVEL_CRITICO, started_at=timezone.now() - timedelta(minutes=8))
+        assert deve_interromper(linha, agora=timezone.now()) is True
+
+    def test_reconhecida_para_de_interromper(self) -> None:
+        """Alguém assumiu; insistir transforma o painel em barulho."""
+        linha = _linha(
+            nivel=NIVEL_CRITICO,
+            started_at=timezone.now() - timedelta(minutes=30),
+            acknowledged_at=timezone.now(),
+        )
+        assert deve_interromper(linha, agora=timezone.now()) is False
+
+    def test_classificar_escolhe_a_mais_grave_e_maior(self) -> None:
+        agora = timezone.now()
+        antiga = timezone.now() - timedelta(minutes=30)
+        linhas = [
+            _linha(id=1, scope="OLT", ainda_fora=10, started_at=antiga),
+            _linha(id=2, scope="POP", ainda_fora=80, started_at=antiga),
+            _linha(id=3, scope="CTO", ainda_fora=200, started_at=antiga),
+        ]
+        alerta = classificar(linhas, base_de_clientes=8000, agora=agora)
+        assert alerta["takeover"]["id"] == 2
+        assert alerta["por_nivel"][NIVEL_CRITICO] == 2
+
+    def test_sem_evento_critico_nao_ha_takeover(self) -> None:
+        linhas = [_linha(scope="CTO", affected_count=5)]
+        alerta = classificar(linhas, base_de_clientes=8000, agora=timezone.now())
+        assert alerta["takeover"] is None
+
+
+# =============================================================================
+# P8 — reconhecimento
+# =============================================================================
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestReconhecimento:
+    def _massiva_aberta(self, org: Organization) -> Any:
+        set_current_organization(org)
+        return OutageEvent.objects.create(
+            organization=org,
+            started_at=timezone.now() - timedelta(minutes=20),
+            last_detected_at=timezone.now(),
+            scope=OutageEvent.Scope.OLT,
+            element_external_id="1",
+            element_label="OLT 1",
+            confidence=OutageEvent.Confidence.HIGH,
+            affected_count=40,
+        )
+
+    def test_ciente_grava_quem_assumiu(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        outage = self._massiva_aberta(organization_a)
+        client.force_login(user_a)
+        resp = client.post(f"/operations/massivas/{outage.pk}/ciente/")
+        assert resp.status_code == 302
+        outage.refresh_from_db()
+        assert outage.acknowledged_by_id == user_a.pk
+        assert outage.is_acknowledged is True
+
+    def test_primeiro_a_assumir_e_quem_fica(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        """Sobrescrever apagaria quem realmente pegou o evento."""
+        outage = self._massiva_aberta(organization_a)
+        client.force_login(user_a)
+        client.post(f"/operations/massivas/{outage.pk}/ciente/")
+        outage.refresh_from_db()
+        primeiro = outage.acknowledged_at
+
+        segundo = User.objects.create_user(email="segundo@acme.com")
+        OrganizationMembership.objects.create(
+            user=segundo, organization=organization_a,
+            role=OrganizationMembership.Role.MEMBER, is_active=True,
+        )
+        outro = Client()
+        outro.force_login(segundo)
+        outro.post(f"/operations/massivas/{outage.pk}/ciente/")
+
+        outage.refresh_from_db()
+        assert outage.acknowledged_by_id == user_a.pk
+        assert outage.acknowledged_at == primeiro
+
+    def test_next_externo_e_ignorado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        """O link chega de um celular na rua: `next` absoluto viraria redirect
+        aberto."""
+        outage = self._massiva_aberta(organization_a)
+        client.force_login(user_a)
+        resp = client.post(
+            f"/operations/massivas/{outage.pk}/ciente/",
+            {"next": "https://exemplo-malicioso.com/"},
+        )
+        assert resp["Location"] == "/operations/massivas/"
+
+    def test_massiva_de_outra_org_responde_404(
+        self, client: Any, user_a: User, organization_a: Organization,
+        organization_b: Organization,
+    ) -> None:
+        alheia = self._massiva_aberta(organization_b)
+        set_current_organization(organization_a)
+        client.force_login(user_a)
+        resp = client.post(f"/operations/massivas/{alheia.pk}/ciente/")
+        assert resp.status_code == 404
+        alheia.refresh_from_db()
+        assert alheia.acknowledged_at is None
