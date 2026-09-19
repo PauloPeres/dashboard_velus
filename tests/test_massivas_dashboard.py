@@ -1681,3 +1681,19 @@ class TestCabosCandidatos:
         )
         quedas = [_drop(organization_a, login="a1", cto="CTO-1", lat=-23.5, lon=-47.4)]
         assert compute_mapa(organization_a, quedas)["cabos"] == []
+
+    def test_cabo_sem_classe_no_nome_e_declarado(
+        self, organization_a: Organization
+    ) -> None:
+        """53% dos cabos de produção não dizem a classe no nome ("01FO", "rede
+        neutra"). Sem isso escrito, a ausência do selo pareceria afirmação de
+        que o cabo não é tronco."""
+        self._cto(organization_a, external_id="CTO-1", lat=-23.5, lon=-47.4)
+        self._cabo(
+            organization_a, external_id="C1", nome="01FO",
+            pontos=[[-23.5001, -47.4], [-23.4999, -47.4]],
+        )
+        quedas = [_drop(organization_a, login="a1", cto="CTO-1")]
+        c = compute_cabos_candidatos(organization_a, quedas)
+        assert c["cabos"][0]["classe"] == ""
+        assert c["sem_classe"] == 1

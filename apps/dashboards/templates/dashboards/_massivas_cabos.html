@@ -63,6 +63,15 @@ Espera a variável `c` (dict de compute_cabos_candidatos).
     {% endif %}
   </ul>
 
+  {% if c.sem_classe %}
+  <p class="text-[11px] text-gray-500 mt-2 leading-relaxed">
+    {{ c.sem_classe }} do{{ c.sem_classe|pluralize:"s" }} cabo{{ c.sem_classe|pluralize }} acima
+    não diz{{ c.sem_classe|pluralize:"em" }} a classe no nome — a classe é lida da
+    descrição do cadastro, e 53% dos cabos não a declaram ("01FO", "rede neutra").
+    Sem o selo não quer dizer que não seja tronco; quer dizer que o cadastro não conta.
+  </p>
+  {% endif %}
+
   {% if c.ctos_sem_cabo %}
   <p class="text-[11px] text-gray-500 mt-2 leading-relaxed">
     {{ c.ctos_sem_cabo }} das {{ c.ctos_com_coordenada }} caixas desta massiva não

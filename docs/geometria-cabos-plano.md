@@ -126,3 +126,32 @@ rodar o sync em produção e conferir a tela de uma massiva real.
   coordenada quebrada e `(0, 0)`;
 - `tests/test_massivas_dashboard.py` — os três estados do card, o traçado no
   mapa e a ausência da palavra "rompido" na tela.
+
+**Verificação em produção (2026-09-19).** O sync trouxe **1.191 traçados**,
+1.189 com 2 ou mais vértices, mediana de 5 e máximo de 121 — exatamente o que o
+spike tinha previsto. A tela geral monta em 1,4 s com duas massivas abertas; o
+detalhe, em 0,6 s.
+
+As duas massivas abertas no momento da verificação:
+
+| Massiva | Caixas | Candidatos | Caixas sem cabo a 30 m | Melhor candidato |
+|---|---|---|---|---|
+| PON 364 | 8 | 5 | 1 | "12fo", 5 caixas, 0,0 m |
+| OLT 1 | 15 | 24 | 0 | atendimento, 2 caixas, 0,0 m |
+
+A distância 0,0 m em praticamente todos confirma o que o spike mediu: o InMap usa
+o mesmo ponto da caixa. E o caso da PON 364 é o que a feature existe para
+produzir — **um cabo que costura 5 das 8 caixas fora**, enquanto os outros
+encostam em uma só.
+
+**O que a verificação derrubou:** a premissa §1a de que "o nome do cabo carrega a
+classe". Ela vale para **47%** do cadastro: 431 ATENDIMENTO, 60 BACKBONE, 67
+DROP — e **633 sem classe nenhuma** ("01FO", "rede neutra", "FIBRA AS80 24FO 3",
+"link transporte interligação com Sorocaba"). O filtro de drop continua valendo
+para quem se declara drop, e o card passou a dizer quantos dos cabos listados não
+declaram classe: sem essa linha, a ausência do selo pareceria afirmação de que o
+cabo não é tronco.
+
+Um caso que fica em aberto: "01FO" é quase certamente um drop de cliente (um
+único filamento), mas o nome não diz. Excluir por capacidade seria inferir onde o
+cadastro cala — e a escolha aqui foi declarar, não adivinhar.

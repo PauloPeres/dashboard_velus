@@ -953,7 +953,8 @@ def compute_reincidencia(
 # caixa, ou que ele rompeu. Candidato é candidato.
 
 # Quantos cabos cabem no card antes de virar lista. Acima disto a informação
-# vira ruído — e uma massiva grande toca muitos cabos de atendimento.
+# vira ruído — e uma massiva grande toca muitos cabos de atendimento: em
+# produção, uma massiva de escopo OLT com 15 caixas tocou 24 cabos.
 _MAX_CABOS_NO_CARD = 6
 
 
@@ -1054,6 +1055,12 @@ def compute_cabos_candidatos(
         "total": len(candidatos),
         "alem_do_card": max(len(candidatos) - _MAX_CABOS_NO_CARD, 0),
         "raio_m": int(RAIO_CANDIDATO_METROS),
+        # Quantos dos cabos listados não declaram classe no nome. *Medido em
+        # produção (2026-09-19):* 633 dos 1.191 cabos — 53% — não trazem
+        # BACKBONE, ATENDIMENTO nem DROP na descrição ("01FO", "rede neutra",
+        # "FIBRA AS80 24FO 3"). Sem isso escrito, a ausência do selo pareceria
+        # afirmação de que o cabo não é tronco.
+        "sem_classe": sum(1 for c in candidatos[:_MAX_CABOS_NO_CARD] if not c.classe),
         "ctos_com_coordenada": len(pontos),
         # Caixa do evento sem cabo cadastrado por perto. Declarado porque uma
         # lista curta de candidatos tem dois significados opostos: "achamos
