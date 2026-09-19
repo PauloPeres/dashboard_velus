@@ -168,6 +168,10 @@ class ElementGeometryDTO:
 
     name: str = ""
     project_external_id: str = ""
+    # O nome do TIPO na origem ("CLIENTE DROP 1FO", "FIBRA AS80 12FO BACKBONE").
+    # É ele que diz a classe do cabo — o nome do próprio elemento só diz em 47%
+    # dos casos, e 57 cabos de tipo drop se chamam apenas "01FO".
+    type_name: str = ""
 
     def __post_init__(self) -> None:
         if not self.external_id:

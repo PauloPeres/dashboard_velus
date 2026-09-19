@@ -56,11 +56,13 @@ Dá para separar **BACKBONE** (tronco) de **ATENDIMENTO** (distribuição) de
 Numa massiva, o que interessa é backbone e atendimento — drop de cliente nunca
 explica 30 clientes fora. Isso já filtra o candidato sem inventar topologia.
 
-**Limite medido depois (2026-09-19), quando a regra virou código:** ela vale para
-**47% do cadastro**. São 431 ATENDIMENTO, 60 BACKBONE, 67 DROP e **633 cabos sem
-classe no nome** ("01FO", "rede neutra", "FIBRA AS80 24FO 3"). O filtro de drop
-segue valendo para quem se declara drop; para o resto, a tela declara que o
-cadastro não conta, em vez de deduzir classe pela capacidade.
+**Corrigido em 2026-09-19: a classe não sai do nome, sai do tipo.** O nome
+classifica só 47% dos cabos, mas `df_elemento.id_tipo_elemento` aponta para o
+catálogo `df_tipo_elemento`, cujo `nome_tipo` classifica **1.092 dos 1.191**
+(843 atendimento, 125 drop, 124 backbone; 99 sem classe). A diferença não era
+cosmética: **57 cabos de tipo `CLIENTE DROP 1FO` se chamam apenas "01FO"** e
+entravam como candidatos. Detalhes em
+[geometria-cabos-plano.md](geometria-cabos-plano.md), G7.
 
 **b) O prefixo do nome da CTO agrupa caixas fisicamente próximas.** Medido sobre
 as 1.438 CTOs com coordenada: o prefixo (`A10`, `B47`, …) forma **106 grupos**

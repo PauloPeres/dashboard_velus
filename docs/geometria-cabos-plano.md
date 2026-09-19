@@ -146,12 +146,41 @@ encostam em uma só.
 
 **O que a verificação derrubou:** a premissa §1a de que "o nome do cabo carrega a
 classe". Ela vale para **47%** do cadastro: 431 ATENDIMENTO, 60 BACKBONE, 67
-DROP — e **633 sem classe nenhuma** ("01FO", "rede neutra", "FIBRA AS80 24FO 3",
-"link transporte interligação com Sorocaba"). O filtro de drop continua valendo
-para quem se declara drop, e o card passou a dizer quantos dos cabos listados não
-declaram classe: sem essa linha, a ausência do selo pareceria afirmação de que o
-cabo não é tronco.
+DROP — e 633 sem classe nenhuma ("01FO", "rede neutra", "FIBRA AS80 24FO 3",
+"link transporte interligação com Sorocaba").
 
-Um caso que fica em aberto: "01FO" é quase certamente um drop de cliente (um
-único filamento), mas o nome não diz. Excluir por capacidade seria inferir onde o
-cadastro cala — e a escolha aqui foi declarar, não adivinhar.
+### G7 — A classe vem do tipo, não do nome — FEITA (2026-09-19)
+
+**Pergunta do Paulo, ao ler o resultado acima: "a API do IXC não tem parâmetro de
+que cabo é?"** Tem. O `df_elemento` traz `id_tipo_elemento`, e o catálogo
+`df_tipo_elemento` (174 registros) traz o `nome_tipo`. Eu tinha lido a classe da
+descrição do cabo e ignorado o campo que responde a pergunta.
+
+Lendo o tipo, os 1.191 cabos são:
+
+| Classe | Cabos | Tipos |
+|---|---|---|
+| ATENDIMENTO | 843 | `FIBRA AS80 06 FO ATENDIMENTO`, `FIBRA AS80 12FO ATENDIMENTO`, `4FO ATENDIMENTO` |
+| DROP | 125 | `CLIENTE DROP 1FO`, `CLIENTE DROP 2FO` |
+| BACKBONE | 124 | `FIBRA AS80 12FO BACKBONE`, `FIBRA AS80 06FO BACKBONE` |
+| sem classe | 99 | `FIBRA AS80 24FO`, `36FO`, `48FO`, `72FO`, `144FO`, e 11 sem tipo |
+
+Os 53% sem classe caem para **8%**.
+
+**E era um defeito, não só cobertura:** **57 cabos cujo tipo é `CLIENTE DROP
+1FO` se chamam apenas "01FO"**. Lidos pelo nome, entravam na lista de candidatos
+a explicar uma massiva de trinta clientes — que é exatamente o que um drop de um
+filamento não pode fazer. Foram para produção assim e ficaram lá algumas horas.
+
+A classe passou a sair do tipo, com o nome como reserva para os 11 cabos sem
+tipo cadastrado. O `NetworkElementGeometry` ganhou `type_name` (migration 0009) e
+o adapter passou a ler o catálogo junto com o resto.
+
+**O que continua sendo recusa deliberada:** `FIBRA AS80 24FO` é quase certamente
+tronco pela capacidade, mas o tipo não diz "BACKBONE". Deduzir classe da
+capacidade seria inferir onde o cadastro cala, então esses 8% seguem declarados
+como sem classe na tela.
+
+**Um campo que não serve:** `cabo_numero_fibras` é inconsistente — o tipo
+"FIBRA AS80 24FO" declara 6 fibras e o "144FO" declara 12. Parece ser fibras por
+tubo. Não use para capacidade.

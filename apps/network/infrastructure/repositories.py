@@ -238,6 +238,7 @@ class NetworkElementGeometryRepository:
             defaults={
                 "name": dto.name,
                 "project_external_id": dto.project_external_id,
+                "type_name": dto.type_name,
                 # Lista de listas, não de tuplas: o JSONField devolveria listas
                 # na próxima leitura de qualquer jeito, e gravar tupla faria o
                 # objeto em memória divergir do que o banco entrega.

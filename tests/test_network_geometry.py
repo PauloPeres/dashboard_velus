@@ -72,14 +72,24 @@ class TestDistanciaAteOTracado:
 
 
 class TestClasseDoCabo:
-    def test_le_a_classe_do_nome(self) -> None:
+    def test_o_tipo_manda_sobre_o_nome(self) -> None:
+        """O caso que motivou a mudança: 57 cabos de tipo "CLIENTE DROP 1FO" se
+        chamam só "01FO". Lidos pelo nome, entravam como candidatos a explicar
+        uma massiva de trinta clientes."""
+        assert cable_class("01FO", "CLIENTE DROP 1FO") == "DROP"
+        assert cable_class("FIBRA AS80 24FO 3", "FIBRA AS80 12FO BACKBONE") == "BACKBONE"
+
+    def test_sem_tipo_cai_no_nome(self) -> None:
+        """11 cabos de produção não têm tipo cadastrado — ali o nome ainda ajuda."""
         assert cable_class("FIBRA AS80 12FO BACKBONE 18") == "BACKBONE"
         assert cable_class("FIBRA AS80 12FO ATENDIMENTO 65") == "ATENDIMENTO"
         assert cable_class("CLIENTE DROP 1FO 30") == "DROP"
 
-    def test_nome_que_nao_diz_a_classe_nao_inventa(self) -> None:
-        assert cable_class("CABO 24 F.O") == ""
-        assert cable_class("") == ""
+    def test_quando_nem_tipo_nem_nome_dizem_nao_inventa(self) -> None:
+        """"FIBRA AS80 24FO" é quase certamente tronco pela capacidade — mas
+        deduzir classe de capacidade é inferir onde o cadastro cala."""
+        assert cable_class("CABO 24 F.O", "FIBRA AS80 24FO") == ""
+        assert cable_class("", "") == ""
 
 
 class TestCabosCandidatos:
@@ -106,6 +116,16 @@ class TestCabosCandidatos:
         listá-lo enterraria os cabos que importam."""
         caixas = [_ponto()]
         drop = PathInput("9", "CLIENTE DROP 1FO 30", [_ponto(), _ponto(metros_leste=5)])
+        assert candidate_cables(caixas, [drop]) == []
+
+    def test_drop_que_nao_se_declara_no_nome_tambem_fica_fora(self) -> None:
+        """O defeito que o campo `type_name` corrigiu: em produção, 57 cabos de
+        tipo drop se chamam apenas "01FO" e estavam entrando na lista."""
+        caixas = [_ponto()]
+        drop = PathInput(
+            "9", "01FO", [_ponto(), _ponto(metros_leste=5)],
+            type_name="CLIENTE DROP 1FO",
+        )
         assert candidate_cables(caixas, [drop]) == []
         # Quem quiser ver o drop pede explicitamente.
         assert len(candidate_cables(caixas, [drop], incluir_drop=True)) == 1

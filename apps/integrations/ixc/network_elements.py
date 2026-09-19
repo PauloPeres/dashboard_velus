@@ -47,6 +47,7 @@ from .schemas import (
     IxcDfCoordenadaSchema,
     IxcDfElementoCoordenadaSchema,
     IxcDfElementoSchema,
+    IxcDfTipoElementoSchema,
     IxcPortaPonSchema,
     IxcRadPopRadioSchema,
     IxcRadPopSchema,
@@ -118,6 +119,7 @@ class IxcNetworkElementSource:
         with self._client_factory() as client:
             coordenadas = self._coordinates(client)
             vinculos = self._links(client)
+            tipos = self._element_types(client)
             emitidos = 0
             sem_ponto = 0
             for tipo, kind in self._GEOMETRY_TYPES.items():
@@ -149,6 +151,7 @@ class IxcNetworkElementSource:
                         points=pontos,
                         name=schema.descricao,
                         project_external_id=schema.id_projeto,
+                        type_name=tipos.get(schema.id_tipo_elemento, ""),
                     )
             _logger.info(
                 "ixc_geometry_done",
@@ -156,6 +159,24 @@ class IxcNetworkElementSource:
                 without_points=sem_ponto,
                 coordinates=len(coordenadas),
             )
+
+    def _element_types(self, client: IxcHttpClient) -> dict[str, str]:
+        """Catálogo `df_tipo_elemento`: id → nome do tipo.
+
+        É o campo que diz a classe do cabo. A descrição do próprio elemento só
+        declara classe em 47% dos casos, e 57 cabos cujo tipo é `CLIENTE DROP
+        1FO` se chamam apenas "01FO" — lidos pelo nome, entrariam como
+        candidatos a explicar uma massiva de trinta clientes.
+        """
+        saida: dict[str, str] = {}
+        for raw in client.paginate_ixc("df_tipo_elemento"):
+            try:
+                schema = IxcDfTipoElementoSchema.model_validate(raw)
+            except ValidationError:
+                continue
+            if schema.nome_tipo:
+                saida[schema.id] = schema.nome_tipo
+        return saida
 
     def _coordinates(self, client: IxcHttpClient) -> dict[str, tuple[float, float]]:
         """`df_coordenada` inteira em memória: id → (lat, lon)."""

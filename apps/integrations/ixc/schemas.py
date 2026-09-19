@@ -1189,6 +1189,33 @@ class IxcDfElementoSchema(BaseModel):
         return dict(self.model_extra or {})
 
 
+class IxcDfTipoElementoSchema(BaseModel):
+    """Catálogo de tipos do InMap — 174 registros. É aqui que mora a classe.
+
+    *Medido em produção (2026-09-19):* o `nome_tipo` diz a classe de **1.092 dos
+    1.191 cabos** ("FIBRA AS80 12FO ATENDIMENTO", "CLIENTE DROP 1FO", "FIBRA
+    AS80 12FO BACKBONE"), enquanto a descrição do próprio cabo só diz em 47%.
+    Cinquenta e sete cabos cujo tipo é `CLIENTE DROP 1FO` se chamam apenas
+    "01FO" — lidos pelo nome, entrariam como candidatos a explicar uma massiva.
+
+    `cabo_numero_fibras` **não é confiável**: o tipo "FIBRA AS80 24FO" declara 6
+    fibras, e o "144FO" declara 12 — é o número por tubo, não do cabo. Não use
+    para inferir capacidade.
+    """
+
+    model_config = ConfigDict(
+        extra="allow", populate_by_name=True, str_strip_whitespace=True
+    )
+
+    id: str = Field(...)
+    nome_tipo: str = Field(default="")
+
+    @field_validator("id", "nome_tipo", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return _to_str(v)
+
+
 class IxcDfElementoCoordenadaSchema(BaseModel):
     """Vínculo elemento → coordenada, do InMap. 12.922 linhas.
 

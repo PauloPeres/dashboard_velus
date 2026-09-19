@@ -973,10 +973,11 @@ def tracados_de_cabo(org: Any) -> list[Any]:
             name=g.name,
             points=[(float(lat), float(lon)) for lat, lon in g.points],
             project_external_id=g.project_external_id,
+            type_name=g.type_name,
         )
         for g in NetworkElementGeometry.objects.filter(
             organization=org, kind=NetworkElement.Kind.CABLE
-        ).only("external_id", "name", "points", "project_external_id")
+        ).only("external_id", "name", "points", "project_external_id", "type_name")
         if len(g.points) >= 2
     ]
 
@@ -1055,11 +1056,11 @@ def compute_cabos_candidatos(
         "total": len(candidatos),
         "alem_do_card": max(len(candidatos) - _MAX_CABOS_NO_CARD, 0),
         "raio_m": int(RAIO_CANDIDATO_METROS),
-        # Quantos dos cabos listados não declaram classe no nome. *Medido em
-        # produção (2026-09-19):* 633 dos 1.191 cabos — 53% — não trazem
-        # BACKBONE, ATENDIMENTO nem DROP na descrição ("01FO", "rede neutra",
-        # "FIBRA AS80 24FO 3"). Sem isso escrito, a ausência do selo pareceria
-        # afirmação de que o cabo não é tronco.
+        # Quantos dos cabos listados ficam sem classe. *Medido em produção
+        # (2026-09-19):* lendo o tipo do cadastro, 99 dos 1.191 cabos — 8% —
+        # não se classificam (tipos "FIBRA AS80 24FO", "144FO", e 11 sem tipo).
+        # Sem isso escrito, a ausência do selo pareceria afirmação de que o cabo
+        # não é tronco.
         "sem_classe": sum(1 for c in candidatos[:_MAX_CABOS_NO_CARD] if not c.classe),
         "ctos_com_coordenada": len(pontos),
         # Caixa do evento sem cabo cadastrado por perto. Declarado porque uma

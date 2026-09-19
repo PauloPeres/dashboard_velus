@@ -38,12 +38,15 @@ CLASSE_DROP = "DROP"
 
 @dataclass(frozen=True)
 class PathInput:
-    """Um traçado cadastrado: id, nome e os pontos em ordem."""
+    """Um traçado cadastrado: id, nome, tipo e os pontos em ordem."""
 
     external_id: str
     name: str
     points: Sequence[tuple[float, float]]
     project_external_id: str = ""
+    # Nome do tipo na origem. É ele que responde "que cabo é este" — ver
+    # `cable_class`.
+    type_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -60,20 +63,34 @@ class CableCandidate:
     project_external_id: str = ""
 
 
-def cable_class(name: str) -> str:
-    """Classe do cabo lida do nome — "" quando o nome não diz.
+def cable_class(name: str, type_name: str = "") -> str:
+    """Classe do cabo — do **tipo** primeiro, do nome só como reserva.
 
-    A ordem do teste importa: "FIBRA AS80 12FO ATENDIMENTO 65" contém as duas
-    palavras em nomes de outras redes, e o drop é o que precisa ser reconhecido
-    primeiro porque é o que será descartado.
+    O tipo é o campo que responde de verdade. *Medido em produção
+    (2026-09-19):* o `nome_tipo` do catálogo do InMap classifica **1.092 dos
+    1.191 cabos** (843 atendimento, 125 drop, 124 backbone), enquanto a
+    descrição do próprio cabo só classifica 47% deles.
+
+    E a diferença não é cosmética: **57 cabos cujo tipo é "CLIENTE DROP 1FO" se
+    chamam apenas "01FO"**. Lidos pelo nome, entravam como candidatos a explicar
+    uma massiva de trinta clientes — que é precisamente o que um drop de um
+    filamento não pode fazer.
+
+    O nome continua como reserva para o cabo sem tipo cadastrado (11 em
+    produção). Quando nem um nem outro dizem, devolve "" — e a tela declara que
+    o cadastro não conta, em vez de deduzir classe pela capacidade.
     """
-    texto = (name or "").upper()
-    if CLASSE_DROP in texto:
-        return CLASSE_DROP
-    if CLASSE_BACKBONE in texto:
-        return CLASSE_BACKBONE
-    if CLASSE_ATENDIMENTO in texto:
-        return CLASSE_ATENDIMENTO
+    for texto in ((type_name or "").upper(), (name or "").upper()):
+        if not texto:
+            continue
+        # A ordem importa: drop é o que será descartado, então é o que precisa
+        # ser reconhecido primeiro.
+        if CLASSE_DROP in texto:
+            return CLASSE_DROP
+        if CLASSE_BACKBONE in texto:
+            return CLASSE_BACKBONE
+        if CLASSE_ATENDIMENTO in texto:
+            return CLASSE_ATENDIMENTO
     return ""
 
 
@@ -150,7 +167,7 @@ def candidate_cables(
 
     candidatos: list[CableCandidate] = []
     for path in paths:
-        classe = cable_class(path.name)
+        classe = cable_class(path.name, path.type_name)
         if classe == CLASSE_DROP and not incluir_drop:
             continue
         distancias = [distance_to_path(p, path.points) for p in cto_points]

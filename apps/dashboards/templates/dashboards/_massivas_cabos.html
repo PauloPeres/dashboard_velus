@@ -66,8 +66,8 @@ Espera a variável `c` (dict de compute_cabos_candidatos).
   {% if c.sem_classe %}
   <p class="text-[11px] text-gray-500 mt-2 leading-relaxed">
     {{ c.sem_classe }} do{{ c.sem_classe|pluralize:"s" }} cabo{{ c.sem_classe|pluralize }} acima
-    não diz{{ c.sem_classe|pluralize:"em" }} a classe no nome — a classe é lida da
-    descrição do cadastro, e 53% dos cabos não a declaram ("01FO", "rede neutra").
+    fica{{ c.sem_classe|pluralize:"m" }} sem classe — ela vem do tipo cadastrado no InMap,
+    e 8% dos cabos têm tipo que não a declara (&quot;FIBRA AS80 24FO&quot;, &quot;144FO&quot;).
     Sem o selo não quer dizer que não seja tronco; quer dizer que o cadastro não conta.
   </p>
   {% endif %}

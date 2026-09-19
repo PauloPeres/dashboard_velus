@@ -315,6 +315,15 @@ class NetworkElementGeometry(TenantModel):
 
     name = models.CharField(max_length=255, blank=True, default="")
     project_external_id = models.CharField(max_length=128, blank=True, default="")
+    type_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text=_(
+            "Nome do tipo na origem — é ele que diz a classe do cabo, e não a "
+            "descrição do elemento."
+        ),
+    )
 
     points = models.JSONField(
         default=list,
