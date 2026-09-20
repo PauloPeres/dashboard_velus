@@ -6256,9 +6256,64 @@ def atendimento_lista_queryset(
     return qs
 
 
+# Telefone do cliente na lista (#pedido de 20/09/2026). São DOIS números, e a
+# diferença entre eles é o ponto:
+#
+# - o **número da conversa** (`canal_cliente` do Opa, ex. "5515991282181@c.us")
+#   é de quem realmente falou. Tem WhatsApp por definição — foi por ele que a
+#   mensagem chegou;
+# - o **telefone do cadastro** vem do IXC, casado por documento.
+#
+# *Medido em produção (20/09/2026):* nos 1.000 atendimentos mais recentes, os
+# dois números **divergem em 236 dos 818** casos em que existem ambos — quase
+# 30%. Por isso o botão de WhatsApp usa o número da conversa: com o do cadastro,
+# um em cada três contatos iria para um número que a pessoa talvez não use mais.
+
+
+def _so_digitos(valor: str) -> str:
+    return "".join(c for c in (valor or "") if c.isdigit())
+
+
+def telefone_do_canal(raw_extras: Any) -> str:
+    """Número de quem conversou, extraído do `canal_cliente` do Opa.
+
+    Formato de origem: "5515991282181@c.us" — DDI + DDD + número, sufixado pelo
+    domínio do WhatsApp. Devolve só os dígitos, com DDI.
+    """
+    if not isinstance(raw_extras, dict):
+        return ""
+    bruto = str(raw_extras.get("canal_cliente") or "").split("@")[0]
+    digitos = _so_digitos(bruto)
+    # Menos que DDD + 8 dígitos não é telefone; devolver lixo aqui viraria um
+    # link de WhatsApp que abre numa conversa inexistente.
+    return digitos if len(digitos) >= 10 else ""
+
+
+def _formata_telefone(digitos: str) -> str:
+    """(15) 99128-2181 a partir dos dígitos, com ou sem DDI."""
+    d = digitos[2:] if digitos.startswith("55") and len(digitos) > 11 else digitos
+    if len(d) == 11:
+        return f"({d[:2]}) {d[2:7]}-{d[7:]}"
+    if len(d) == 10:
+        return f"({d[:2]}) {d[2:6]}-{d[6:]}"
+    return digitos
+
+
+def _mesmo_numero(a: str, b: str) -> bool:
+    """Compara dois telefones ignorando DDI e formatação."""
+    def normaliza(v: str) -> str:
+        d = _so_digitos(v)
+        return d[2:] if d.startswith("55") and len(d) > 11 else d
+
+    na, nb = normaliza(a), normaliza(b)
+    return bool(na) and na == nb
+
+
 def _atendimento_lista_row(at: Any) -> dict[str, Any]:
     """Linha da tabela/CSV a partir de um `Atendimento` carregado."""
     opened_local = timezone.localtime(at.opened_at, _ATENDIMENTO_TZ)
+    canal_digitos = telefone_do_canal(at.raw_extras)
+    cadastro = (at.customer.phone if at.customer_id and at.customer else "") or ""
     return {
         "atendimento_id": at.id,
         "customer_id": at.customer_id,
@@ -6272,17 +6327,27 @@ def _atendimento_lista_row(at: Any) -> dict[str, Any]:
         "protocol": at.protocol,
         "status_label": at.get_status_display(),
         "canal": at.canal or "—",
+        # O número de quem falou, e o link que abre a conversa nele.
+        "telefone_conversa": _formata_telefone(canal_digitos) if canal_digitos else "",
+        "whatsapp_url": f"https://wa.me/{canal_digitos}" if canal_digitos else "",
+        "telefone_cadastro": cadastro,
+        # Divergência não é erro a esconder: é informação para o atendente (o
+        # cadastro está velho) e para quem cuida da base.
+        "telefone_diverge": bool(
+            canal_digitos and cadastro and not _mesmo_numero(canal_digitos, cadastro)
+        ),
     }
 
 
 def atendimento_lista_ordered(qs: QuerySet[Any]) -> QuerySet[Any]:
     """Ordenação estável da lista + `select_related` do que a linha lê.
 
-    Só `departamento` entra no join: o cliente é usado apenas pelo `customer_id`
-    (já na própria linha) pra montar o link, então puxar a tabela de clientes
-    seria join à toa num recorte de 12 meses.
+    `departamento` e `customer` entram no join. O cliente passou a ser
+    necessário quando a lista ganhou o telefone do cadastro (20/09/2026) — antes
+    dele, só o `customer_id` da própria linha bastava para montar o link, e o
+    join seria desperdício num recorte de 12 meses.
     """
-    return qs.select_related("departamento").order_by("opened_at", "id")
+    return qs.select_related("departamento", "customer").order_by("opened_at", "id")
 
 
 def iter_atendimento_lista_rows(qs: QuerySet[Any]) -> Iterator[dict[str, Any]]:

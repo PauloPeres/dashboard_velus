@@ -184,6 +184,7 @@ atalho que troca de nível: da hora sobe pro dia inteiro em 1 clique.
     <thead class="bg-gray-50">
       <tr>
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
+        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Contato</th>
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Horário</th>
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Atendente</th>
         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Categoria</th>
@@ -203,6 +204,44 @@ atalho que troca de nível: da hora sobe pro dia inteiro em 1 clique.
             <a href="{% url 'dashboards:customer_detail' r.customer_id %}" class="text-blue-700 hover:underline">{{ r.customer_name }}</a>
             {% else %}{{ r.customer_name }}{% endif %}
           {% else %}{{ r.customer_name }}{% endif %}
+        </td>
+        {% comment %}
+        Contato. São DOIS números, e a diferença entre eles é o ponto:
+
+        - o de cima é o de QUEM FALOU, tirado da própria conversa (o Opa guarda
+          o número do canal). Tem WhatsApp por definição — foi por ele que a
+          mensagem chegou;
+        - o de baixo é o do CADASTRO, que vem do IXC.
+
+        Medido em produção (20/09/2026): os dois divergem em 236 de 818 casos —
+        quase 30%. Por isso o botão usa o número da conversa: com o do cadastro,
+        um em cada três contatos iria para um número que a pessoa talvez não use
+        mais. Quando divergem, a tela marca — é informação para o atendente e
+        para quem cuida da base, não erro a esconder.
+        {% endcomment %}
+        <td class="px-4 py-3 whitespace-nowrap">
+          {% if r.whatsapp_url %}
+          <a href="{{ r.whatsapp_url }}" target="_blank" rel="noopener noreferrer"
+             class="inline-flex items-center gap-1.5 text-emerald-700 hover:text-emerald-800 hover:underline"
+             title="Abrir conversa no WhatsApp com {{ r.telefone_conversa }}">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M17.5 14.4c-.3-.2-1.7-.9-2-1-.3-.1-.5-.1-.7.1-.2.3-.7 1-.9 1.2-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.9-.8-1.4-1.7-1.6-2-.2-.3 0-.5.1-.6l.5-.5c.1-.2.2-.3.3-.5 0-.2 0-.4-.1-.5l-.9-2.1c-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.2 5.1 4.4 1.9.7 2.6.8 3.5.7.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.2.2-1.4-.1-.1-.3-.2-.6-.3zM12 2a10 10 0 00-8.6 15L2 22l5.2-1.4A10 10 0 1012 2z"/>
+            </svg>
+            {{ r.telefone_conversa }}
+          </a>
+          {% else %}
+          <span class="text-gray-300">—</span>
+          {% endif %}
+
+          {% if r.telefone_cadastro %}
+          <p class="text-[11px] {% if r.telefone_diverge %}text-amber-700{% else %}text-gray-400{% endif %}">
+            cadastro: {{ r.telefone_cadastro }}{% if r.telefone_diverge %} · falou de outro número{% endif %}
+          </p>
+          {% elif r.customer_id %}
+          <p class="text-[11px] text-gray-400">sem telefone no cadastro</p>
+          {% else %}
+          <p class="text-[11px] text-gray-400">cliente não vinculado</p>
+          {% endif %}
         </td>
         <td class="px-4 py-3 tabular-nums text-gray-700">{{ r.opened_at_str }}</td>
         <td class="px-4 py-3 text-gray-700">{{ r.atendente_nome }}</td>
@@ -225,7 +264,7 @@ atalho que troca de nível: da hora sobe pro dia inteiro em 1 clique.
       </tr>
       {% empty %}
       <tr>
-        <td colspan="5" class="px-6 py-8 text-center text-gray-500">
+        <td colspan="6" class="px-6 py-8 text-center text-gray-500">
           Nenhum atendimento nesse recorte
         </td>
       </tr>
