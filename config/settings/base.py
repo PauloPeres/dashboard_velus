@@ -421,6 +421,14 @@ CELERY_BEAT_SCHEDULE: dict = {
         "schedule": crontab(minute=0, hour=5),  # 05:00 todo dia
         "options": {"queue": "celery"},
     },
+    # Placar do churn (#125 + tela): mede se o risco de 90 dias atrás virou
+    # cancelamento. Semanal porque a resposta muda devagar — e porque ninguém
+    # recalibra modelo toda segunda de manhã.
+    "churn-backtest-weekly": {
+        "task": "apps.analytics.tasks.run_churn_backtest_for_all_orgs",
+        "schedule": crontab(minute=0, hour=4, day_of_week=1),  # segunda, 04:00
+        "options": {"queue": "celery"},
+    },
     "sync-plano-contas-daily": {
         "task": "apps.analytics.tasks.dispatch_plano_contas_for_all_orgs",
         "schedule": crontab(minute=30, hour=3),  # 03:30 todo dia

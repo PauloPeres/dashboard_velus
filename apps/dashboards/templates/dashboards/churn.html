@@ -75,6 +75,74 @@
 </div>
 {% endif %}
 
+{% comment %}
+O placar do modelo de churn.
+
+Enquanto isto não existia, o churn era uma opinião sem retorno: apontava
+clientes e ninguém sabia se acertava. É o mesmo buraco que a causa confirmada
+fechou nas massivas — e a resposta tem a mesma forma: comparar o que o sistema
+disse com o que de fato aconteceu.
+
+O número é o **lift**: quantas vezes mais o grupo marcado cancelou em relação a
+quem não foi marcado. 1,0 é o acaso. Abaixo de 1,0 o sinal aponta para o lado
+errado, e é importante que isso apareça escrito em vez de virar gráfico bonito.
+{% endcomment %}
+{% if placar_churn.tem %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex flex-wrap items-baseline gap-2">
+    <h2 class="text-sm font-semibold text-gray-700">O risco apontado virou cancelamento?</h2>
+    <span class="text-xs text-gray-400">
+      base de {{ placar_churn.d0|date:"d/m/Y" }} · desfecho em {{ placar_churn.horizonte }} dias
+    </span>
+  </div>
+  <p class="text-xs text-gray-400 mt-0.5 leading-relaxed">
+    {{ placar_churn.base }} contratos ativos naquela data, {{ placar_churn.cancelados }} cancelaram
+    ({{ placar_churn.taxa_base_pct }}% da base). "Lift" é quantas vezes mais o grupo marcado
+    cancelou em relação a quem não foi marcado — 1,0 é o acaso.
+  </p>
+
+  {% if placar_churn.tem_score %}
+  <ul class="mt-3 space-y-1">
+    {% for s in placar_churn.score %}
+    <li class="text-sm flex flex-wrap items-baseline gap-2">
+      <span class="font-medium text-gray-800">{{ s.nome }}</span>
+      <span class="{% if s.separa %}text-emerald-700{% else %}text-amber-700{% endif %} font-semibold tabular-nums">
+        {{ s.lift }}×
+      </span>
+      <span class="text-xs text-gray-500">
+        {{ s.cancelados_no_grupo }} de {{ s.n }} cancelaram
+        {% if not s.separa %}— este aponta para o lado errado{% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-3 leading-relaxed">
+    Ainda não há foto do score naquela data — a captura diária começou em 11/08/2026.
+    Abaixo ficam os sinais reconstruídos a partir de chamados e faturas, que é o que dá
+    para medir com o histórico que existe.
+  </p>
+  {% endif %}
+
+  {% if placar_churn.reconstruidos %}
+  <details class="mt-3">
+    <summary class="text-xs text-gray-500 cursor-pointer">
+      Sinais reconstruídos ({{ placar_churn.reconstruidos|length }})
+    </summary>
+    <ul class="mt-2 space-y-1">
+      {% for s in placar_churn.reconstruidos %}
+      <li class="text-xs flex flex-wrap items-baseline gap-2">
+        <span class="text-gray-700">{{ s.nome }}</span>
+        <span class="{% if s.separa %}text-emerald-700{% else %}text-amber-700{% endif %} tabular-nums">{{ s.lift }}×</span>
+        <span class="text-gray-400">{{ s.cancelados_no_grupo }} de {{ s.n }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if nota_numerador %}
 {% include "dashboards/_nota_periodo.html" with texto="Recorte por motivo: contrato ativo não tem motivo de cancelamento, então só os CANCELADOS foram filtrados. O churn % abaixo deixa de ser a taxa do recorte e passa a ser quanto ele contribui pro churn total — e os KPIs de MRR recuperado e líquido seguem a base inteira, porque ativação não tem motivo." %}
 {% endif %}

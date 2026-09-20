@@ -594,3 +594,75 @@ def _run_qa_reviews(*, organization_id: int, limit: int) -> dict[str, Any]:
         reviewed=reviewed, candidates=len(candidates),
     )
     return {"reviewed": reviewed, "candidates": len(candidates)}
+
+
+@shared_task(name="apps.analytics.tasks.run_churn_backtest_for_all_orgs")
+def run_churn_backtest_for_all_orgs(
+    *, horizonte: int = 90, atraso_dias: int | None = None
+) -> dict[str, int]:
+    """Semanal: mede se o risco de churn de meses atrás virou cancelamento.
+
+    O backtest existia desde a #125, mas só por linha de comando — rodava,
+    imprimia no terminal e o número morria ali. A pergunta *"o modelo está
+    acertando?"* não pode depender de alguém lembrar de rodar um comando.
+
+    **D0 é `hoje - horizonte`, e isso não é detalhe:** avaliar uma data mais
+    recente que isso mediria um desfecho que ainda não teve tempo de acontecer,
+    e o resultado sairia artificialmente bom — todo mundo "ainda não cancelou".
+    """
+    return _run_churn_backtest(horizonte=horizonte, atraso_dias=atraso_dias)
+
+
+@allow_cross_tenant(reason="beat orchestrator itera organizações (não-TenantModel)")
+def _run_churn_backtest(
+    *, horizonte: int, atraso_dias: int | None
+) -> dict[str, int]:
+    from datetime import timedelta
+
+    from apps.analytics.application.churn_backtest import rodar_backtest
+    from apps.analytics.infrastructure.models import ChurnBacktestRun
+    from apps.shared.context import set_current_organization
+    from apps.tenancy.models import Organization
+
+    # A janela de desfecho precisa ter fechado. Sem isso, a base de D0 teria
+    # clientes que ainda estão dentro do prazo de cancelar.
+    atraso = atraso_dias if atraso_dias is not None else horizonte
+    d0 = (timezone.now() - timedelta(days=atraso)).date()
+
+    resultado = {"orgs": 0, "com_amostra": 0}
+    for org in Organization.objects.filter(is_active=True):
+        set_current_organization(org)
+        bt = rodar_backtest(org, d0=d0, horizonte=horizonte)
+        resultado["orgs"] += 1
+        if not bt.base:
+            continue
+        resultado["com_amostra"] += 1
+        ChurnBacktestRun.objects.update_or_create(
+            organization=org,
+            d0=bt.d0,
+            horizon_days=bt.horizonte,
+            defaults={
+                "base_size": bt.base,
+                "canceled": bt.cancelados,
+                "base_rate": bt.taxa_base,
+                "signals": [
+                    {
+                        "nome": s.nome,
+                        "n": s.n,
+                        "churn_no_grupo": round(s.churn_no_grupo, 4),
+                        "churn_fora": round(s.churn_fora, 4),
+                        "lift": round(s.lift, 2),
+                        "cobertura": round(s.cobertura, 4),
+                        "cancelados_no_grupo": s.cancelados_no_grupo,
+                        "separa": s.separa,
+                    }
+                    for s in bt.sinais
+                ],
+            },
+        )
+        _logger.info(
+            "churn_backtest_done",
+            org=org.slug, d0=str(bt.d0), base=bt.base,
+            cancelados=bt.cancelados, sinais=len(bt.sinais),
+        )
+    return resultado

@@ -1008,6 +1008,49 @@ def descasamento(request: HttpRequest) -> HttpResponse:
     )
 
 
+def _placar_do_churn(org: Any) -> dict[str, Any]:
+    """O último backtest gravado — "o risco de 90 dias atrás virou cancelamento?"
+
+    Enquanto o churn não tinha isto, ele era uma opinião sem retorno: o modelo
+    apontava clientes e ninguém sabia se acertava. É o mesmo buraco que a causa
+    confirmada fechou nas massivas.
+
+    Mostra o **lift**: quantas vezes mais o grupo marcado cancelou em relação a
+    quem não foi marcado. 1,0 é o acaso; abaixo de 1,0 o sinal aponta para o
+    lado errado — e ver isso escrito vale mais que qualquer gráfico bonito.
+
+    Prefere as linhas do **score realmente atribuído** no passado, que é a
+    validação sem reconstrução; os sinais reconstruídos ficam como contexto.
+    """
+    from apps.analytics.infrastructure.models import ChurnBacktestRun
+
+    run = (
+        ChurnBacktestRun.objects.filter(organization=org).order_by("-d0").first()
+    )
+    if run is None:
+        return {"tem": False}
+
+    do_score = run.score_signals
+    reconstruidos = [
+        s for s in run.signals if not str(s.get("nome", "")).startswith("score do dia")
+    ]
+    return {
+        "tem": True,
+        "d0": run.d0,
+        "horizonte": run.horizon_days,
+        "base": run.base_size,
+        "cancelados": run.canceled,
+        "taxa_base_pct": round(run.base_rate * 100, 1),
+        # O score do dia só existe a partir de 11/08/2026 (#123). Antes disso, o
+        # que houver são sinais reconstruídos — e a tela diz qual está vendo, em
+        # vez de misturar os dois como se fossem a mesma evidência.
+        "score": do_score,
+        "reconstruidos": reconstruidos,
+        "tem_score": bool(do_score),
+        "atualizado_em": run.updated_at,
+    }
+
+
 @login_required
 @never_cache
 def churn(request: HttpRequest) -> HttpResponse:
@@ -1104,6 +1147,8 @@ def churn(request: HttpRequest) -> HttpResponse:
         "dashboards/churn.html",
         {
             "summary": summary,
+            # Placar do modelo: o risco de meses atrás virou cancelamento?
+            "placar_churn": _placar_do_churn(org),
             "planos": planos,
             "plano_selecionado": plano,
             "motivos_disponiveis": motivos_disponiveis,

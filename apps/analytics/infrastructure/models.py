@@ -597,3 +597,59 @@ class FornecedorCache(models.Model):
 
     def __str__(self) -> str:
         return f"FornecedorCache {self.organization_id} · n={len(self.supplier_map)}"
+
+
+class ChurnBacktestRun(TenantModel):
+    """Resultado de um backtest de churn — o placar do modelo, guardado.
+
+    O backtest já existia (#125), mas só por linha de comando: rodava, imprimia
+    no terminal e o número morria ali. A pergunta que ele responde — *"o risco
+    alto de três meses atrás virou cancelamento?"* — é a única forma de saber se
+    o churn está acertando, e ela não pode depender de alguém lembrar de rodar
+    um comando.
+
+    Guardar a execução tem um segundo motivo, menos óbvio: **a série**. Um
+    backtest isolado diz "o sinal separa 2,3×"; a sequência deles diz se o
+    modelo está melhorando, piorando ou parado — que é o que decide investir ou
+    não em recalibração.
+
+    `sinais` é JSON e não tabela filha de propósito: a lista muda de forma
+    quando um sinal entra ou sai do modelo, e uma tabela rígida obrigaria
+    migration a cada mudança de vocabulário do risco.
+    """
+
+    d0 = models.DateField(
+        help_text=_("Data avaliada — a foto da base que o backtest usou."),
+    )
+    horizon_days = models.PositiveIntegerField(
+        help_text=_("Janela de desfecho: cancelou até D0 + N dias."),
+    )
+    base_size = models.PositiveIntegerField(default=0)
+    canceled = models.PositiveIntegerField(default=0)
+    base_rate = models.FloatField(
+        default=0.0,
+        help_text=_("Taxa de cancelamento da base inteira — o acaso a superar."),
+    )
+    signals = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        verbose_name = _("Backtest de churn")
+        verbose_name_plural = _("Backtests de churn")
+        constraints = [
+            # Rerodar o mesmo D0 com a mesma janela atualiza, não duplica: o
+            # resultado é determinístico, e duas linhas iguais só confundiriam a
+            # série.
+            models.UniqueConstraint(
+                fields=["organization", "d0", "horizon_days"],
+                name="unique_churn_backtest_run",
+            ),
+        ]
+        indexes = [models.Index(fields=["organization", "-d0"])]
+
+    def __str__(self) -> str:
+        return f"backtest churn {self.d0} (+{self.horizon_days}d): {self.canceled}/{self.base_size}"
+
+    @property
+    def score_signals(self) -> list[dict]:
+        """Só as linhas do score realmente atribuído — a validação sem reconstrução."""
+        return [s for s in self.signals if str(s.get("nome", "")).startswith("score do dia")]
