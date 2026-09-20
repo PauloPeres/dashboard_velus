@@ -319,11 +319,43 @@ O piscar dura 10 s e fica sólido, a ~1 Hz — nunca acima de 3 Hz, por fadiga e
 fotossensibilidade. O takeover devolve a tela em 45 s: takeover permanente mata
 o painel, porque a sala para de ver o resto.
 
-### P7 — Som e escalonamento para Telegram
+### P7 — Som e escalonamento para Telegram — FEITA (20/09/2026)
 Só depois de P6 rodar algumas semanas e os limiares estarem ajustados. Com
 plantão 24/7, o Telegram é **escalonamento**, não canal principal: severidade
 crítica ou evento sem reconhecimento há N minutos.
 **Depende de:** P6.
+
+**Feita antes do prazo do plano, a pedido do Paulo — e por isso nasce
+desligada.** O plano mandava esperar semanas de P6 antes de fazer barulho na
+sala; o mecanismo existe agora, mas sem `TELEGRAM_BOT_TOKEN` e
+`TELEGRAM_CHAT_ID` nada é enviado. A sala não começa a receber push no dia do
+deploy: alguém decide quando quer.
+
+**O som.** Uma vez só, sintetizado no navegador (duas notas descendentes, ~1 s).
+Som em loop é a causa nº 1 de alguém desligar a caixa — e aí se perde o único
+canal que alcança quem não está olhando. Um arquivo de áudio seria mais um asset
+para servir e versionar, e este som não precisa ser bonito, precisa ser ouvido.
+
+Ressalva honesta: **o navegador bloqueia áudio sem interação do usuário**, e numa
+TV em kiosk ninguém clica. O som pode simplesmente não sair — por isso ele é
+reforço do alerta visual, nunca o alerta em si.
+
+**O escalonamento.** Quatro filtros, e cada um impede o canal de virar barulho:
+só escopo CRÍTICO (OLT/POP), só o que ninguém reconheceu, só depois de 15 min
+(primeiro a TV mostra, depois o celular toca) e **uma vez por evento** — massiva
+que cresce não manda de novo, senão o loop de 5 min viraria uma mensagem a cada
+5 min. Manutenção programada nunca acorda ninguém.
+
+O carimbo `escalated_at` só é gravado **quando a mensagem saiu**: se o Telegram
+estiver desligado ou falhar, o evento segue elegível e o próximo ciclo tenta de
+novo. Carimbar mesmo assim registraria um aviso que ninguém recebeu.
+
+A mensagem diz o quê, onde, quanto e há quanto tempo — e **não promete causa**:
+o veredito automático pode estar errado, e no push não há espaço para a ressalva
+que a tela sempre carrega.
+
+**Para ligar:** definir `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` no secret do
+cluster. `TELEGRAM_ESCALATION_MINUTES` ajusta o prazo (default 15).
 
 ### P8 — Reconhecimento ("ciente, Fulano está tratando") — FEITA (19/09/2026)
 Primeiro ponto de entrada de dados do painel. Cruza com R9 da frente de rota

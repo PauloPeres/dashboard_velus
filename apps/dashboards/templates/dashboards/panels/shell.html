@@ -182,6 +182,35 @@ Três decisões de tela (§2, §3 e §5 do docs/massivas-painel-tv-plano.md):
       takeover.classList.remove("hidden");
       takeover.classList.add("flex");
 
+      // Som UMA vez (P7). Som em loop é a causa nº 1 de alguém desligar a
+      // caixa — e aí se perde o único canal que alcança quem não está olhando.
+      //
+      // O bipe é sintetizado no próprio navegador: um arquivo de áudio seria
+      // mais um asset para servir e versionar, e este som não precisa ser
+      // bonito, precisa ser ouvido.
+      //
+      // Navegador bloqueia áudio sem interação do usuário. Numa TV em kiosk
+      // ninguém clica, então o som pode simplesmente não sair — e é por isso
+      // que ele é reforço do alerta visual, nunca o alerta em si.
+      try {
+        var ctx = new (window.AudioContext || window.webkitAudioContext)();
+        var tocar = function (inicio, freq) {
+          var osc = ctx.createOscillator();
+          var vol = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.value = freq;
+          vol.gain.setValueAtTime(0.0001, ctx.currentTime + inicio);
+          vol.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + inicio + 0.02);
+          vol.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + inicio + 0.35);
+          osc.connect(vol); vol.connect(ctx.destination);
+          osc.start(ctx.currentTime + inicio);
+          osc.stop(ctx.currentTime + inicio + 0.4);
+        };
+        // Duas notas descendentes: distinguível de notificação de celular, que
+        // é o som que a sala já aprendeu a ignorar.
+        tocar(0, 880); tocar(0.45, 620);
+      } catch (e) { /* sem áudio, o visual continua valendo */ }
+
       // Piscar por 10 s e ficar sólido: piscar sem fim é fadiga, e acima de
       // 3 Hz há risco de fotossensibilidade. Aqui é ~1 Hz.
       var piscante = document.getElementById("takeover-piscante");

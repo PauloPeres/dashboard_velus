@@ -298,3 +298,32 @@ def refresh_optical_signal_baseline(organization_id: int) -> dict[str, Any]:
         reset_current_organization(token)
 
     return {"updated": updated}
+
+
+@shared_task(name="apps.network.tasks.escalate_unacknowledged_outages")
+def escalate_unacknowledged_outages() -> dict[str, int]:
+    """Beat: manda push das massivas críticas que ninguém assumiu (P7).
+
+    Roda a cada 5 min, mas **não manda a cada 5 min**: o carimbo `escalated_at`
+    garante um push por evento. O intervalo curto é só para o aviso não esperar
+    meia hora depois de vencido o prazo.
+
+    Desligado enquanto não houver token e chat configurados — a sala não começa
+    a receber push no dia do deploy, antes de alguém decidir que quer.
+    """
+    return _escalate_unacknowledged()
+
+
+@allow_cross_tenant(reason="beat orchestrator itera organizações (não-TenantModel)")
+def _escalate_unacknowledged() -> dict[str, int]:
+    from apps.network.application.escalation import escalar_massivas
+    from apps.shared.context import set_current_organization
+
+    total = {"orgs": 0, "candidatas": 0, "enviadas": 0}
+    for org in Organization.objects.filter(is_active=True):
+        set_current_organization(org)
+        resultado = escalar_massivas(org)
+        total["orgs"] += 1
+        total["candidatas"] += resultado["candidatas"]
+        total["enviadas"] += resultado["enviadas"]
+    return total

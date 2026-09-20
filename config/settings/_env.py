@@ -145,6 +145,24 @@ class Settings(BaseSettings):
     QA_LLM_ENABLED: bool = False
 
     # -------------------------------------------------------------------------
+    # Escalonamento do painel de NOC para o Telegram (P7)
+    # -------------------------------------------------------------------------
+    # A TV é consciência contínua; o push exige ação de alguém. Por isso o
+    # escalonamento é estreito de propósito: massiva CRÍTICA que ninguém
+    # reconheceu depois de N minutos.
+    #
+    # Sem token e chat configurados, nada é enviado — mesmo idioma de
+    # QA_LLM_ENABLED e do e-mail. A mensagem some no log em vez de falhar, e a
+    # sala não começa a receber push no dia do deploy, antes de alguém decidir
+    # que quer.
+    TELEGRAM_BOT_TOKEN: SecretStr = SecretStr("")
+    TELEGRAM_CHAT_ID: str = ""
+    # Quanto tempo uma massiva crítica pode ficar sem ninguém assumir antes de
+    # virar push. Acima do tempo de supressão do painel (5 min): primeiro a TV
+    # mostra, depois o celular toca.
+    TELEGRAM_ESCALATION_MINUTES: int = 15
+
+    # -------------------------------------------------------------------------
     # Sinal óptico da ONU (#148) — knobs da medição ativa contra a OLT
     # -------------------------------------------------------------------------
     # Atraso entre o login voltar ao ar e a medição. A ONU acabou de subir e

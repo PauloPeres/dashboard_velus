@@ -634,6 +634,10 @@ class OutageEvent(TenantModel):
         blank=True,
     )
     acknowledged_at = models.DateTimeField(null=True, blank=True)
+    # Carimbo do push que saiu (P7). Um evento, um escalonamento: massiva que
+    # cresce não manda mensagem de novo. Sem este campo, o loop de 5 min viraria
+    # uma mensagem a cada 5 min — que é como se desliga um canal de alerta.
+    escalated_at = models.DateTimeField(null=True, blank=True)
 
     # -- Manutenção programada (R10) ------------------------------------------
     # A janela de manutenção é o **evento de rede** que a equipe já cadastra na

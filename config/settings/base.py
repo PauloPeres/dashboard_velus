@@ -269,6 +269,16 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 # =============================================================================
+# Escalonamento para o Telegram (P7 do painel de NOC)
+# =============================================================================
+# Desligado sem token E chat: a sala não começa a receber push no dia do deploy,
+# antes de alguém decidir que quer. Mesmo idioma de QA_LLM_ENABLED.
+TELEGRAM_BOT_TOKEN: str = env.TELEGRAM_BOT_TOKEN.get_secret_value()
+TELEGRAM_CHAT_ID: str = env.TELEGRAM_CHAT_ID
+TELEGRAM_ENABLED: bool = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+TELEGRAM_ESCALATION_MINUTES: int = env.TELEGRAM_ESCALATION_MINUTES
+
+# =============================================================================
 # Email (#95) — Mailgun via API HTTP (anymail) quando configurado
 # =============================================================================
 # Flag derivada (mesmo idioma de QA_LLM_ENABLED): só liga o transporte real com
@@ -394,6 +404,14 @@ CELERY_BEAT_SCHEDULE: dict = {
         "task": "apps.sync.tasks.dispatch_incremental_for_all_orgs",
         "schedule": crontab(minute=50, hour="2,8,14,20"),
         "kwargs": {"capabilities": ["LEADS", "OPPORTUNITIES"]},
+        "options": {"queue": "celery"},
+    },
+    # Escalonamento do painel de NOC (P7): massiva crítica que ninguém assumiu
+    # vira push. A cada 5 min para o aviso não esperar meia hora depois de
+    # vencido o prazo — mas o carimbo no evento garante UM push por massiva.
+    "escalate-unacknowledged-outages-every-5min": {
+        "task": "apps.network.tasks.escalate_unacknowledged_outages",
+        "schedule": crontab(minute="*/5"),
         "options": {"queue": "celery"},
     },
     # Opa! Suite (atendimento) tem fluxo dedicado fora do dispatch genérico.
