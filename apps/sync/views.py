@@ -279,14 +279,21 @@ def _agendamentos(now: datetime.datetime) -> list[dict[str, Any]]:
         if tarefa.name.startswith("celery."):
             continue  # a entrada interna de limpeza do próprio celery
         ultima = tarefa.last_run_at
-        atrasada = ultima is None or (now - ultima) > _ATRASO_TOLERADO
+        # Tarefa que ainda não teve a vez dela **não está atrasada**. No dia em
+        # que o agendador mudou, as 19 entradas nasceram sem histórico e a tela
+        # marcou todas de uma vez — um mural de alarme falso ensina a ignorar o
+        # alarme, que é o oposto do que esta lista existe para fazer. Por isso a
+        # referência, quando não houve execução, é a idade da própria entrada.
+        referencia = ultima or tarefa.date_changed
+        atrasada = referencia is not None and (now - referencia) > _ATRASO_TOLERADO
         saida.append({
             "nome": tarefa.name,
             "task": tarefa.task,
             "ultima": ultima,
             "execucoes": tarefa.total_run_count,
-            # "Nunca rodou" e "rodou há três dias" são coisas diferentes, e as
-            # duas precisam gritar — a segunda é a que passou despercebida.
+            # "Nunca rodou" e "rodou há três dias" são coisas diferentes, e só a
+            # segunda é sintoma — a primeira pode ser uma tarefa semanal que
+            # entrou ontem.
             "nunca_rodou": ultima is None,
             "atrasada": atrasada,
         })

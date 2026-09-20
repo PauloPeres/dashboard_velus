@@ -52,8 +52,23 @@ class TestAgendamentos:
         assert linha["atrasada"] is True
         assert linha["nunca_rodou"] is False
 
-    def test_nunca_rodou_e_diferente_de_rodou_faz_tempo(self) -> None:
+    def test_tarefa_nova_que_ainda_nao_teve_a_vez_nao_e_atraso(self) -> None:
+        """No dia em que o agendador mudou, as 19 entradas nasceram sem
+        histórico e a tela marcou todas de uma vez. Mural de alarme falso ensina
+        a ignorar o alarme — o oposto do que esta lista existe para fazer."""
         self._tarefa("tarefa-nova", ultima=None)
+        linha = _agendamentos(timezone.now())[0]
+        assert linha["nunca_rodou"] is True
+        assert linha["atrasada"] is False
+
+    def test_entrada_antiga_que_nunca_rodou_e_atraso(self) -> None:
+        """Aqui sim: a entrada existe há dias e nada aconteceu."""
+        from django_celery_beat.models import PeriodicTask
+
+        tarefa = self._tarefa("tarefa-esquecida", ultima=None)
+        PeriodicTask.objects.filter(pk=tarefa.pk).update(
+            date_changed=timezone.now() - timedelta(days=5)
+        )
         linha = _agendamentos(timezone.now())[0]
         assert linha["nunca_rodou"] is True
         assert linha["atrasada"] is True
