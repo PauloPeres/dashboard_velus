@@ -22,7 +22,7 @@ from apps.network.application.escalation import (
 )
 from apps.network.infrastructure.models import OutageEvent
 from apps.shared.context import set_current_organization
-from apps.tenancy.models import Organization, User
+from apps.tenancy.models import Organization
 
 
 def _massiva(
