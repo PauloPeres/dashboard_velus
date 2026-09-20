@@ -49,6 +49,7 @@ THIRD_PARTY_APPS = [
     "simple_history",
     "django_structlog",
     "anymail",  # backend de e-mail via API HTTP (Mailgun)
+    "django_celery_beat",
 ]
 
 LOCAL_APPS: list[str] = [
@@ -308,6 +309,22 @@ CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000  # restart periódico p/ evitar memory 
 
 # Filas por tenant — populadas dinamicamente; fila default 'celery' sempre existe.
 CELERY_TASK_DEFAULT_QUEUE = "celery"
+
+# Agendador com estado no banco (django_celery_beat), e não no arquivo padrão.
+#
+# O arquivo vivia em /tmp dentro do container do beat: cada deploy zerava o
+# estado, e uma tarefa diária que deixasse de rodar não deixava rastro em lugar
+# nenhum. O sync do Opa! ficou **8 dias sem rodar** exatamente assim, e só
+# apareceu porque um painel novo mostrou um número estranho (19/09/2026).
+#
+# Com o estado no banco, `PeriodicTask.last_run_at` sobrevive ao rollout e vira
+# a resposta para "quando isto rodou pela última vez?" — que é a pergunta que
+# não se conseguia fazer.
+#
+# As entradas de `CELERY_BEAT_SCHEDULE` continuam sendo a fonte da verdade: o
+# `DatabaseScheduler` as sincroniza para o banco no start. Editar no admin uma
+# tarefa que também está aqui é caminho para confusão — mexa aqui.
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
 # Beat schedule — sync incremental pra TODAS as orgs ativas.
 # Task `dispatch_incremental_for_all_orgs` itera org-by-org e enfileira

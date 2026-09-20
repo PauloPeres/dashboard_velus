@@ -246,8 +246,51 @@ def status_page(request: HttpRequest) -> HttpResponse:
             "organization": org,
             "next_beat": next_beat,
             "mins_to_beat": mins_to_beat,
+            "agendamentos": _agendamentos(now),
         },
     )
+
+
+# Acima disto, um agendamento que devia ter rodado e não rodou deixa de ser
+# atraso e passa a ser problema. O número é generoso de propósito: o que se quer
+# pegar aqui é a tarefa que parou, não a que atrasou dez minutos.
+_ATRASO_TOLERADO = datetime.timedelta(hours=26)
+
+
+def _agendamentos(now: datetime.datetime) -> list[dict[str, Any]]:
+    """O que o beat tem agendado e quando cada coisa rodou pela última vez.
+
+    Existe por um caso concreto: o sync do Opa! **ficou oito dias sem rodar** e
+    ninguém viu, porque o estado do agendador vivia num arquivo efêmero dentro
+    do container e sumia a cada deploy (19/09/2026). Com o agendador no banco, o
+    `last_run_at` sobrevive — e esta lista é o lugar onde ele aparece.
+
+    A tabela nasce vazia até o beat subir e sincronizar as entradas de
+    `CELERY_BEAT_SCHEDULE`; vazia, ela diz isso em vez de fingir que não há
+    agendamento nenhum.
+    """
+    try:
+        from django_celery_beat.models import PeriodicTask
+    except ImportError:  # agendador antigo, sem estado no banco
+        return []
+
+    saida: list[dict[str, Any]] = []
+    for tarefa in PeriodicTask.objects.filter(enabled=True).order_by("name"):
+        if tarefa.name.startswith("celery."):
+            continue  # a entrada interna de limpeza do próprio celery
+        ultima = tarefa.last_run_at
+        atrasada = ultima is None or (now - ultima) > _ATRASO_TOLERADO
+        saida.append({
+            "nome": tarefa.name,
+            "task": tarefa.task,
+            "ultima": ultima,
+            "execucoes": tarefa.total_run_count,
+            # "Nunca rodou" e "rodou há três dias" são coisas diferentes, e as
+            # duas precisam gritar — a segunda é a que passou despercebida.
+            "nunca_rodou": ultima is None,
+            "atrasada": atrasada,
+        })
+    return saida
 
 
 @login_required

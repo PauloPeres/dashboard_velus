@@ -13,6 +13,12 @@ dependencies = [
     "django-environ>=0.11",  # complementa pydantic-settings p/ DATABASE_URL
     # Async / workers
     "celery[redis]>=5.4",
+    # Agendador do beat com estado no BANCO. O padrão guarda o estado num
+    # arquivo, que no nosso deploy vive em /tmp dentro do container e some a
+    # cada rollout — e um agendamento diário que deixa de rodar não aparece em
+    # lugar nenhum. Foi assim que o sync do Opa! ficou 8 dias sem rodar sem
+    # ninguém ver (19/09/2026).
+    "django-celery-beat>=2.7",
     "redis>=5.2",
     # Database
     "psycopg[binary]>=3.2",  # driver moderno (substitui psycopg2)
