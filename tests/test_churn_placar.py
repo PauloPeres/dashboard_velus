@@ -37,6 +37,11 @@ def _run(org: Organization, *, d0: date, sinais: list[dict]) -> ChurnBacktestRun
 
 
 @pytest.mark.django_db
+# `staticfiles/` é gitignored e não existe no runner do CI: sem este marker, o
+# whitenoise emite UserWarning ao montar o middleware e o pytest, com
+# `filterwarnings = ["error"]`, derruba qualquer teste que faça request.
+# Convenção do repo — passa local e quebra só no CI se faltar.
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
 class TestPlacarDoChurn:
     def test_sem_backtest_a_tela_nao_inventa(self, organization_a: Organization) -> None:
         set_current_organization(organization_a)
