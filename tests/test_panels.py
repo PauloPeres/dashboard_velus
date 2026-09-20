@@ -25,7 +25,6 @@ from django.test import Client
 from django.utils import timezone
 
 from apps.dashboards.panels import get_panel
-from apps.dashboards.panels.atendimento import tem_atendimento
 from apps.dashboards.panels.alerts import (
     NIVEL_ATENCAO,
     NIVEL_CRITICO,
@@ -34,6 +33,7 @@ from apps.dashboards.panels.alerts import (
     deve_interromper,
     nivel_da_massiva,
 )
+from apps.dashboards.panels.atendimento import tem_atendimento
 from apps.dashboards.panels.pairing import COOKIE_NOME, hash_segredo, novo_segredo
 from apps.network.infrastructure.models import OutageEvent
 from apps.shared.context import set_current_organization
@@ -491,7 +491,7 @@ class TestSlideDeAtendimento:
         assert dados["disponivel"] is False
         assert tem_atendimento({"atendimento": dados}) is False
 
-    def test_fila_conta_abertos_e_em_atendimento(
+    def test_fila_conta_abertos_e_em_atendimento_da_janela(
         self, organization_a: Organization
     ) -> None:
         from apps.atendimento.infrastructure.models import Atendimento
@@ -511,3 +511,44 @@ class TestSlideDeAtendimento:
         # A espera é a do mais antigo da fila, não a do fechado.
         assert 44 <= dados["espera_minutos"] <= 46
         assert dados["espera_alerta"] is True
+        assert dados["parados"] == 0
+
+    def test_conversa_aberta_ha_meses_nao_e_fila(
+        self, organization_a: Organization
+    ) -> None:
+        """O erro que a verificação em produção pegou: 826 "na fila" com 122
+        dias de espera eram 813 conversas que ninguém fechou na origem. Isso não
+        é gente esperando — é resíduo de cadastro, e numa TV vira paisagem."""
+        from apps.atendimento.infrastructure.models import Atendimento
+        from apps.dashboards.panels.atendimento import snapshot_atendimento
+
+        self._atendimento(
+            organization_a, minutos_atras=60 * 24 * 120, status=Atendimento.Status.IN_PROGRESS
+        )
+        self._atendimento(organization_a, minutos_atras=20, status=Atendimento.Status.OPEN)
+
+        dados = snapshot_atendimento(organization_a, timezone.now())
+        assert dados["na_fila"] == 1
+        assert dados["parados"] == 1
+        # A espera é a da fila real, não a da conversa de quatro meses atrás.
+        assert dados["espera_minutos"] <= 25
+
+    def test_sem_conversa_nova_o_slide_avisa_que_fala_da_coleta(
+        self, organization_a: Organization
+    ) -> None:
+        """"0 na fila" com o sync parado significa "não estamos enxergando",
+        não "está calmo" — a diferença que o painel existe para não apagar.
+
+        Medido em produção em 19/09/2026: o último sync do Opa tinha rodado 1,5
+        dia antes.
+        """
+        from apps.atendimento.infrastructure.models import Atendimento
+        from apps.dashboards.panels.atendimento import snapshot_atendimento
+
+        self._atendimento(
+            organization_a, minutos_atras=60 * 48, status=Atendimento.Status.CLOSED
+        )
+        dados = snapshot_atendimento(organization_a, timezone.now())
+        assert dados["na_fila"] == 0
+        assert dados["dado_velho"] is True
+        assert dados["idade_horas"] >= 47

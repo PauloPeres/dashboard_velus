@@ -380,6 +380,21 @@ volume contra uma hora de esperado) e a tela diz isso, senão toda hora começar
 sincronizado, porque três zeros numa TV se leem como "está tudo calmo", que é o
 oposto de "não sei".
 
+**O que a verificação em produção pegou, no mesmo dia.** A primeira versão
+contava todo atendimento com status aberto e mostrou *826 na fila, com 122 dias
+de espera*. Não era erro de conta: são **813 conversas em "em atendimento" que
+ninguém fechou na origem**, a mais antiga de 20/05. Numa TV, um número desses
+vira paisagem em uma semana.
+
+Agora são três coisas separadas porque são três coisas diferentes: **fila** (o
+que entrou nas últimas 24 h e segue aberto), **parados** (os mais antigos,
+contados à parte e nomeados pelo que são) e o **volume da hora**.
+
+E entrou o frescor do próprio atendimento: *medido em 19/09/2026*, o último sync
+do Opa tinha rodado **1,5 dia antes**, e "0 na fila" ali significava "não estamos
+enxergando", não "está calmo". Sem conversa nova há 6 h, o slide declara que os
+números falam da coleta e não da operação.
+
 Por que um slide de atendimento numa TV de rede: a fila é o sintoma que aparece
 **antes** de a massiva fechar escopo. Trinta pessoas ligando do mesmo bairro é
 evento de rede antes de ser evento de atendimento.
