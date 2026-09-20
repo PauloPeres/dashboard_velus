@@ -198,7 +198,38 @@ class OpaAtendimentoSource:
         *,
         since: datetime | None = None,
     ) -> Iterator[AtendimentoDTO]:
-        filter_ = self._build_since_filter(since) if since else None
+        """Atendimentos novos **e** os que foram encerrados desde `since`.
+
+        São **duas passagens**, e a segunda existe por causa de um defeito real:
+        o filtro incremental é por *data de abertura*, então uma conversa aberta
+        em maio e fechada em setembro **nunca voltava na listagem** — o status
+        dela congelava como "em atendimento" no nosso banco para sempre.
+
+        *Medido em produção (19/09/2026):* 813 conversas apareciam abertas aqui,
+        a mais antiga de 20/05. Conferidas uma a uma contra a API, **10 de 10
+        estavam CLOSED no Opa**. Não era a operação deixando conversa aberta:
+        era leitura nossa.
+
+        A segunda passagem usa `dataInicialEncerramento`, que a API suporta, e
+        pega exatamente as que fecharam na janela. A deduplicação por id evita
+        gravar duas vezes quem abriu e fechou dentro do mesmo período.
+        """
+        if since is None:
+            yield from self._paginar(None)
+            return
+
+        vistos: set[str] = set()
+        for filtro in (
+            self._build_since_filter(since),
+            self._build_encerramento_filter(since),
+        ):
+            for dto in self._paginar(filtro):
+                if dto.external_id in vistos:
+                    continue
+                vistos.add(dto.external_id)
+                yield dto
+
+    def _paginar(self, filter_: dict[str, str] | None) -> Iterator[AtendimentoDTO]:
         with self._client_factory() as client:
             skipped = 0
             for raw in client.paginate_opa("atendimento", filter=filter_):
@@ -378,5 +409,17 @@ class OpaAtendimentoSource:
 
     @staticmethod
     def _build_since_filter(since: datetime) -> dict[str, str]:
+        """Conversas ABERTAS a partir de `since` — o incremental de sempre."""
         sp = since.astimezone(_SP_TZ)
         return {"dataInicialAbertura": sp.strftime("%Y-%m-%d")}
+
+    @staticmethod
+    def _build_encerramento_filter(since: datetime) -> dict[str, str]:
+        """Conversas ENCERRADAS a partir de `since`, tenham aberto quando for.
+
+        É esta passagem que traz o fechamento de uma conversa antiga. Sem ela, o
+        status dela fica congelado como aberto no nosso banco — e foi o que
+        aconteceu com 813 delas até 19/09/2026.
+        """
+        sp = since.astimezone(_SP_TZ)
+        return {"dataInicialEncerramento": sp.strftime("%Y-%m-%d")}

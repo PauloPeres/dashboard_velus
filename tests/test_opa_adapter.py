@@ -415,3 +415,78 @@ class TestOpaListAtendimentos:
         # destinatario=usuarios => enviada pelo cliente.
         assert msgs[0].direction == "AGENT"
         assert msgs[1].direction == "CLIENT"
+
+
+# =============================================================================
+# O incremental que perdia o fechamento
+# =============================================================================
+class TestIncrementalPegaEncerramentos:
+    """Conversa aberta em maio e fechada em setembro tem que voltar na listagem.
+
+    O filtro incremental era só por data de abertura, então ela nunca voltava —
+    e o status ficava congelado como "em atendimento" no nosso banco. *Medido em
+    produção em 19/09/2026:* 813 conversas assim, e 10 de 10 conferidas contra a
+    API estavam CLOSED lá.
+    """
+
+    def test_duas_passagens_abertura_e_encerramento(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from apps.integrations.opa.atendimento import OpaAtendimentoSource
+
+        chamadas: list[dict] = []
+
+        def handler(request: Any) -> Response:
+            corpo = json.loads(request.content.decode() or "{}")
+            chamadas.append(corpo.get("filter") or {})
+            if "dataInicialEncerramento" in (corpo.get("filter") or {}):
+                registros = [_sample_atendimento(_id="antigo", status="F")]
+            else:
+                registros = [_sample_atendimento(_id="novo", status="A")]
+            return Response(200, json={"data": registros, "total": len(registros)})
+
+        respx_mock.get(f"{API_URL}/atendimento").mock(side_effect=handler)
+
+        fonte = OpaAtendimentoSource(base_url=BASE_URL, token="t")
+        dtos = list(fonte.list_atendimentos(since=datetime(2026, 9, 1, tzinfo=UTC)))
+
+        filtros = [set(c) for c in chamadas]
+        assert {"dataInicialAbertura"} in filtros
+        assert {"dataInicialEncerramento"} in filtros
+        # A conversa antiga, fechada depois, volta na segunda passagem.
+        ids = {d.external_id for d in dtos}
+        assert ids == {"novo", "antigo"}
+
+    def test_nao_grava_duas_vezes_quem_abriu_e_fechou_na_janela(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from apps.integrations.opa.atendimento import OpaAtendimentoSource
+
+        respx_mock.get(f"{API_URL}/atendimento").mock(
+            return_value=Response(
+                200,
+                json={"data": [_sample_atendimento(_id="mesmo", status="F")], "total": 1},
+            )
+        )
+        fonte = OpaAtendimentoSource(base_url=BASE_URL, token="t")
+        dtos = list(fonte.list_atendimentos(since=datetime(2026, 9, 1, tzinfo=UTC)))
+        assert len(dtos) == 1
+
+    def test_bootstrap_sem_since_continua_uma_passagem_so(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        from apps.integrations.opa.atendimento import OpaAtendimentoSource
+
+        chamadas: list[Any] = []
+
+        def handler(request: Any) -> Response:
+            chamadas.append(json.loads(request.content.decode() or "{}"))
+            return Response(200, json={"data": [], "total": 0})
+
+        respx_mock.get(f"{API_URL}/atendimento").mock(side_effect=handler)
+        list(OpaAtendimentoSource(base_url=BASE_URL, token="t").list_atendimentos())
+        assert len(chamadas) == 1
