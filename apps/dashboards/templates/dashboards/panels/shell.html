@@ -38,6 +38,21 @@ Três decisões de tela (§2, §3 e §5 do docs/massivas-painel-tv-plano.md):
        Barra fixa — os quatro indicadores que valem em qualquer slide.
        =================================================================== -->
   <header class="flex items-center gap-8 px-8 py-4 bg-slate-900/80 border-b border-slate-700">
+    {% comment %}
+    Identidade no topo (pedido do operador, 21/09/2026). Duas informações, e
+    nenhuma delas é enfeite: quem está na sala precisa saber QUE TELA é essa —
+    uma TV sem título vira "aquele monitor" e o visitante não sabe se está
+    vendo a rede, o financeiro ou um print antigo.
+
+    É texto, não imagem: não há arquivo de logo no projeto. Quando houver, ele
+    entra aqui no lugar da palavra, com o mesmo espaço.
+    {% endcomment %}
+    <div class="pr-8 border-r border-slate-700">
+      <p class="text-2xl font-black tracking-[0.25em] text-slate-100 leading-none">VELUS</p>
+      <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400 mt-1.5">
+        {{ panel.title }} · {{ panel.subtitle }}
+      </p>
+    </div>
     <div>
       <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400">Clientes fora</p>
       <p id="barra-fora" class="text-4xl font-bold tabular-nums text-red-400">

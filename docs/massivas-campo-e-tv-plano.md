@@ -182,3 +182,33 @@ sem leitura fica fora dos dois lados e a contagem aparece escrita ao lado do
 filtro. O selo na célula também diz **de qual leitura** saiu o julgamento: -27
 dBm na base (varredura das ~06:30, o cliente já estava assim) e -27 dBm no
 retorno (saiu assim deste reparo) mandam o técnico a lugares diferentes.
+
+## T9 — O mapa do dia na TV, e a TV dizendo que TV é
+
+Dois pedidos do Paulo em 21/09/2026, no mesmo minuto.
+
+**"Adicionar o mapa no NOC".** A TV já tinha mapa desde o T5, mas só dentro da
+página de uma massiva aberta — com a rede calma, nenhum. Perguntado entre um
+slide de mapa geral (que ficaria vazio no dia calmo, o defeito que o T4 acabou
+de corrigir) e um mapa das últimas 24 h, escolheu o segundo.
+
+*A medição decidiu o desenho.* Em produção, nas últimas 24 h: **3.059 quedas,
+3.026 já restauradas**. Três mil pontos verdes numa parede são um borrão, e um
+borrão ensina a sala a não olhar. Então a unidade do mapa do dia **não é o
+cliente, é a caixa**: um ponto por CTO, tamanho conforme quantas quedas teve,
+vermelho onde ainda há gente fora e âmbar onde o dia passou. O tamanho cresce
+pela raiz quadrada, porque a caixa de 510 quedas e a de 2 estão na mesma tela e
+em escala linear a segunda viraria um pixel.
+
+Caixa com **uma queda só fica de fora** — queda isolada em 24 h é o ruído normal
+de uma operação com milhares de clientes, e foi por isso que a queda avulsa já
+tinha saído do mapa da aba. Mas não some da contagem: o rodapé do slide declara
+quantas quedas houve, em quantas caixas, quantas ficaram abaixo do mínimo,
+quantas não têm caixa no cadastro e quantas caixas não têm coordenada. O mapa é
+menor que o dia, e a tela diz isso.
+
+**"Colocar o logo no topo — ou pelo menos escrever VELUS e o que esse painel
+significa".** Não há arquivo de logo no projeto, então é texto: "VELUS" e,
+embaixo, o nome e o subtítulo do painel. Quando houver imagem, ela entra no
+mesmo lugar. Não é enfeite: uma TV sem título vira "aquele monitor", e quem
+entra na sala não sabe se está vendo a rede, o financeiro ou um print de ontem.

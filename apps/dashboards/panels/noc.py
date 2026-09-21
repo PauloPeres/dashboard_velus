@@ -16,6 +16,7 @@ from typing import Any
 
 from apps.dashboards.massivas import (
     base_de_clientes,
+    compute_mapa_do_dia,
     compute_massivas_agora,
     poll_snapshot,
 )
@@ -89,6 +90,10 @@ def _snapshot(org: Any, now: datetime) -> dict[str, Any]:
         # O que a parede mostra quando a rede está calma: um número medido da
         # operação e a pergunta que ele levanta. Sorteado a cada carregamento.
         "insight": sortear_insight(coletar_insights(org, now)),
+        # O mapa do dia (21/09/2026): a TV só tinha mapa dentro da página de uma
+        # massiva aberta, então com a rede calma não havia mapa nenhum. Este
+        # sempre tem o que mostrar — é onde a rede doeu nas últimas 24 h.
+        "mapa_dia": compute_mapa_do_dia(org, now=now),
         "timeline": dados["timeline"],
         "mapa": dados["mapa"],
         "mapa_quedas_avulsas": dados["mapa_quedas_avulsas"],
@@ -133,6 +138,15 @@ def _sem_massiva_e_com_insight(snapshot: dict[str, Any]) -> bool:
     return not snapshot.get("massivas") and bool(snapshot.get("insight"))
 
 
+def _tem_mapa_do_dia(snapshot: dict[str, Any]) -> bool:
+    """Sem caixa no mapa, o slide sai da rotação (T4).
+
+    Acontece em base pequena ou em dia realmente calmo — e um mapa vazio numa
+    parede ensina a sala a ignorar a TV.
+    """
+    return bool((snapshot.get("mapa_dia") or {}).get("pontos"))
+
+
 def _tem_timeline(snapshot: dict[str, Any]) -> bool:
     """A linha do tempo só entra com barra para mostrar (T4).
 
@@ -173,6 +187,16 @@ PANEL = register(
                 template="dashboards/panels/slides/_insight.html",
                 seconds=18,
                 only_when=_sem_massiva_e_com_insight,
+            ),
+            # Onde a rede doeu nas últimas 24 h, por caixa. Pedido do operador
+            # em 21/09/2026, depois de notar que com a rede calma a TV não
+            # mostrava mapa nenhum.
+            SlideSpec(
+                key="mapa_dia",
+                title="Onde a rede doeu hoje",
+                template="dashboards/panels/slides/_mapa_dia.html",
+                seconds=20,
+                only_when=_tem_mapa_do_dia,
             ),
             SlideSpec(
                 key="ultimas24h",

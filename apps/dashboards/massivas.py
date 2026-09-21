@@ -1622,6 +1622,118 @@ def compute_timeline(org: Any, *, now: datetime) -> list[dict[str, Any]]:
     ]
 
 
+# =============================================================================
+# Mapa do dia — onde a rede doeu nas últimas 24 h (painel de TV)
+# =============================================================================
+# Pedido do operador em 21/09/2026: "adicionar o mapa no NOC". A TV já tinha o
+# mapa de cada massiva aberta, mas com a rede calma não aparecia mapa nenhum.
+#
+# A medição decidiu o desenho. Em produção, nas últimas 24 h: **3.059 quedas,
+# das quais 3.026 já haviam voltado**. Três mil pontos verdes numa parede não
+# são um mapa, são um borrão — e um borrão ensina a sala a não olhar.
+#
+# Então a unidade aqui não é o cliente, é a **caixa**: um ponto por CTO, do
+# tamanho de quantas quedas ela teve no dia. É a pergunta que a parede responde
+# bem de longe — *onde a rede doeu hoje?* — e não "quem caiu", que é assunto da
+# aba, com nome e telefone.
+
+# Janela do mapa do dia. Vinte e quatro horas cobrem o turno inteiro e a noite
+# anterior, que é quando a maior parte dos rompimentos aparece.
+MAPA_DIA_HORAS = 24
+
+# Quedas mínimas na caixa para ela entrar no mapa. Uma queda isolada em 24 h é o
+# ruído normal de uma operação com milhares de clientes — desenhá-la encheria o
+# mapa de pontos sem pergunta (foi por isso que a queda avulsa saiu do mapa da
+# aba, §R4). Duas ou mais já é "aconteceu alguma coisa ali".
+MAPA_DIA_MINIMO_QUEDAS = 2
+
+
+def compute_mapa_do_dia(
+    org: Any,
+    *,
+    now: datetime,
+    horas: int = MAPA_DIA_HORAS,
+    minimo: int = MAPA_DIA_MINIMO_QUEDAS,
+) -> dict[str, Any]:
+    """Um ponto por caixa, do tamanho do estrago do dia.
+
+    Devolve também o que ficou de fora — quedas sem caixa no cadastro, caixas
+    sem coordenada e caixas abaixo do mínimo. O mapa é menor que o dia, e a tela
+    diz isso em vez de deixar a sala achar que viu tudo.
+    """
+    desde = now - timedelta(hours=horas)
+    quedas = list(
+        ConnectionDropEvent.objects.filter(
+            organization=org, dropped_at__gte=desde
+        ).only("cto_external_id", "restored_at", "dropped_at")
+    )
+    if not quedas:
+        return {
+            "pontos": [], "quedas": 0, "horas": horas, "minimo": minimo,
+            "sem_cto": 0, "caixas_com_queda": 0, "caixas_no_mapa": 0,
+            "caixas_sem_coordenada": 0, "ainda_fora": 0,
+        }
+
+    por_cto: dict[str, dict[str, Any]] = {}
+    sem_cto = 0
+    for q in quedas:
+        if not q.cto_external_id:
+            sem_cto += 1
+            continue
+        alvo = por_cto.setdefault(
+            q.cto_external_id, {"quedas": 0, "fora": 0, "ultima": q.dropped_at}
+        )
+        alvo["quedas"] += 1
+        if q.restored_at is None:
+            alvo["fora"] += 1
+        alvo["ultima"] = max(alvo["ultima"], q.dropped_at)
+
+    elegiveis = {k: v for k, v in por_cto.items() if v["quedas"] >= minimo}
+    elementos = {
+        e.external_id: e
+        for e in NetworkElement.objects.filter(
+            organization=org,
+            kind=NetworkElement.Kind.CTO,
+            external_id__in=list(elegiveis),
+            latitude__isnull=False,
+            longitude__isnull=False,
+        ).only("external_id", "name", "latitude", "longitude")
+    }
+
+    pontos = []
+    for external_id, dados in elegiveis.items():
+        elemento = elementos.get(external_id)
+        if elemento is None:
+            continue
+        nome = elemento.name or external_id
+        pontos.append({
+            "lat": float(elemento.latitude),
+            "lon": float(elemento.longitude),
+            "quedas": dados["quedas"],
+            "fora": dados["fora"],
+            "label": (
+                f"{nome} · {dados['quedas']} queda"
+                f"{'s' if dados['quedas'] != 1 else ''} em {horas}h"
+                + (f" · {dados['fora']} ainda fora" if dados["fora"] else " · todos voltaram")
+            ),
+        })
+    # Maior primeiro: o Plotly desenha na ordem, e a caixa que mais doeu não
+    # pode ficar por baixo de uma de duas quedas.
+    pontos.sort(key=lambda p: -p["quedas"])
+
+    return {
+        "pontos": pontos,
+        "quedas": len(quedas),
+        "horas": horas,
+        "minimo": minimo,
+        "sem_cto": sem_cto,
+        "caixas_com_queda": len(por_cto),
+        "caixas_no_mapa": len(pontos),
+        "caixas_sem_coordenada": len(elegiveis) - len(pontos),
+        "ainda_fora": sum(p["fora"] for p in pontos),
+    }
+
+
 def _floor_bucket(momento: datetime) -> datetime:
     minuto = (momento.minute // BUCKET_MINUTES) * BUCKET_MINUTES
     return momento.replace(minute=minuto, second=0, microsecond=0)

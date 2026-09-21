@@ -477,6 +477,9 @@ def panel_view(request: HttpRequest, panel_key: str) -> HttpResponse:
         if linha.get("mapa"):
             linha["mapa_chart_json"] = charts.outage_map(linha["mapa"])
 
+    if dados.get("mapa_dia", {}).get("pontos"):
+        dados["mapa_dia"]["chart_json"] = charts.day_heat_map(dados["mapa_dia"])
+
     paginas = panel.paginas(dados)
 
     return render(

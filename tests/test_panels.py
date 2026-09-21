@@ -725,3 +725,176 @@ class TestAcaoPeloControle:
         assert resp.status_code == 404
         alheia.refresh_from_db()
         assert alheia.acknowledged_at is None
+
+
+# ---------------------------------------------------------------------------
+# Mapa do dia (21/09/2026)
+# ---------------------------------------------------------------------------
+@pytest.mark.django_db
+class TestMapaDoDia:
+    """A TV só tinha mapa dentro de uma massiva aberta; com a rede calma, nenhum.
+
+    O desenho saiu de uma medição em produção: 24 h são ~3.000 quedas, 99% já
+    restauradas. Três mil pontos verdes não são um mapa. Então a unidade aqui é
+    a **caixa**, com tamanho conforme o estrago — e a caixa de uma queda só fica
+    de fora, porque uma queda isolada em 24 h é o ruído normal da operação.
+    """
+
+    def _cto(self, org: Organization, external_id: str) -> Any:
+        from apps.network.infrastructure.models import NetworkElement
+
+        return NetworkElement.objects.create(
+            organization=org,
+            source_type="IXC",
+            kind=NetworkElement.Kind.CTO,
+            external_id=external_id,
+            name=f"CTO {external_id}",
+            latitude=-23.5,
+            longitude=-47.4,
+        )
+
+    def _queda(
+        self,
+        org: Organization,
+        *,
+        login: str,
+        cto: str,
+        horas_atras: float = 2,
+        restaurada: bool = True,
+    ) -> Any:
+        from apps.network.infrastructure.models import Connection, ConnectionDropEvent
+
+        agora = timezone.now()
+        conn = Connection.objects.create(
+            organization=org,
+            source_type="IXC",
+            external_id=f"conn-{login}",
+            customer_external_id=f"cust-{login}",
+            login=login,
+            status=Connection.Status.OFFLINE,
+        )
+        return ConnectionDropEvent.objects.create(
+            organization=org,
+            connection=conn,
+            login=login,
+            dropped_at=agora - timedelta(hours=horas_atras),
+            restored_at=agora - timedelta(hours=horas_atras - 1) if restaurada else None,
+            cto_external_id=cto,
+        )
+
+    def test_agrupa_por_caixa_e_conta_quem_segue_fora(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.dashboards.massivas import compute_mapa_do_dia
+
+        set_current_organization(organization_a)
+        self._cto(organization_a, "CTO-1")
+        self._queda(organization_a, login="a1", cto="CTO-1")
+        self._queda(organization_a, login="a2", cto="CTO-1", restaurada=False)
+
+        mapa = compute_mapa_do_dia(organization_a, now=timezone.now())
+        assert len(mapa["pontos"]) == 1
+        ponto = mapa["pontos"][0]
+        assert ponto["quedas"] == 2
+        assert ponto["fora"] == 1
+        assert "2 quedas em 24h" in ponto["label"]
+        assert "1 ainda fora" in ponto["label"]
+
+    def test_caixa_de_uma_queda_so_nao_entra(
+        self, organization_a: Organization
+    ) -> None:
+        """Queda isolada em 24 h é o ruído normal de milhares de clientes."""
+        from apps.dashboards.massivas import compute_mapa_do_dia
+
+        set_current_organization(organization_a)
+        self._cto(organization_a, "CTO-1")
+        self._queda(organization_a, login="sozinho", cto="CTO-1")
+
+        mapa = compute_mapa_do_dia(organization_a, now=timezone.now())
+        assert mapa["pontos"] == []
+        # Mas ela não some da contagem: o slide declara o que ficou de fora.
+        assert mapa["caixas_com_queda"] == 1
+        assert mapa["quedas"] == 1
+
+    def test_queda_de_ontem_fica_fora_da_janela(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.dashboards.massivas import compute_mapa_do_dia
+
+        set_current_organization(organization_a)
+        self._cto(organization_a, "CTO-1")
+        self._queda(organization_a, login="velha1", cto="CTO-1", horas_atras=30)
+        self._queda(organization_a, login="velha2", cto="CTO-1", horas_atras=28)
+
+        mapa = compute_mapa_do_dia(organization_a, now=timezone.now())
+        assert mapa["quedas"] == 0
+        assert mapa["pontos"] == []
+
+    def test_queda_sem_caixa_e_contada_a_parte(
+        self, organization_a: Organization
+    ) -> None:
+        """O mapa é menor que o dia, e a tela diz isso."""
+        from apps.dashboards.massivas import compute_mapa_do_dia
+
+        set_current_organization(organization_a)
+        self._queda(organization_a, login="sem-cto", cto="")
+
+        mapa = compute_mapa_do_dia(organization_a, now=timezone.now())
+        assert mapa["sem_cto"] == 1
+        assert mapa["pontos"] == []
+
+    def test_caixa_sem_coordenada_nao_vira_ponto_e_e_declarada(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.dashboards.massivas import compute_mapa_do_dia
+
+        set_current_organization(organization_a)
+        # Sem elemento cadastrado: não há onde desenhar o ponto.
+        self._queda(organization_a, login="b1", cto="CTO-SEM-MAPA")
+        self._queda(organization_a, login="b2", cto="CTO-SEM-MAPA")
+
+        mapa = compute_mapa_do_dia(organization_a, now=timezone.now())
+        assert mapa["pontos"] == []
+        assert mapa["caixas_sem_coordenada"] == 1
+
+    def test_o_tamanho_do_circulo_cresce_com_as_quedas(self) -> None:
+        """Raiz quadrada: a caixa de 2 quedas e a de 500 na mesma tela."""
+        import json
+
+        from apps.dashboards.charts import day_heat_map
+
+        dados = {
+            "pontos": [
+                {"lat": -23.5, "lon": -47.4, "quedas": 100, "fora": 3, "label": "grande"},
+                {"lat": -23.6, "lon": -47.5, "quedas": 2, "fora": 0, "label": "pequena"},
+            ]
+        }
+        trace = json.loads(day_heat_map(dados))["data"][0]
+        grande, pequena = trace["marker"]["size"]
+        assert grande > pequena
+        # A pequena continua visível a quatro metros — é o piso do tamanho.
+        assert pequena >= 10
+        # Vermelho onde ainda há gente fora, âmbar onde o dia passou.
+        assert trace["marker"]["color"] == ["#ef4444", "#f59e0b"]
+
+    def test_a_tv_diz_de_quem_e_e_que_tela_e(
+        self, organization_a: Organization
+    ) -> None:
+        """Identidade no topo (pedido do operador).
+
+        Uma TV sem título vira "aquele monitor": quem entra na sala não sabe se
+        está vendo a rede, o financeiro ou um print esquecido de ontem.
+        """
+        token = _tv_pareada(organization_a)
+        tv = Client()
+        tv.cookies[COOKIE_NOME] = token
+        html = tv.get(PANEL_URL).content.decode()
+        assert "VELUS" in html
+        assert "Quedas e massivas em tempo real" in html
+
+    def test_slide_sai_da_rotacao_sem_caixa_no_mapa(self) -> None:
+        """Mapa vazio na parede ensina a sala a ignorar a TV (T4)."""
+        from apps.dashboards.panels.noc import _tem_mapa_do_dia
+
+        assert _tem_mapa_do_dia({"mapa_dia": {"pontos": []}}) is False
+        assert _tem_mapa_do_dia({"mapa_dia": {"pontos": [{"lat": 1}]}}) is True

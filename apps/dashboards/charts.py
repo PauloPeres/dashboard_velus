@@ -2473,6 +2473,11 @@ _GRUPOS_OCULTOS = frozenset({"pop"})
 # quadrado.
 _MAPA_LARGURA_PX = 1000
 _MAPA_ALTURA_PX = 460
+# Tamanho dos círculos do mapa do dia (TV): o menor ainda tem que ser visto a
+# quatro metros, e o maior não pode cobrir o bairro.
+_HEAT_MIN_PX = 10.0
+_HEAT_MAX_PX = 48.0
+
 _MAPA_ZOOM_MAX = 16.0
 _MAPA_ZOOM_MIN = 3.0
 # O MapLibre (que é o motor por baixo do `scattermap`) serve tile de 512 px, não
@@ -2725,6 +2730,57 @@ def outage_map(mapa: dict[str, Any]) -> str:
             # mapa, repetindo o que as caixas de filtro acima já dizem — e
             # agora as caixas fazem mais, porque ligam e desligam a camada em
             # vez de só nomeá-la.
+            "showlegend": False,
+            "font": {"family": "system-ui, sans-serif", "size": 12},
+        },
+    )
+    return _to_json(fig)
+
+
+def day_heat_map(dados: dict[str, Any]) -> str:
+    """Mapa do dia da TV: um ponto por caixa, do tamanho do estrago.
+
+    Difere do `outage_map` de propósito. Lá a unidade é o cliente, porque a
+    pergunta é "quem caiu". Aqui é a caixa, porque a pergunta da parede é "onde
+    a rede doeu hoje" — e porque, medido em produção, 24 h de quedas são 3 mil
+    pontos, dos quais 99% já voltaram. Três mil pontos verdes não são um mapa.
+
+    O tamanho carrega o número e a cor carrega o agora: vermelho onde ainda há
+    gente fora, âmbar onde o dia doeu mas já passou.
+    """
+    pontos = dados.get("pontos") or []
+    if not pontos:
+        # Sem ponto o mapa ainda desenha — mas o slide nem entra na rotação
+        # (`only_when`), então isto é só a rede de segurança.
+        centro, zoom = {"lat": -15.8, "lon": -47.9}, 3.0
+    else:
+        centro, zoom = _map_enquadramento(pontos)
+
+    maior = max((p["quedas"] for p in pontos), default=1)
+    # Raiz quadrada, não proporção direta: a caixa com 510 quedas e a com 2
+    # estão na mesma tela, e em escala linear a segunda viraria um pixel. Com a
+    # raiz, as duas continuam legíveis e a ordem se mantém.
+    tamanhos = [
+        _HEAT_MIN_PX + (_HEAT_MAX_PX - _HEAT_MIN_PX) * math.sqrt(p["quedas"] / maior)
+        for p in pontos
+    ]
+    cores = ["#ef4444" if p["fora"] else "#f59e0b" for p in pontos]
+
+    fig = go.Figure(
+        data=[
+            go.Scattermap(
+                lat=[p["lat"] for p in pontos],
+                lon=[p["lon"] for p in pontos],
+                mode="markers",
+                marker={"size": tamanhos, "color": cores, "opacity": 0.75},
+                hovertext=[p["label"] for p in pontos],
+                hovertemplate="<b>%{hovertext}</b><extra></extra>",
+                name="caixas",
+            )
+        ],
+        layout={
+            "map": {"style": _BASEMAP_STYLE, "center": centro, "zoom": zoom},
+            "margin": {"l": 0, "r": 0, "t": 0, "b": 0},
             "showlegend": False,
             "font": {"family": "system-ui, sans-serif", "size": 12},
         },

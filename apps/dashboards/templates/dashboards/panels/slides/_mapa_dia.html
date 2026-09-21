@@ -1,0 +1,67 @@
+{% load humanize %}
+{% comment %}
+Mapa do dia (21/09/2026). A TV já tinha mapa, mas só dentro da página de uma
+massiva aberta — com a rede calma, nenhum. Este sempre tem o que mostrar.
+
+A unidade é a CAIXA, não o cliente. Medido em produção: 24 h de quedas são
+~3.000 pontos, dos quais 99% já voltaram; três mil pontos verdes numa parede
+são um borrão. Um ponto por CTO, do tamanho do estrago, responde de longe a
+pergunta que interessa — onde a rede doeu hoje.
+{% endcomment %}
+{% with d=snapshot.mapa_dia %}
+<div class="h-full flex flex-col">
+  <div class="flex items-baseline gap-6 mb-3">
+    <p class="text-2xl text-slate-100">
+      <span class="font-black tabular-nums">{{ d.caixas_no_mapa|intcomma }}</span>
+      caixa{{ d.caixas_no_mapa|pluralize }} com queda nas últimas {{ d.horas }}h
+    </p>
+    {% if d.ainda_fora %}
+    <p class="text-xl text-red-400 tabular-nums">{{ d.ainda_fora|intcomma }} ainda fora</p>
+    {% else %}
+    <p class="text-xl text-emerald-400">todos voltaram</p>
+    {% endif %}
+    <p class="text-sm text-slate-500 ml-auto">
+      {% comment %}
+      O recorte fica escrito na tela: o mapa é menor que o dia, e sem isso a
+      sala lê "só deu problema aqui" onde o certo é "só isto foi desenhado".
+      {% endcomment %}
+      vermelho: ainda tem gente fora · âmbar: já voltou ·
+      tamanho: quedas no dia · mínimo {{ d.minimo }} queda{{ d.minimo|pluralize }} por caixa
+    </p>
+  </div>
+
+  <div class="flex-1 min-h-0 rounded-xl overflow-hidden bg-slate-900/40">
+    <div id="mapa-dia-{{ pagina.dom_id }}" class="w-full h-full"></div>
+    {{ d.chart_json|json_script:"mapa-dia-dados-"|add:pagina.dom_id }}
+  </div>
+
+  <p class="text-xs text-slate-600 mt-2">
+    {{ d.quedas|intcomma }} queda{{ d.quedas|pluralize }} em {{ d.caixas_com_queda|intcomma }} caixas;
+    o mapa mostra as que tiveram {{ d.minimo }} ou mais.
+    {% if d.sem_cto %}{{ d.sem_cto|intcomma }} sem caixa no cadastro.{% endif %}
+    {% if d.caixas_sem_coordenada %}{{ d.caixas_sem_coordenada|intcomma }} caixa{{ d.caixas_sem_coordenada|pluralize }} sem coordenada.{% endif %}
+  </p>
+</div>
+{% endwith %}
+
+<script>
+(function () {
+  var id = "{{ pagina.dom_id }}";
+  var el = document.getElementById("mapa-dia-" + id);
+  var node = document.getElementById("mapa-dia-dados-" + id);
+  if (!el || !node || !node.textContent) { return; }
+  try {
+    var raw = JSON.parse(node.textContent);
+    var parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
+    var layout = parsed.layout || {};
+    layout.paper_bgcolor = "rgba(0,0,0,0)";
+    layout.font = { color: "#cbd5e1", size: 13 };
+    Plotly.newPlot(el, parsed.data || [], layout, { displayModeBar: false, responsive: true });
+    // O Plotly mede errado com o container escondido — e numa TV ninguém
+    // redimensiona a janela para consertar.
+    window.addEventListener("painel:slide", function (ev) {
+      if (ev.detail.key === id) { Plotly.Plots.resize(el); }
+    });
+  } catch (e) { /* melhor página sem mapa que painel quebrado */ }
+})();
+</script>
