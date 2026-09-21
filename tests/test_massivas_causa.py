@@ -424,6 +424,7 @@ class TestDispensarCausa:
         """O corte é uma data, não "tudo": o que veio depois ainda tem dono e
         memória."""
         from datetime import timedelta as _td
+
         from django.core.management import call_command
 
         _outage(organization_a, inicio_min_atras=60)
