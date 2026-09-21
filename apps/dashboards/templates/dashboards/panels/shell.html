@@ -23,6 +23,8 @@ Três decisões de tela (§2, §3 e §5 do docs/massivas-painel-tv-plano.md):
   <script src="/static/vendor/plotly-2.35.2.min.js"></script>
   <style>
     /* A TV não tem mouse: cursor escondido, nada rola, nada seleciona. */
+    /* Cursor escondido porque a TV não tem mouse; o clique/toque para avançar
+       (T4) continua funcionando sem ele. */
     html, body { height: 100%; overflow: hidden; cursor: none; background: #0b1220; }
     .slide { display: none; }
     .slide.ativo { display: flex; }
@@ -101,12 +103,18 @@ Três decisões de tela (§2, §3 e §5 do docs/massivas-painel-tv-plano.md):
   {% endif %}
 
   <main class="flex-1 relative">
-    {% for slide in slides %}
+    {% comment %}
+    Uma seção por PÁGINA, não por slide: um slide repetido (uma massiva por
+    página, T5) gera várias. O `dom_id` distingue os gráficos de cada uma.
+    {% endcomment %}
+    {% for pagina in paginas %}
     <section class="slide absolute inset-0 flex-col px-10 py-8 {% if forloop.first %}ativo{% endif %}"
-             data-slide="{{ slide.key }}" data-seconds="{{ slide.seconds }}">
-      <h2 class="text-[11px] uppercase tracking-[0.3em] text-slate-500 mb-4">{{ slide.title }}</h2>
+             data-slide="{{ pagina.dom_id }}" data-seconds="{{ pagina.spec.seconds }}">
+      <h2 class="text-[11px] uppercase tracking-[0.3em] text-slate-500 mb-4">
+        {{ pagina.spec.title }}{% if pagina.item %} · {{ forloop.counter }}{% endif %}
+      </h2>
       <div class="flex-1 min-h-0">
-        {% include slide.template %}
+        {% include pagina.spec.template %}
       </div>
     </section>
     {% endfor %}
@@ -116,8 +124,8 @@ Três decisões de tela (§2, §3 e §5 do docs/massivas-painel-tv-plano.md):
   <footer class="flex items-center gap-3 px-8 py-3 bg-slate-900/80 border-t border-slate-700">
     <span class="text-[11px] uppercase tracking-[0.2em] text-slate-500">{{ panel.title }}</span>
     <div class="flex gap-1.5 ml-2">
-      {% for slide in slides %}
-      <span class="dot w-2 h-2 rounded-full bg-slate-600" data-dot="{{ slide.key }}"></span>
+      {% for pagina in paginas %}
+      <span class="dot w-2 h-2 rounded-full bg-slate-600" data-dot="{{ pagina.dom_id }}"></span>
       {% endfor %}
     </div>
     <span class="ml-auto text-[11px] text-slate-500">{{ panel.subtitle }}</span>
@@ -165,6 +173,19 @@ Três decisões de tela (§2, §3 e §5 do docs/massivas-painel-tv-plano.md):
   }
 
   if (slides.length) { mostrar(0); agendar(); }
+
+  // Tocar/clicar avança (T4). Quem está de pé na frente da TV quer passar para
+  // a próxima página, não esperar 20 s — e o relógio recomeça a contar, senão o
+  // slide avançado trocaria sozinho logo em seguida.
+  document.addEventListener("click", function () { proximo(); });
+  document.addEventListener("keydown", function (ev) {
+    // Seta e espaço: controle remoto de TV manda seta, e teclado de bancada
+    // manda espaço.
+    if (ev.key === "ArrowRight" || ev.key === " " || ev.key === "Enter") {
+      ev.preventDefault();
+      proximo();
+    }
+  });
 
   // --- takeover ------------------------------------------------------------
   // Um evento, um alerta: a massiva que já tomou a tela não toma de novo, nem

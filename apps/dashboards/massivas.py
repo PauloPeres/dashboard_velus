@@ -436,6 +436,11 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
         "mapa_voltaram": sum(1 for q in quedas_no_mapa if q.restored_at is not None),
         "timeline": compute_timeline(org, now=now),
         "janela_retorno_horas": TIMELINE_HOURS,
+        # As quedas já agrupadas por massiva. Quem precisa do recorte de UMA
+        # massiva (o painel de TV, com uma página por evento) reaproveita isto
+        # em vez de repetir a consulta — o sublinhado marca que é insumo de
+        # quem monta tela, não número para mostrar.
+        "_quedas_por_massiva": quedas_por_massiva,
     }
 
 

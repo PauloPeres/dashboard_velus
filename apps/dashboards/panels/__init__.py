@@ -46,9 +46,34 @@ class SlideSpec:
     template: str
     seconds: int = 15
     only_when: Callable[[dict[str, Any]], bool] | None = None
+    # Quando preenchido, o slide vira UM SLIDE POR ITEM da lista que esta chave
+    # aponta no snapshot. É o que permite "uma página por massiva" sem que o
+    # painel precise saber quantas existem — com três massivas abertas, três
+    # páginas; com zero, nenhuma.
+    repeat_key: str = ""
 
     def should_show(self, snapshot: dict[str, Any]) -> bool:
-        return True if self.only_when is None else bool(self.only_when(snapshot))
+        if self.only_when is not None and not self.only_when(snapshot):
+            return False
+        # Slide repetido sem itens não tem o que mostrar. Tela vazia numa parede
+        # ensina a sala a ignorar a TV — a mesma razão do `only_when`.
+        if self.repeat_key:
+            return bool(snapshot.get(self.repeat_key))
+        return True
+
+    def instancias(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+        """As páginas que este slide gera nesta volta.
+
+        Uma, no caso comum. Uma por item quando o slide é repetido — cada uma
+        com o seu `item` e um `dom_id` próprio, porque os gráficos precisam de
+        um elemento distinto para desenhar.
+        """
+        if not self.repeat_key:
+            return [{"spec": self, "item": None, "dom_id": self.key}]
+        return [
+            {"spec": self, "item": item, "dom_id": f"{self.key}-{i}"}
+            for i, item in enumerate(snapshot.get(self.repeat_key) or [])
+        ]
 
 
 @dataclass(frozen=True)
@@ -70,6 +95,13 @@ class PanelSpec:
 
     def visible_slides(self, snapshot: dict[str, Any]) -> list[SlideSpec]:
         return [s for s in self.slides if s.should_show(snapshot)]
+
+    def paginas(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+        """A rotação desta volta, já expandida — é o que a tela percorre."""
+        paginas: list[dict[str, Any]] = []
+        for spec in self.visible_slides(snapshot):
+            paginas.extend(spec.instancias(snapshot))
+        return paginas
 
 
 _REGISTRY: dict[str, PanelSpec] = {}

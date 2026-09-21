@@ -389,20 +389,27 @@ def panel_view(request: HttpRequest, panel_key: str) -> HttpResponse:
 
     now = timezone.now()
     dados = _snapshot_cacheado(panel, org, now)
-    slides = panel.visible_slides(dados)
 
     from apps.dashboards import charts
+
+    # Os gráficos são montados aqui, não no snapshot: o snapshot é dado, e o
+    # mesmo dado serve a telas com temas diferentes (a aba é clara, a TV é
+    # escura). Guardar a figura pronta no cache amarraria as duas.
+    for linha in dados.get("massivas") or []:
+        if linha.get("mapa"):
+            linha["mapa_chart_json"] = charts.outage_map(linha["mapa"])
+
+    paginas = panel.paginas(dados)
 
     return render(
         request,
         "dashboards/panels/shell.html",
         {
             "panel": panel,
-            "slides": slides,
+            "paginas": paginas,
             "snapshot": dados,
             "device": device,
             "snapshot_url": reverse("dashboards:panel_snapshot", args=[panel.key]),
-            "mapa_chart_json": charts.outage_map(dados["mapa"]) if dados.get("mapa") else "",
             "timeline_chart_json": (
                 charts.outage_timeline(dados["timeline"]) if dados.get("timeline") else ""
             ),

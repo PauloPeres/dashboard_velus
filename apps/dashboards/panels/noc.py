@@ -47,6 +47,11 @@ def _snapshot(org: Any, now: datetime) -> dict[str, Any]:
 
     abertas = dados["linhas"]
     maior = dados.get("maior_massiva")
+    # O mapa DE CADA massiva (T5): na parede, uma página por evento, com o
+    # resumo de um lado e o mapa dele do outro. O mapa geral respondia "onde
+    # estão as massivas"; com três abertas, ninguém sabia qual ponto era de
+    # qual — que é justamente a pergunta na hora de agir.
+    _anexa_mapa_por_massiva(org, abertas, dados)
     # Severidade e takeover (P6). A classificação anota o nível em cada linha,
     # então tem que rodar antes de a tela desenhar a lista.
     base = base_de_clientes(org)
@@ -85,8 +90,42 @@ def _snapshot(org: Any, now: datetime) -> dict[str, Any]:
     }
 
 
+def _anexa_mapa_por_massiva(
+    org: Any, linhas: list[dict[str, Any]], dados: dict[str, Any]
+) -> None:
+    """Põe em cada linha o recorte de mapa da sua própria massiva.
+
+    Reaproveita `compute_mapa`, o mesmo da aba — o mapa da TV não pode ser um
+    segundo desenho com regras próprias, ou as duas telas vão discordar sobre
+    onde está o problema.
+    """
+    from apps.dashboards.massivas import compute_cabos_candidatos, compute_mapa
+
+    quedas_por_massiva = dados.get("_quedas_por_massiva") or {}
+    for linha in linhas:
+        quedas = quedas_por_massiva.get(linha["id"], [])
+        cabos = (linha.get("cabos") or {}).get("ids_no_mapa") or []
+        if not cabos:
+            cabos = (compute_cabos_candidatos(org, quedas) or {}).get("ids_no_mapa", [])
+        linha["mapa"] = compute_mapa(
+            org,
+            quedas,
+            vizinhas_intactas=(linha.get("vizinhanca") or {}).get("intactas", []),
+            cabos_candidatos=cabos,
+        )
+
+
 def _tem_massiva(snapshot: dict[str, Any]) -> bool:
     return bool(snapshot.get("massivas"))
+
+
+def _tem_timeline(snapshot: dict[str, Any]) -> bool:
+    """A linha do tempo só entra com barra para mostrar (T4).
+
+    Slide vazio numa parede ensina a sala a ignorar a TV — e a linha do tempo
+    passa a maior parte do dia zerada, que é o estado normal da rede.
+    """
+    return any(b.get("fora") or b.get("voltaram") for b in snapshot.get("timeline") or [])
 
 
 PANEL = register(
@@ -101,27 +140,23 @@ PANEL = register(
             # silêncio é informação, e é o que faz a sala confiar no vermelho
             # quando ele aparece.
             SlideSpec(key="semaforo", title="Situação", template="dashboards/panels/slides/_semaforo.html", seconds=15),
+            # UMA PÁGINA POR MASSIVA (T5): resumo à esquerda, mapa daquela
+            # massiva à direita. Substituiu a lista de massivas + o mapa geral,
+            # que juntos respondiam "quais existem" e "onde estão", mas nunca
+            # "onde está ESTA".
             SlideSpec(
-                key="massivas",
-                title="Massivas abertas",
-                template="dashboards/panels/slides/_massivas.html",
+                key="massiva",
+                title="Massiva aberta",
+                template="dashboards/panels/slides/_massiva_pagina.html",
                 seconds=20,
-            ),
-            # O mapa entra na rotação só quando há evento: sem massiva ele seria
-            # um mapa bonito sem pergunta, e slide sem pergunta treina a sala a
-            # ignorar a TV.
-            SlideSpec(
-                key="mapa",
-                title="Onde",
-                template="dashboards/panels/slides/_mapa.html",
-                seconds=20,
-                only_when=_tem_massiva,
+                repeat_key="massivas",
             ),
             SlideSpec(
                 key="ultimas24h",
                 title="Últimas horas",
                 template="dashboards/panels/slides/_ultimas24h.html",
                 seconds=15,
+                only_when=_tem_timeline,
             ),
             # Só entra onde existe atendimento sincronizado: três zeros numa TV
             # se leem como "está tudo calmo", que é o oposto de "não sei".

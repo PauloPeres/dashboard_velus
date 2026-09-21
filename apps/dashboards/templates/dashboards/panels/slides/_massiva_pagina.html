@@ -1,0 +1,84 @@
+{% load humanize %}
+{% comment %}
+Uma massiva por página (T5 do plano de campo): resumo à esquerda, mapa dela à
+direita.
+
+Antes eram dois slides — a lista de massivas e o mapa geral. Juntos respondiam
+"quais existem" e "onde estão", mas nunca "onde está ESTA", que é a pergunta de
+quem vai agir. Com três massivas abertas, ninguém sabia qual ponto era de qual.
+
+Espera `pagina.item` (uma linha de massiva) e `pagina.dom_id`.
+{% endcomment %}
+{% with m=pagina.item %}
+<div class="h-full grid grid-cols-5 gap-8">
+
+  <div class="col-span-2 flex flex-col justify-center">
+    <p class="text-[11px] uppercase tracking-[0.3em]
+              {% if m.nivel == 'CRITICO' %}text-red-400{% elif m.nivel == 'ATENCAO' %}text-amber-400{% else %}text-slate-500{% endif %}">
+      {% if m.is_acknowledged %}em tratamento{% else %}{{ m.nivel|default:"massiva"|lower }}{% endif %}
+    </p>
+
+    <p class="text-7xl font-black tabular-nums text-red-400 mt-1">{{ m.ainda_fora|intcomma }}</p>
+    <p class="text-xl text-slate-400">de {{ m.affected_count|intcomma }} afetados</p>
+
+    <p class="text-2xl text-slate-100 mt-6 leading-snug">{{ m.destaque }}</p>
+    {% if m.referencia %}<p class="text-lg text-slate-400 mt-1">{{ m.referencia }}</p>{% endif %}
+
+    <p class="text-lg text-slate-400 mt-5">
+      desde {{ m.started_at|date:"H:i" }} ·
+      <span class="text-emerald-400">{{ m.restored_pct }}% já voltou</span>
+    </p>
+
+    {% if m.veredito.rotulo %}
+    <p class="text-lg {% if m.veredito.veredito == 'energia' %}text-amber-300{% elif m.veredito.veredito == 'fibra' %}text-red-300{% else %}text-slate-400{% endif %} mt-2">
+      {{ m.veredito.rotulo }}
+    </p>
+    {% endif %}
+
+    {% if m.cabos.cabos %}
+    <p class="text-base text-violet-300 mt-4">
+      cabo candidato: {{ m.cabos.cabos.0.nome }}
+    </p>
+    {% endif %}
+
+    {% if m.is_acknowledged %}
+    <p class="text-base text-indigo-300 mt-4">em tratamento com {{ m.acknowledged_by }}</p>
+    {% elif m.is_expected %}
+    <p class="text-base text-blue-300 mt-4">dentro de manutenção programada</p>
+    {% endif %}
+  </div>
+
+  {% comment %}
+  O mapa desta massiva — o mesmo `compute_mapa` da aba. Um segundo desenho com
+  regras próprias faria as duas telas discordarem sobre onde está o problema.
+  {% endcomment %}
+  <div class="col-span-3 rounded-xl overflow-hidden bg-slate-900/40">
+    <div id="mapa-{{ pagina.dom_id }}" class="w-full h-full"></div>
+    {{ m.mapa_chart_json|json_script:"mapa-dados-"|add:pagina.dom_id }}
+  </div>
+</div>
+{% endwith %}
+
+<script>
+(function () {
+  var id = "{{ pagina.dom_id }}";
+  var el = document.getElementById("mapa-" + id);
+  var node = document.getElementById("mapa-dados-" + id);
+  if (!el || !node || !node.textContent) { return; }
+  try {
+    var raw = JSON.parse(node.textContent);
+    var parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
+    var layout = parsed.layout || {};
+    layout.paper_bgcolor = "rgba(0,0,0,0)";
+    layout.font = { color: "#cbd5e1", size: 13 };
+    layout.showlegend = false;
+    Plotly.newPlot(el, parsed.data || [], layout, { displayModeBar: false, responsive: true });
+    // O Plotly mede errado com o container escondido: o mapa sairia espremido
+    // num canto até alguém redimensionar a janela — coisa que ninguém faz numa
+    // TV.
+    window.addEventListener("painel:slide", function (ev) {
+      if (ev.detail.key === id) { Plotly.Plots.resize(el); }
+    });
+  } catch (e) { /* melhor página sem mapa que painel quebrado */ }
+})();
+</script>

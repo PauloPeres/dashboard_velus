@@ -270,16 +270,52 @@ class TestFrescorEConteudo:
         assert dados["idade_segundos"] is None
         assert dados["dado_velho"] is True
 
-    def test_painel_sem_massiva_esconde_o_slide_de_mapa(
+    def test_sem_massiva_nao_ha_pagina_de_massiva(
         self, organization_a: Organization
     ) -> None:
-        """Slide sem pergunta treina a sala a ignorar a TV."""
+        """Slide sem pergunta treina a sala a ignorar a TV.
+
+        Desde o T5 a massiva não é um slide de lista e outro de mapa: é **uma
+        página por evento**, montada a partir da lista do snapshot. Sem evento,
+        nenhuma página.
+        """
         panel = get_panel("noc")
         assert panel is not None
         visiveis = [s.key for s in panel.visible_slides({"massivas": []})]
-        assert "mapa" not in visiveis
+        assert "massiva" not in visiveis
         com_evento = [s.key for s in panel.visible_slides({"massivas": [{"id": 1}]})]
-        assert "mapa" in com_evento
+        assert "massiva" in com_evento
+
+    def test_uma_pagina_por_massiva(self, organization_a: Organization) -> None:
+        """Com três massivas abertas, três páginas — cada uma com seu mapa.
+
+        O mapa geral respondia "onde estão as massivas"; com três no ar,
+        ninguém sabia qual ponto era de qual.
+        """
+        panel = get_panel("noc")
+        assert panel is not None
+        snapshot = {"massivas": [{"id": 1}, {"id": 2}, {"id": 3}], "timeline": []}
+        paginas = [p for p in panel.paginas(snapshot) if p["spec"].key == "massiva"]
+        assert len(paginas) == 3
+        # `dom_id` distinto: dois gráficos não podem disputar o mesmo elemento.
+        assert len({p["dom_id"] for p in paginas}) == 3
+
+    def test_linha_do_tempo_zerada_sai_da_rotacao(
+        self, organization_a: Organization
+    ) -> None:
+        """A linha do tempo passa a maior parte do dia zerada — que é o estado
+        normal da rede, e não algo para ocupar a parede (T4)."""
+        panel = get_panel("noc")
+        assert panel is not None
+        vazia = [s.key for s in panel.visible_slides({"massivas": [], "timeline": []})]
+        assert "ultimas24h" not in vazia
+        com_queda = [
+            s.key
+            for s in panel.visible_slides(
+                {"massivas": [], "timeline": [{"fora": 3, "voltaram": 0}]}
+            )
+        ]
+        assert "ultimas24h" in com_queda
 
     def test_a_tela_do_painel_declara_a_idade_e_a_coleta(
         self, organization_a: Organization
@@ -552,3 +588,22 @@ class TestSlideDeAtendimento:
         assert dados["na_fila"] == 0
         assert dados["dado_velho"] is True
         assert dados["idade_horas"] >= 47
+
+
+# =============================================================================
+# T4 — avanço manual e slide vazio
+# =============================================================================
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestAvancoManual:
+    def test_a_tela_responde_a_clique_e_a_seta(
+        self, organization_a: Organization
+    ) -> None:
+        """Quem está de pé na frente da TV quer passar para a próxima página,
+        não esperar 20 s. Controle remoto manda seta; teclado de bancada, espaço."""
+        token = _tv_pareada(organization_a)
+        tv = Client()
+        tv.cookies[COOKIE_NOME] = token
+        html = tv.get(PANEL_URL).content.decode()
+        assert 'addEventListener("click"' in html
+        assert "ArrowRight" in html
