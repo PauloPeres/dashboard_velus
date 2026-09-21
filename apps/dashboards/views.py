@@ -104,6 +104,8 @@ from apps.analytics.application.network_snapshots import compute_network_history
 from apps.shared.context import get_current_organization
 
 from . import charts
+from apps.shared.context import set_current_organization
+
 from .exports.atendimento_xlsx import MENSAGEM_PADRAO
 from .massivas import (
     BUCKET_MINUTES,
@@ -3230,9 +3232,21 @@ def access_management(request: HttpRequest) -> HttpResponse:
 # =============================================================================
 # Quedas & Massivas (#146) — a tela do rompimento em curso
 # =============================================================================
-def _massivas_contexto_agora(org: Any, *, now: datetime) -> dict[str, Any]:
+def _base_url_publica(request: HttpRequest) -> str:
+    """Origem pública desta requisição — "https://velus.seujaime.com".
+
+    Sai do próprio pedido, e não de uma constante: o link de campo é colado num
+    WhatsApp e precisa apontar para o endereço por onde o sistema é acessado de
+    verdade, que difere entre produção e a máquina de quem desenvolve.
+    """
+    return f"{request.scheme}://{request.get_host()}"
+
+
+def _massivas_contexto_agora(
+    org: Any, *, now: datetime, base_url: str = ""
+) -> dict[str, Any]:
     """Bloco que o HTMX recarrega sozinho: foto do poll + KPIs + abertas."""
-    dados = compute_massivas_agora(org, now=now)
+    dados = compute_massivas_agora(org, now=now, base_url=base_url)
     maior = dados["maior_massiva"]
     return {
         "poll": poll_snapshot(org, now=now),
@@ -3280,7 +3294,7 @@ def massivas(request: HttpRequest) -> HttpResponse:
     org = org_or_redirect
     now = timezone.now()
 
-    ctx = _massivas_contexto_agora(org, now=now)
+    ctx = _massivas_contexto_agora(org, now=now, base_url=_base_url_publica(request))
     dados = ctx.pop("_dados")
 
     return render(
@@ -3419,12 +3433,59 @@ def massivas_abertas(request: HttpRequest) -> HttpResponse:
         return org_or_redirect
     org = org_or_redirect
 
-    ctx = _massivas_contexto_agora(org, now=timezone.now())
+    ctx = _massivas_contexto_agora(
+        org, now=timezone.now(), base_url=_base_url_publica(request)
+    )
     ctx.pop("_dados")
     return render(
         request,
         "dashboards/_massivas_abertas.html",
         {**ctx, "refresh_url": reverse("dashboards:massivas_abertas")},
+    )
+
+
+@never_cache
+def massiva_campo(request: HttpRequest, token: str) -> HttpResponse:
+    """A massiva no mapa, aberta pelo técnico na rua — sem login (T6).
+
+    **Não tem `@login_required` de propósito.** Quem entra é quem tem o link
+    assinado, que vale 24 h e serve a uma massiva só (ver `dashboards/campo.py`).
+    Criar conta para cada técnico que entra e sai seria trocar um problema por
+    outro.
+
+    O que a tela mostra é menos que a aba: mapa, caixas, cabo candidato e
+    contagem. **Nada de nome, documento ou telefone** — quem está na rua precisa
+    saber onde cavar, não quem mora ali.
+    """
+    from apps.dashboards.campo import ler
+    from apps.network.infrastructure.models import OutageEvent
+    from apps.tenancy.models import Organization
+
+    dados = ler(token)
+    if dados is None:
+        # Expirado, forjado ou torto — a tela não distingue, e quem recebe não
+        # precisa saber qual dos três foi.
+        return render(request, "dashboards/massiva_campo_invalido.html", status=404)
+
+    org = Organization.objects.filter(pk=dados["org"], is_active=True).first()
+    if org is None:
+        return render(request, "dashboards/massiva_campo_invalido.html", status=404)
+    set_current_organization(org)
+
+    outage = OutageEvent.objects.filter(organization=org, pk=dados["o"]).first()
+    if outage is None:
+        return render(request, "dashboards/massiva_campo_invalido.html", status=404)
+
+    detalhe = compute_massiva_detalhe(org, outage)
+    return render(
+        request,
+        "dashboards/massiva_campo.html",
+        {
+            "outage": detalhe["cabecalho"],
+            "mapa": detalhe["mapa"],
+            "mapa_chart_json": charts.outage_map(detalhe["mapa"]),
+            "desenhado_as": timezone.now(),
+        },
     )
 
 
@@ -3443,7 +3504,7 @@ def massiva_detalhe(request: HttpRequest, outage_id: int) -> HttpResponse:
     outage = get_object_or_404(
         OutageEvent.objects.filter(organization=org), pk=outage_id
     )
-    detalhe = compute_massiva_detalhe(org, outage)
+    detalhe = compute_massiva_detalhe(org, outage, base_url=_base_url_publica(request))
 
     return render(
         request,

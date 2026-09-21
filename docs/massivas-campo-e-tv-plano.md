@@ -73,16 +73,39 @@ outras caixas** — que é o que o técnico precisa quando chega.
 Vira um link para uma tela de **foco na massiva**: mapa com os clientes, as
 caixas, as emendas e o traçado do cabo candidato.
 
-**Decisão pendente, e é de produto:** o técnico não tem login no dashboard.
-Três saídas:
+**Decidido pelo Paulo: link assinado, 24 horas.** As outras saídas eram criar
+login para cada técnico (troca um problema por outro: gerir contas de quem entra
+e sai) ou manter só o ponto do Google Maps.
 
-1. **link assinado com validade** (o padrão para isto): a URL carrega um token
-   que só serve para aquela massiva e expira em algumas horas. Quem receber
-   encaminha, e o link morre sozinho;
-2. **login para o técnico**: some com o problema, cria outro (gerir contas de
-   quem entra e sai);
-3. **manter o Google Maps** e aceitar que o técnico vê só o ponto.
+**Como ficou.** O token é assinado com a `SECRET_KEY`, carrega a massiva **e** a
+organização, e expira em 24 h — o que cobre o turno e a virada de plantão, e
+garante que um link esquecido num grupo não sirva na semana seguinte. Trocar o
+id na URL invalida a assinatura.
 
-A recomendação é a 1, e é assim que este plano segue — mas o link expõe nome de
-cliente e mapa da rede a quem tiver a URL, então a validade curta e o escopo de
-uma massiva só são parte da decisão, não detalhe de implementação.
+A preocupação de expor cliente foi resolvida por subtração: a tela de campo
+mostra **menos** que a aba. Mapa, caixas, cabo candidato e contagem — **sem
+nome, documento ou telefone**. Quem está na rua precisa saber onde cavar, não
+quem mora ali. Um teste trava isso.
+
+A mensagem passou a levar **dois links**, que respondem perguntas diferentes: o
+da massiva mostra o mapa com cabo e caixas desenhados (é o que se olha ao
+chegar), e o do Google Maps é o que abre o GPS do carro.
+
+---
+
+## Depois do plano: três pedidos que chegaram no meio
+
+**Insight na parede quando não há massiva.** Cada um é um número medido da
+operação com a pergunta que ele levanta — reincidência de trecho, quanto das
+massivas tem causa registrada, duração típica do reparo, cobertura da planta.
+Nada de dinheiro: MRR e meta mudam a audiência da tela e a operação para de
+olhar. Amostra pequena não vira insight; parede com número fraco ensina a sala a
+desconfiar da tela.
+
+**Ação pelo controle da TV.** OK marca "estou tratando"; as teclas 1 a 5 dizem a
+causa. Quem age é o **aparelho**, não uma pessoa — grava-se "marcado na TV da
+bancada" em vez de inventar autor. O Enter deixou de avançar slide: uma tecla
+com dois significados erraria os dois.
+
+**Botões do card empilhados**, porque na coluna estreita da direita a fileira
+horizontal esticava o card e sobrava espaço vazio.

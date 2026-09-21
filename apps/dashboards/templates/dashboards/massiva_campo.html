@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+{% load humanize %}
+{% comment %}
+A massiva para quem está na rua (T6).
+
+Página própria, e não a aba: quem abre isto está no celular, talvez com rede
+ruim, e quer três coisas — onde é, por onde o cabo corre, e quanta gente está
+fora. Nada de menu, filtro ou navegação.
+
+O que NÃO aparece aqui, deliberadamente: nome, documento e telefone de cliente.
+O link é assinado mas circula por WhatsApp, e quem está na rua precisa saber
+onde cavar, não quem mora ali.
+{% endcomment %}
+<html lang="pt-br" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Massiva · Velus</title>
+  <link rel="stylesheet" href="/static/css/tailwind.min.css">
+  <script src="/static/vendor/plotly-2.35.2.min.js"></script>
+</head>
+<body class="min-h-full bg-gray-50">
+<div class="max-w-3xl mx-auto p-4">
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
+    <p class="text-[10px] uppercase tracking-wider text-amber-700 font-semibold">
+      {% if outage.tem_trecho %}Trecho suspeito{% else %}Escopo {{ outage.scope_label }}{% endif %}
+    </p>
+    <h1 class="text-xl font-bold text-gray-900 leading-snug">{{ outage.destaque }}</h1>
+    {% if outage.referencia %}
+    <p class="text-sm text-gray-500 mt-0.5">{{ outage.referencia }}</p>
+    {% endif %}
+
+    <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 mt-3">
+      <span class="text-3xl font-bold text-red-600 tabular-nums">{{ outage.ainda_fora|intcomma }}</span>
+      <span class="text-sm text-gray-500">ainda fora de {{ outage.affected_count|intcomma }}</span>
+      <span class="text-sm text-emerald-700">{{ outage.restored_pct }}% já voltou</span>
+    </div>
+    <p class="text-xs text-gray-400 mt-1">
+      desde {{ outage.started_at|date:"d/m H:i" }}
+      {% if outage.veredito.rotulo %} · {{ outage.veredito.rotulo }}{% endif %}
+    </p>
+
+    {% if outage.is_acknowledged %}
+    <p class="text-xs text-indigo-700 mt-2">
+      em tratamento com {{ outage.acknowledged_by|default:outage.acknowledged_by_display }}
+    </p>
+    {% endif %}
+  </div>
+
+  {% if outage.cabos.cabos %}
+  <div class="bg-white rounded-xl shadow-sm border border-violet-200 p-4 mb-4">
+    <p class="text-[10px] uppercase tracking-wider text-violet-700 font-semibold">Cabo candidato</p>
+    <ul class="mt-1 space-y-1">
+      {% for c in outage.cabos.cabos|slice:":3" %}
+      <li class="text-sm text-gray-700">
+        {{ c.nome }}{% if c.classe %} <span class="text-gray-400">({{ c.classe|lower }})</span>{% endif %}
+        <span class="text-violet-700">· {{ c.ctos_tocadas }} caixa{{ c.ctos_tocadas|pluralize }} · {{ c.distancia_m|floatformat:"0" }} m</span>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="text-[11px] text-gray-400 mt-2 leading-relaxed">
+      Candidato é o cabo que passa perto das caixas afetadas, pelo desenho do projeto.
+      Não é leitura de onde a fibra rompeu.
+    </p>
+  </div>
+  {% endif %}
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+    <p class="text-xs text-gray-400 mb-2 leading-relaxed">
+      Vermelho: cliente fora. Verde: já voltou. Laranja: caixa afetada. Verde-escuro:
+      caixa vizinha no ar. Roxo pequeno: caixa de emenda. Linha roxa cheia: traçado do
+      cabo no projeto — <strong>não</strong> é onde a fibra está enterrada hoje.
+    </p>
+    <div id="mapa-campo" style="height:60vh;" class="rounded-lg bg-gray-50"></div>
+    {{ mapa_chart_json|json_script:"mapa-campo-data" }}
+  </div>
+
+  <p class="text-[11px] text-gray-400 text-center mt-4 leading-relaxed">
+    Link temporário, válido por 24 h, só desta massiva.<br>
+    Foto de {{ desenhado_as|date:"d/m H:i" }} — recarregue para atualizar.
+  </p>
+</div>
+
+<script>
+(function () {
+  var el = document.getElementById("mapa-campo");
+  var node = document.getElementById("mapa-campo-data");
+  if (!el || !node) { return; }
+  try {
+    var raw = JSON.parse(node.textContent);
+    var parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
+    Plotly.newPlot(el, parsed.data || [], parsed.layout || {},
+                   { responsive: true, displayModeBar: false });
+  } catch (e) {
+    el.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-red-400">Erro ao carregar o mapa</div>';
+  }
+})();
+</script>
+</body>
+</html>

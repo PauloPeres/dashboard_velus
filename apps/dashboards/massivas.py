@@ -312,8 +312,15 @@ _CAMPOS_DE_QUEDA_NO_MAPA = (
 )
 
 
-def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
-    """KPIs de agora, massivas abertas, motivos e pontos do mapa."""
+def compute_massivas_agora(
+    org: Any, *, now: datetime, base_url: str = ""
+) -> dict[str, Any]:
+    """KPIs de agora, massivas abertas, motivos e pontos do mapa.
+
+    `base_url` é o endereço público (https://…), usado para montar o link de
+    campo da mensagem do técnico. Vem de fora porque só a requisição sabe por
+    qual domínio o sistema está sendo acessado.
+    """
     quedas_abertas = list(
         ConnectionDropEvent.objects.filter(organization=org, restored_at__isnull=True)
         .select_related("connection")
@@ -401,7 +408,7 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
     # cabo e o veredito), por isso vem depois e não dentro de `outage_row`.
     for linha, o in zip(linhas, abertas, strict=True):
         linha["mensagem_tecnico"] = compute_mensagem_tecnico(
-            org, linha, quedas_por_massiva.get(o.pk, []), now=now
+            org, linha, quedas_por_massiva.get(o.pk, []), now=now, base_url=base_url
         )
     # As caixas que escaparam entram no mapa como ponto vazado. Vêm de todas as
     # massivas abertas, sem repetir a mesma caixa.
@@ -1023,6 +1030,7 @@ def compute_mensagem_tecnico(
     quedas: list[ConnectionDropEvent],
     *,
     now: datetime | None = None,
+    base_url: str = "",
 ) -> str:
     """Texto pronto para colar no WhatsApp do técnico.
 
@@ -1034,6 +1042,11 @@ def compute_mensagem_tecnico(
     As ressalvas vêm juntas, curtas: "trecho suspeito" e "cabo candidato" são
     inferência de cadastro, e mandar um técnico com falsa certeza é pior que
     mandá-lo sem informação — ele para de procurar onde deveria.
+
+    São **dois links**, que respondem perguntas diferentes: o da massiva mostra
+    o mapa com cabo, caixas e clientes desenhados (é o que se olha ao chegar); o
+    do Google Maps abre o GPS do carro. `base_url` vazio omite o primeiro — sem
+    saber o endereço público, um link montado seria um link quebrado.
     """
     now = now or timezone.now()
     partes: list[str] = []
@@ -1070,10 +1083,19 @@ def compute_mensagem_tecnico(
         if len(nomes) > 6:
             partes.append(f"(+{len(nomes) - 6} caixas)")
 
+    # O link do campo (T6) vem primeiro: ele mostra o mapa COM o cabo, as caixas
+    # e os clientes desenhados, que é o que o técnico precisa ao chegar. O ponto
+    # do Google Maps fica logo abaixo, porque é ele que abre o GPS do carro.
+    if base_url:
+        from apps.dashboards.campo import assinar
+
+        token = assinar(linha["id"], org.pk)
+        partes.append(f"\nMapa da massiva (vale 24h): {base_url}/campo/massiva/{token}/")
+
     com_posicao = [c for c in caixas if c.latitude is not None and c.longitude is not None]
     if com_posicao:
         alvo = sorted(com_posicao, key=lambda c: c.name or c.external_id)[0]
-        partes.append(f"\nMapa: {_ponto_no_mapa(float(alvo.latitude), float(alvo.longitude))}")
+        partes.append(f"\nChegar até lá: {_ponto_no_mapa(float(alvo.latitude), float(alvo.longitude))}")
         partes.append(f"({alvo.name or alvo.external_id} · {alvo.latitude:.6f}, {alvo.longitude:.6f})")
 
     cabos = (linha.get("cabos") or {}).get("cabos") or []
@@ -1683,16 +1705,19 @@ def _cabecalho_com_mensagem(
     quedas: list[ConnectionDropEvent],
     *,
     now: datetime,
+    base_url: str = "",
     **kwargs: Any,
 ) -> dict[str, Any]:
     """`outage_row` + a mensagem do técnico, que depende da linha já montada."""
     linha = outage_row(outage, **kwargs)
-    linha["mensagem_tecnico"] = compute_mensagem_tecnico(org, linha, quedas, now=now)
+    linha["mensagem_tecnico"] = compute_mensagem_tecnico(
+        org, linha, quedas, now=now, base_url=base_url
+    )
     return linha
 
 
 def compute_massiva_detalhe(
-    org: Any, outage: OutageEvent, *, now: datetime | None = None
+    org: Any, outage: OutageEvent, *, now: datetime | None = None, base_url: str = ""
 ) -> dict[str, Any]:
     """Cabeçalho + tabela de clientes de uma massiva."""
     afetados = list(
@@ -1764,6 +1789,7 @@ def compute_massiva_detalhe(
             outage,
             quedas,
             now=now or timezone.now(),
+            base_url=base_url,
             referencia=element_references(org, [outage]).get(outage.pk, ""),
             veredito=compute_veredito(quedas, scope=outage.scope),
             vizinhanca=compute_vizinhanca(org, quedas),

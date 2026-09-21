@@ -95,6 +95,14 @@ urlpatterns = [
         views.massiva_ciente,
         name="massiva_ciente",
     ),
+    # A massiva vista por quem está na rua: link assinado, 24 h, uma massiva.
+    # Fora do catálogo de páginas de propósito — não tem login para o middleware
+    # proteger; a autorização é o próprio token.
+    path(
+        "campo/massiva/<str:token>/",
+        views.massiva_campo,
+        name="massiva_campo",
+    ),
     path("network/", views.network, name="network"),
     path("sales/", views.sales, name="sales"),
     path("customers/", views.customers, name="customers"),
