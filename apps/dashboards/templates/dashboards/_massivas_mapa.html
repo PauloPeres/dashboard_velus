@@ -7,13 +7,17 @@ por aplicação — ver `charts._BASEMAP_STYLE`); o Plotly já está self-hosted
 CSP é que precisou liberar `tiles.openfreemap.org`. Não usa `renderChart` porque
 aquele helper decide "tem dado?" olhando x/y/labels, que um traço de mapa não
 tem: aqui o mapa renderiza mesmo vazio, e o vazio é informação.
-{% endcomment %}
-{% comment %}
+
 O `id="mapa"` é o alvo do botão "ver só esta no mapa" da lista: o link leva ao
 detalhe da massiva já rolado até aqui, onde o mapa mostra uma massiva só.
+
+**Reorganizado em 21/09/2026** a pedido do operador: menos texto por cima do
+mapa e filtros por camada. O que era meia tela de legenda virou um bloco que
+abre sob demanda; o que era legenda do Plotly deitada sobre o canto do mapa
+virou caixa de marcar, que além de nomear a camada liga e desliga ela.
 {% endcomment %}
 <div id="mapa" class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6 scroll-mt-4">
-  <div class="flex flex-wrap items-center gap-2 mb-1">
+  <div class="flex flex-wrap items-center gap-2 mb-2">
     {% comment %}
     O título vem de fora porque o bloco serve duas telas com recortes
     diferentes: na geral o mapa é das massivas abertas, no detalhe é de uma
@@ -29,51 +33,108 @@ detalhe da massiva já rolado até aqui, onde o mapa mostra uma massiva só.
       desenhado às {{ desenhado_as|date:"H:i" }} · não acompanha o auto-refresh
     </span>
   </div>
-  <p class="text-xs text-gray-400 mb-1 leading-relaxed">
-    Vermelho: fora agora. Verde: já voltou. Laranja: caixa (CTO) afetada.
-    Verde-escuro: caixa vizinha da mesma PON que continua no ar — é ela que
-    delimita o trecho. Roxo pequeno: caixa de emenda perto do evento, onde o cabo
-    é aberto. Azul: POP.
-  </p>
+
   {% comment %}
-  As linhas são a parte mais fácil de ler errado da tela inteira, então o aviso
-  fica junto delas e não numa legenda de rodapé. O estilo carrega o significado:
-  tracejado é inferência de cadastro, cheio é traçado de verdade. Até 2026-09-19
-  não havia linha cheia nenhuma aqui, porque não havia geometria — o spike R2
-  mostrou que ela existe na API (ver `_map_solid_path_trace`).
+  Filtros por camada. Cada caixa liga/desliga um grupo de traços — o grupo vai
+  no `meta.grupo` de cada traço, em `charts.outage_map`. O POP e a ligação
+  lógica começam desmarcados: são linhas longas que cruzam o mapa e nunca são o
+  destino de ninguém.
+
+  O botão "foco no técnico" é o pedido dito por inteiro: deixa na tela as caixas
+  e o cabo, que é para onde o carro vai, e tira o resto.
   {% endcomment %}
-  <p class="text-xs text-gray-400 mb-1 leading-relaxed">
-    As linhas <strong>tracejadas</strong> são vínculo de cadastro, não o caminho da fibra:
-    a cinza liga cada caixa ao POP que a alimenta, a laranja liga a caixa mais próxima do POP
-    às demais afetadas. A linha <strong>roxa e cheia</strong> é diferente:
-    {% comment %}
-    Estas frases ficam numa linha só de propósito: um teste garante que elas
-    chegam inteiras ao HTML, e quebrá-las no meio faz a asserção falhar (a
-    quebra vira espaço em branco no meio da string).
-    {% endcomment %}
-    é o traçado do cabo desenhado no projeto do InMap,
-    e só aparece para os cabos que passam perto das caixas afetadas.
-    Mesmo ela é <strong>cadastro, não leitura</strong>: diz por onde o projeto passa a fibra,
-    nunca onde ela rompeu. A tela aponta <em>trecho suspeito</em> e <em>cabo candidato</em>,
-    nunca "cabo X rompido".
-  </p>
-  {% if mapa.trecho_no_cabo %}
-  <p class="text-xs text-gray-400 mb-1 leading-relaxed">
-    A linha <strong>laranja e cheia</strong> é o trecho suspeito desenhado sobre o cabo —
-    o caminho que a fibra faz entre as duas caixas, com as curvas do projeto, em vez da reta
-    que atravessa quarteirão. Ela só aparece quando um cabo candidato passa pelas duas pontas.
-  </p>
-  {% endif %}
-  {% if mapa_nota %}
-  <p class="text-xs text-gray-400 mb-1 leading-relaxed">{{ mapa_nota }}</p>
-  {% endif %}
+  <div id="mapa-filtros" class="flex flex-wrap items-center gap-x-4 gap-y-2 mb-3 text-xs">
+    <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+      <input type="checkbox" data-grupo="fora" checked class="rounded border-gray-300">
+      <span class="text-red-600 font-semibold">&#8962;</span><span class="text-gray-600">Clientes fora</span>
+    </label>
+    <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+      <input type="checkbox" data-grupo="voltaram" checked class="rounded border-gray-300">
+      <span class="text-green-600 font-semibold">&#8962;</span><span class="text-gray-600">Já voltaram</span>
+    </label>
+    <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+      <input type="checkbox" data-grupo="caixas" checked class="rounded border-gray-300">
+      <span class="text-amber-500 font-semibold">&#9632;</span><span class="text-purple-600 font-semibold">&#9670;</span><span class="text-gray-600">Caixas e emendas</span>
+    </label>
+    <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+      <input type="checkbox" data-grupo="cabo" checked class="rounded border-gray-300">
+      <span class="text-orange-600 font-bold">&#9473;</span><span class="text-gray-600">Cabo e trecho suspeito</span>
+    </label>
+    <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+      <input type="checkbox" data-grupo="pop" class="rounded border-gray-300">
+      <span class="text-blue-600 font-semibold">&#9733;</span><span class="text-gray-600">POP e ligação lógica</span>
+    </label>
+    <span class="text-gray-300">|</span>
+    <button type="button" data-preset="tecnico"
+            class="px-2 py-1 rounded border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 font-medium">
+      Foco no técnico
+    </button>
+    <button type="button" data-preset="tudo"
+            class="px-2 py-1 rounded border border-gray-200 text-gray-500 hover:bg-gray-50">
+      Mostrar tudo
+    </button>
+  </div>
+
   {% if mapa.sem_coordenada %}
   <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3 leading-relaxed">
     {{ mapa.sem_coordenada|intcomma }} de {{ mapa.total_quedas|intcomma }} quedas não têm coordenada
     no cadastro e não aparecem no mapa. O mapa é menor que a massiva.
   </p>
   {% endif %}
+
   <div id="massivas-mapa" style="height:460px;" class="rounded-lg bg-gray-50 overflow-hidden"></div>
+
+  {% comment %}
+  A legenda longa desceu para cá. Ela continua inteira — o que a linha significa
+  é a parte mais fácil de ler errado da tela toda — mas deixou de ocupar meia
+  tela acima do mapa, que era exatamente a queixa: muita informação antes de ver
+  onde é.
+  {% endcomment %}
+  <details class="mt-2 text-xs text-gray-400">
+    <summary class="cursor-pointer select-none text-gray-500 hover:text-gray-700">Como ler o mapa</summary>
+    <div class="mt-2 space-y-1">
+      <p class="leading-relaxed">
+        <strong>&#8962; casa</strong>: cliente — vermelho está fora agora, verde já voltou.
+        <strong>&#9632; quadrado laranja</strong>: caixa (CTO) afetada.
+        <strong>&#9632; quadrado verde-escuro</strong>: caixa vizinha da mesma PON que continua no ar —
+        é ela que delimita o trecho.
+        <strong>&#9670; losango roxo</strong>: caixa de emenda perto do evento, onde o cabo é aberto.
+        <strong>&#9733; estrela azul</strong>: POP.
+      </p>
+      {% comment %}
+      O estilo da linha carrega o significado: tracejado é inferência de
+      cadastro, cheio é traçado de verdade. Até 2026-09-19 não havia linha cheia
+      nenhuma aqui, porque não havia geometria — o spike R2 mostrou que ela
+      existe na API (ver `_map_solid_path_trace`).
+      {% endcomment %}
+      <p class="leading-relaxed">
+        As linhas <strong>tracejadas</strong> são vínculo de cadastro, não o caminho da fibra:
+        a cinza liga cada caixa ao POP que a alimenta, a laranja liga a caixa mais próxima do POP
+        às demais afetadas. A linha <strong>roxa e cheia</strong> é diferente:
+        {% comment %}
+        Estas frases ficam numa linha só de propósito: um teste garante que elas
+        chegam inteiras ao HTML, e quebrá-las no meio faz a asserção falhar (a
+        quebra vira espaço em branco no meio da string).
+        {% endcomment %}
+        é o traçado do cabo desenhado no projeto do InMap,
+        e só aparece para os cabos que passam perto das caixas afetadas.
+        Mesmo ela é <strong>cadastro, não leitura</strong>: diz por onde o projeto passa a fibra,
+        nunca onde ela rompeu. A tela aponta <em>trecho suspeito</em> e <em>cabo candidato</em>,
+        nunca "cabo X rompido".
+      </p>
+      {% if mapa.trecho_no_cabo %}
+      <p class="leading-relaxed">
+        A linha <strong>laranja e cheia</strong> é o trecho suspeito desenhado sobre o cabo —
+        o caminho que a fibra faz entre as duas caixas, com as curvas do projeto, em vez da reta
+        que atravessa quarteirão. Ela só aparece quando um cabo candidato passa pelas duas pontas.
+      </p>
+      {% endif %}
+      {% if mapa_nota %}
+      <p class="leading-relaxed">{{ mapa_nota }}</p>
+      {% endif %}
+    </div>
+  </details>
+
   {{ mapa_chart_json|json_script:"massivas-mapa-data" }}
   <script>
     (function () {
@@ -83,8 +144,43 @@ detalhe da massiva já rolado até aqui, onde o mapa mostra uma massiva só.
       try {
         var raw = JSON.parse(node.textContent);
         var parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
-        Plotly.newPlot(el, parsed.data || [], parsed.layout || {},
+        var dados = parsed.data || [];
+        Plotly.newPlot(el, dados, parsed.layout || {},
                        { responsive: true, displayModeBar: false });
+
+        // Filtros: cada traço carrega seu grupo em meta.grupo (charts.py). O
+        // restyle manda um array com um valor por traço — é assim que o Plotly
+        // liga e desliga camadas sem redesenhar o mapa nem perder o zoom que a
+        // pessoa deu.
+        var caixas = document.querySelectorAll('#mapa-filtros input[data-grupo]');
+        if (!caixas.length) return;
+
+        function aplicar() {
+          var ligado = {};
+          caixas.forEach(function (c) { ligado[c.dataset.grupo] = c.checked; });
+          var visiveis = dados.map(function (t) {
+            var g = (t.meta || {}).grupo;
+            return g ? !!ligado[g] : true;
+          });
+          Plotly.restyle(el, { visible: visiveis });
+        }
+
+        caixas.forEach(function (c) { c.addEventListener("change", aplicar); });
+
+        var PRESETS = {
+          // "Para onde o carro vai": caixas e cabo. O cliente sai do mapa
+          // porque a casa dele não é destino de reparo — o que se conserta é a
+          // caixa e o cabo entre elas.
+          tecnico: ["caixas", "cabo"],
+          tudo: ["fora", "voltaram", "caixas", "cabo", "pop"]
+        };
+        document.querySelectorAll('#mapa-filtros button[data-preset]').forEach(function (b) {
+          b.addEventListener("click", function () {
+            var quais = PRESETS[b.dataset.preset] || [];
+            caixas.forEach(function (c) { c.checked = quais.indexOf(c.dataset.grupo) >= 0; });
+            aplicar();
+          });
+        });
       } catch (e) {
         console.error("mapa de massivas", e);
         el.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-red-400">Erro ao carregar o mapa</div>';

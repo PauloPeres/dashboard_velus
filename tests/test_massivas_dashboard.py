@@ -763,8 +763,10 @@ class TestRetornoVisivel:
         assert "voltou" in mapa["voltaram"][0]["label"]
         assert "caiu" in mapa["clientes"][0]["label"]
         # A legenda do traço vive no JSON do Plotly (com escape unicode), então
-        # o que se verifica no HTML é a legenda escrita da própria seção.
-        assert "Verde: já voltou" in resp.content.decode()
+        # o que se verifica no HTML é a legenda escrita da própria seção — que
+        # desde 21/09/2026 mora dentro do "Como ler o mapa", recolhida por
+        # padrão. Recolhida, não removida: o HTML continua trazendo o texto.
+        assert "verde já voltou" in resp.content.decode()
 
     def test_mapa_da_tela_geral_ignora_queda_fora_de_massiva(
         self, client: Any, user_a: User, organization_a: Organization
@@ -1811,3 +1813,102 @@ class TestCabosCandidatos:
         ]
         mapa = compute_mapa(organization_a, quedas, cabos_candidatos=["C1"])
         assert mapa["trecho_no_cabo"] == []
+
+
+# ---------------------------------------------------------------------------
+# Ícones e filtros do mapa (21/09/2026)
+# ---------------------------------------------------------------------------
+class TestIconesEFiltrosDoMapa:
+    """O mapa passou a ter ícone por camada e caixa de ligar/desligar.
+
+    Dois riscos que estes testes travam:
+
+    1. **emoji não aparece no mapa.** O motor por baixo do `scattermap` é o
+       MapLibre, que desenha texto com os glifos do style — e o protocolo de
+       glifos só cobre pontos de código até U+FFFF. Uma casinha emoji
+       (U+1F3E0) sairia como espaço em branco em produção, e o defeito só
+       apareceria no olho de quem abrisse a tela;
+    2. **filtro sem grupo não filtra.** O JS liga e desliga camadas lendo
+       `meta.grupo` de cada traço; um traço sem grupo fica preso na tela.
+    """
+
+    def _mapa(self) -> dict[str, Any]:
+        return {
+            "clientes": [{"lat": -23.5, "lon": -47.4, "label": "a1 · caiu 10:00"}],
+            "voltaram": [{"lat": -23.51, "lon": -47.41, "label": "a2 · voltou 10:20"}],
+            "ctos": [{"lat": -23.5, "lon": -47.4, "label": "CTO-1"}],
+            "vizinhas": [],
+            "emendas": [{"lat": -23.505, "lon": -47.405, "label": "CE-1"}],
+            "pops": [{"lat": -23.4, "lon": -47.3, "label": "POP Centro"}],
+            "ligacoes": [{"de": (-23.5, -47.4), "para": (-23.4, -47.3), "label": "x"}],
+            "trecho": [{"de": (-23.5, -47.4), "para": (-23.51, -47.41), "label": "y"}],
+            "cabos": [{"nome": "FIBRA 12FO", "pontos": [(-23.5, -47.4), (-23.51, -47.41)]}],
+            "trecho_no_cabo": [],
+        }
+
+    def _traces(self) -> list[dict[str, Any]]:
+        import json
+
+        from apps.dashboards.charts import outage_map
+
+        return json.loads(outage_map(self._mapa()))["data"]
+
+    def test_todo_traco_declara_seu_grupo(self) -> None:
+        for trace in self._traces():
+            assert (trace.get("meta") or {}).get("grupo"), trace.get("name")
+
+    def test_icones_ficam_no_plano_basico_do_unicode(self) -> None:
+        """Nenhum caractere acima de U+FFFF — o MapLibre não os desenha."""
+        from apps.dashboards import charts
+
+        for icone in (
+            charts._ICONE_CLIENTE,
+            charts._ICONE_CAIXA,
+            charts._ICONE_EMENDA,
+            charts._ICONE_POP,
+        ):
+            assert len(icone) == 1
+            assert ord(icone) <= 0xFFFF
+
+    def test_cliente_sai_com_casa_e_o_rotulo_vai_para_o_hover(self) -> None:
+        from apps.dashboards import charts
+
+        clientes = next(
+            t for t in self._traces() if t.get("name", "").endswith("Fora agora")
+        )
+        # O glifo ocupa o `text`; sem o `hovertext`, o hover diria "⌂".
+        assert clientes["text"] == [charts._ICONE_CLIENTE]
+        assert clientes["hovertext"] == ["a1 · caiu 10:00"]
+
+    def test_pop_e_ligacao_logica_comecam_desligados(self) -> None:
+        """Linhas longas que cruzam o mapa e não são destino de ninguém.
+
+        Não somem: viram caixa desmarcada acima do mapa.
+        """
+        por_grupo = {
+            t["meta"]["grupo"]: t.get("visible", True) for t in self._traces()
+        }
+        assert por_grupo["pop"] is False
+        assert por_grupo["fora"] is True
+        assert por_grupo["caixas"] is True
+        assert por_grupo["cabo"] is True
+
+    def test_pop_desligado_nao_estica_o_enquadramento(self) -> None:
+        """Com o POP na conta, o evento virava um punhado de pixels."""
+        import json
+
+        from apps.dashboards.charts import outage_map
+
+        centro = json.loads(outage_map(self._mapa()))["layout"]["map"]["center"]
+        # O POP está a -23.4; o enquadramento fica no quarteirão do evento.
+        assert centro["lat"] < -23.49
+
+    def test_a_tela_traz_as_caixas_de_filtro_e_o_foco_no_tecnico(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        client.force_login(user_a)
+        html = client.get(URL).content.decode()
+        for grupo in ("fora", "voltaram", "caixas", "cabo", "pop"):
+            assert f'data-grupo="{grupo}"' in html
+        assert 'data-preset="tecnico"' in html
+        assert "Foco no técnico" in html

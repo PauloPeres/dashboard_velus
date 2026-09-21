@@ -109,3 +109,47 @@ com dois significados erraria os dois.
 
 **Botões do card empilhados**, porque na coluna estreita da direita a fileira
 horizontal esticava o card e sobrava espaço vazio.
+
+---
+
+## T7 — O mapa primeiro, com ícone e filtro
+
+Pedido do Paulo na tela `/operations/massivas/30/#mapa`: *"deixa o mapa em
+primeiro, e ainda parece que tem muita informação. Conseguimos adicionar ícones
+no mapa? Casa para clientes, um ícone para CTO, um outro ícone para outras
+coisas, e pintar eles? E também adicionar filtros — quero reduzir ruído,
+aumentar foco. Onde o técnico tem que ir."*
+
+**Ordem.** O detalhe abria com meia tela de análise antes do mapa. Quem abre
+essa página durante um evento quer ver onde é; o raciocínio é leitura de depois.
+O cabeçalho virou uma faixa (título, horário, quantos ainda estão fora e o
+veredito) e tudo que explica *como o sistema chegou naquele escopo* —
+vizinhança, reincidência, cabos candidatos, ressalvas, confiança, MRR e o
+carimbo do poll — desceu para um bloco que abre sob demanda. Nada foi apagado:
+recolher e remover são coisas diferentes, e a segunda apagaria as ressalvas que
+seguram as afirmações da tela.
+
+**Ícones.** Casa (⌂) para cliente, quadrado (■) para caixa, losango (◆) para
+emenda, estrela (★) para POP — cada um por cima da bolinha colorida, que
+continua sendo o que se lê de longe.
+
+*Por que não emoji.* O motor por baixo do mapa é o MapLibre, que desenha texto
+com os glifos servidos pelo style e só entende pontos de código até U+FFFF. Uma
+casinha emoji (U+1F3E0) sairia como espaço em branco. E havia uma segunda
+armadilha, encontrada com o mapa em branco na tela e a aba de rede aberta: o
+Plotly pede a fonte "Open Sans", que o OpenFreeMap **não serve** — `404` em
+`/fonts/Open%20Sans%20Regular/8960-9215.pbf` e nenhum texto. O desenho só
+apareceu depois de declarar a fonte do próprio basemap (`Noto Sans Regular`).
+Dois testes travam os dois: nenhum ícone acima de U+FFFF, e todo traço com
+grupo.
+
+**Filtros.** Cada camada virou caixa de marcar acima do mapa; o grupo viaja no
+`meta.grupo` de cada traço e o JS liga/desliga com `Plotly.restyle`, sem
+redesenhar nem perder o zoom que a pessoa deu. A legenda do Plotly saiu — ela
+repetia as caixas e ficava deitada sobre o canto do mapa.
+
+Dois padrões: **POP e ligação lógica começam desligados** (linhas longas que
+cruzam o mapa e nunca são destino de ninguém — e, fora do enquadramento,
+deixaram de encolher o evento a um punhado de pixels), e o botão **"foco no
+técnico"**, que é o pedido dito por inteiro: fica só caixa e cabo, que é para
+onde o carro vai.

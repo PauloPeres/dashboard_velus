@@ -2436,9 +2436,36 @@ def os_backlog_por_tipo(rows: list[dict[str, Any]]) -> str:
 # estáticos): muda esta URL, o resto do código não.
 _BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/positron"
 
+# A fonte do texto desenhado DENTRO do mapa, e ela não é livre: o MapLibre pede
+# os glifos ao próprio style, por nome de fonte. O padrão do Plotly é
+# "Open Sans", que o OpenFreeMap não serve — o pedido volta 404 e o texto
+# simplesmente não aparece, sem erro visível na tela. Medido com o mapa em
+# branco: `GET /fonts/Open%20Sans%20Regular/8960-9215.pbf → 404`.
+_BASEMAP_FONT = "Noto Sans Regular"
+
 # Em quantos pedaços um segmento é quebrado para virar tracejado. Ímpar de
 # propósito: começa e termina com traço desenhado, em vez de sumir na ponta.
 _DASH_PEDACOS = 7
+
+
+# Ícones do mapa (pedido do operador, 21/09/2026: "casa para clientes, um ícone
+# para CTO, outro para outras coisas").
+#
+# São caracteres do BMP de propósito, e não emoji. O motor por baixo do
+# `scattermap` é o MapLibre, que desenha texto com os glifos servidos pelo
+# style — e o protocolo de glifos só cobre os pontos de código até U+FFFF. Uma
+# casinha emoji (U+1F3E0) sairia como espaço em branco no mapa de produção; a
+# casinha tipográfica (U+2302) está na fonte do basemap e aparece.
+_ICONE_CLIENTE = "\u2302"  # ⌂ casa
+_ICONE_CAIXA = "\u25a0"  # ■ caixa (CTO)
+_ICONE_EMENDA = "\u25c6"  # ◆ emenda
+_ICONE_POP = "\u2605"  # ★ POP
+
+# Camadas que começam desligadas. Não somem — viram caixa desmarcada acima do
+# mapa. O critério é o do pedido: reduzir ruído e deixar na tela o que responde
+# "para onde o técnico vai". O POP e a ligação lógica até ele são linhas longas
+# que cruzam o mapa inteiro e nunca são o destino de ninguém.
+_GRUPOS_OCULTOS = frozenset({"pop"})
 
 
 # Tamanho do quadro do mapa na tela (`_massivas_mapa.html`). Entra na conta do
@@ -2486,7 +2513,12 @@ def _map_enquadramento(pontos: list[dict[str, Any]]) -> tuple[dict[str, float], 
 
 
 def _map_dashed_trace(
-    segmentos: list[dict[str, Any]], *, nome: str, cor: str, largura: float
+    segmentos: list[dict[str, Any]],
+    *,
+    nome: str,
+    cor: str,
+    largura: float,
+    grupo: str,
 ) -> list[go.Scattermap]:
     """Linha TRACEJADA entre dois pontos do mapa.
 
@@ -2524,12 +2556,19 @@ def _map_dashed_trace(
             name=nome,
             line={"width": largura, "color": cor},
             hoverinfo="skip",
+            meta={"grupo": grupo},
+            visible=grupo not in _GRUPOS_OCULTOS,
         )
     ]
 
 
 def _map_solid_path_trace(
-    tracados: list[dict[str, Any]], *, nome: str, cor: str, largura: float
+    tracados: list[dict[str, Any]],
+    *,
+    nome: str,
+    cor: str,
+    largura: float,
+    grupo: str,
 ) -> list[go.Scattermap]:
     """Linha CHEIA — e aqui ela é honesta, porque é traçado de verdade.
 
@@ -2565,6 +2604,8 @@ def _map_solid_path_trace(
             line={"width": largura, "color": cor},
             text=rotulos,
             hovertemplate="<b>%{text}</b><extra>cabo candidato</extra>",
+            meta={"grupo": grupo},
+            visible=grupo not in _GRUPOS_OCULTOS,
         )
     ]
 
@@ -2584,15 +2625,15 @@ def outage_map(mapa: dict[str, Any]) -> str:
     # voltou fique por cima do ponto antigo — é assim que a equipe vê o mapa
     # esverdeando durante o reparo.
     camadas = [
-        ("clientes", "Fora agora", "#dc2626", 9),
-        ("voltaram", "Já voltou", "#16a34a", 9),
-        ("ctos", "CTO afetada", "#f59e0b", 13),
-        ("vizinhas", "Caixa vizinha no ar", "#059669", 13),
+        ("clientes", "Fora agora", "#dc2626", 17, _ICONE_CLIENTE, "fora"),
+        ("voltaram", "Já voltou", "#16a34a", 17, _ICONE_CLIENTE, "voltaram"),
+        ("ctos", "CTO afetada", "#f59e0b", 21, _ICONE_CAIXA, "caixas"),
+        ("vizinhas", "Caixa vizinha no ar", "#059669", 21, _ICONE_CAIXA, "caixas"),
         # A emenda é onde o cabo é aberto — o primeiro lugar que o técnico abre
         # quando o trecho passa por ali. Só aparecem as que estão perto do
         # evento; as 317 do cadastro seriam pontos sem pergunta.
-        ("emendas", "Caixa de emenda", "#7c3aed", 11),
-        ("pops", "POP", "#2563eb", 15),
+        ("emendas", "Caixa de emenda", "#7c3aed", 20, _ICONE_EMENDA, "caixas"),
+        ("pops", "POP", "#2563eb", 23, _ICONE_POP, "pop"),
     ]
     # As ligações entram ANTES dos pontos para ficarem por baixo deles.
     traces = [
@@ -2602,12 +2643,14 @@ def outage_map(mapa: dict[str, Any]) -> str:
             nome="Cabo candidato (traçado do projeto)",
             cor="#7c3aed",
             largura=3,
+            grupo="cabo",
         ),
         *_map_dashed_trace(
             mapa.get("ligacoes") or [],
             nome="Ligação lógica até o POP",
             cor="#6b7280",
             largura=2,
+            grupo="pop",
         ),
         # O trecho sobre o cabo entra CHEIO e por cima do traçado: aqui a linha
         # é o caminho de verdade da fibra entre as duas caixas, com as curvas do
@@ -2618,27 +2661,47 @@ def outage_map(mapa: dict[str, Any]) -> str:
             nome="Trecho suspeito sobre o cabo",
             cor="#ea580c",
             largura=5,
+            grupo="cabo",
         ),
         *_map_dashed_trace(
             mapa.get("trecho") or [],
             nome="Trecho suspeito",
             cor="#ea580c",
             largura=4,
+            grupo="cabo",
         ),
     ]
     todos: list[dict[str, Any]] = []
-    for chave, nome, cor, tamanho in camadas:
+    for chave, nome, cor, tamanho, icone, grupo in camadas:
         pontos = mapa.get(chave) or []
-        todos.extend(pontos)
+        # Camada desligada não entra no enquadramento: com o POP dentro da
+        # conta, o mapa abria mostrando o quarteirão do evento e o POP a três
+        # quilômetros, e o evento virava um punhado de pixels.
+        if grupo not in _GRUPOS_OCULTOS:
+            todos.extend(pontos)
         traces.append(
             go.Scattermap(
                 lat=[p["lat"] for p in pontos],
                 lon=[p["lon"] for p in pontos],
-                mode="markers",
-                name=nome,
+                # O glifo vai POR CIMA do círculo colorido, não no lugar dele:
+                # a cor continua sendo o que se lê de longe, e o ícone é o que
+                # diz "isto é uma casa" ou "isto é uma caixa" de perto.
+                mode="markers+text",
+                name=f"{icone} {nome}",
                 marker={"size": tamanho, "color": cor},
-                text=[p["label"] for p in pontos],
-                hovertemplate="<b>%{text}</b><extra>" + nome + "</extra>",
+                text=[icone] * len(pontos),
+                textfont={
+                    "size": max(10, tamanho - 6),
+                    "color": "#ffffff",
+                    "family": _BASEMAP_FONT,
+                },
+                textposition="middle center",
+                # `text` virou o desenho, então o rótulo passa a viajar em
+                # `hovertext` — sem isso o hover diria "⌂" em vez do cliente.
+                hovertext=[p["label"] for p in pontos],
+                hovertemplate="<b>%{hovertext}</b><extra>" + nome + "</extra>",
+                meta={"grupo": grupo},
+                visible=grupo not in _GRUPOS_OCULTOS,
             )
         )
 
@@ -2658,8 +2721,11 @@ def outage_map(mapa: dict[str, Any]) -> str:
             # bloqueia uso por aplicação.
             "map": {"style": _BASEMAP_STYLE, "center": centro, "zoom": zoom},
             "margin": {"l": 0, "r": 0, "t": 0, "b": 0},
-            "showlegend": True,
-            "legend": {"orientation": "h", "y": 0, "x": 0, "bgcolor": "rgba(255,255,255,.8)"},
+            # A legenda do Plotly saiu: ela ficava deitada sobre o canto do
+            # mapa, repetindo o que as caixas de filtro acima já dizem — e
+            # agora as caixas fazem mais, porque ligam e desligam a camada em
+            # vez de só nomeá-la.
+            "showlegend": False,
             "font": {"family": "system-ui, sans-serif", "size": 12},
         },
     )
