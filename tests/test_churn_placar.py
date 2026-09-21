@@ -31,7 +31,8 @@ def _run(org: Organization, *, d0: date, sinais: list[dict]) -> ChurnBacktestRun
         horizon_days=90,
         base_size=2800,
         canceled=84,
-        base_rate=0.03,
+        # Em PORCENTAGEM, como o backtest devolve (`taxa_base=... * 100`).
+        base_rate=3.0,
         signals=sinais,
     )
 
@@ -53,7 +54,7 @@ class TestPlacarDoChurn:
         _run(organization_a, d0=hoje - timedelta(days=90), sinais=[])
         placar = _placar_do_churn(organization_a)
         assert placar["d0"] == hoje - timedelta(days=90)
-        assert placar["taxa_base_pct"] == 3.0
+        assert placar["taxa_base_pct"] == 3.0  # e não 300, que era o bug
 
     def test_separa_score_atribuido_de_sinal_reconstruido(
         self, organization_a: Organization

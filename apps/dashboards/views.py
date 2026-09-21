@@ -1040,7 +1040,11 @@ def _placar_do_churn(org: Any) -> dict[str, Any]:
         "horizonte": run.horizon_days,
         "base": run.base_size,
         "cancelados": run.canceled,
-        "taxa_base_pct": round(run.base_rate * 100, 1),
+        # `base_rate` já vem EM PORCENTAGEM do backtest (`taxa_base=... * 100`).
+        # Multiplicar de novo aqui virou "960% da base cancelou" na verificação
+        # em produção — número que, de tão absurdo, denuncia a si mesmo; o
+        # perigoso seria um erro de escala que passasse por plausível.
+        "taxa_base_pct": round(run.base_rate, 1),
         # O score do dia só existe a partir de 11/08/2026 (#123). Antes disso, o
         # que houver são sinais reconstruídos — e a tela diz qual está vendo, em
         # vez de misturar os dois como se fossem a mesma evidência.
