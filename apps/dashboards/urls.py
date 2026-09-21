@@ -95,6 +95,13 @@ urlpatterns = [
         views.massiva_ciente,
         name="massiva_ciente",
     ),
+    # "Concluir massiva" (21/09/2026): a operação sabe que acabou antes de o
+    # número saber. Mesma permissão da aba.
+    path(
+        "operations/massivas/<int:outage_id>/concluir/",
+        views.massiva_concluir,
+        name="massiva_concluir",
+    ),
     # A massiva vista por quem está na rua: link assinado, 24 h, uma massiva.
     # Fora do catálogo de páginas de propósito — não tem login para o middleware
     # proteger; a autorização é o próprio token.

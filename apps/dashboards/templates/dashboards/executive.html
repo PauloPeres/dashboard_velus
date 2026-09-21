@@ -8,6 +8,24 @@
 <!-- Cabeçalho -->
 <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
   <h1 class="text-2xl font-bold text-gray-900">Visão Executiva</h1>
+  {% comment %}
+  Caminho para o painel de parede (pedido de 21/09/2026: "não tenho nada com
+  relação a link da TV"). O pareamento existia desde o P0, mas só era alcançável
+  por quem já soubesse a URL — e ninguém descobre sozinho um endereço que não
+  está escrito em lugar nenhum.
+
+  Fica na primeira tela que todo mundo abre, discreto: é uma ação de instalação,
+  feita poucas vezes, não uma leitura do dia.
+  {% endcomment %}
+  <a href="{% url 'dashboards:panel_approve' %}"
+     class="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-gray-300
+            text-gray-600 hover:bg-gray-50 sm:order-last">
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round"
+            d="M9 17H5a2 2 0 01-2-2V7a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4m-6 4h8"/>
+    </svg>
+    Parear uma TV
+  </a>
   {% if last_sync %}
     <span class="text-xs text-gray-400">
       Dados de <strong class="text-gray-600">{{ last_sync|date:"d/m/Y" }}</strong>

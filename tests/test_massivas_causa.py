@@ -442,3 +442,95 @@ class TestDispensarCausa:
         )
         outage.refresh_from_db()
         assert outage.cause_waived_at is None
+
+
+# ---------------------------------------------------------------------------
+# Concluir massiva manualmente (21/09/2026)
+# ---------------------------------------------------------------------------
+@pytest.mark.django_db
+# staticfiles é gitignored: no CI o whitenoise avisa que o diretório não
+# existe e o aviso vira erro. Todo teste com `client` precisa do marker.
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestConcluirManualmente:
+    """A operação sabe que acabou antes de o número saber.
+
+    A massiva encerra sozinha com ≥90% de retorno, ou por inanição. Falta o
+    caso do poste já trocado, em que o que sobra na lista é ONU queimada — e o
+    evento fica aberto pedindo atenção para um reparo feito. Alarme que toca
+    depois de resolvido ensina a sala a ignorar alarme.
+
+    O que estes testes travam é a honestidade do registro: encerrada por
+    decisão **não é** encerrada por retorno, e quem sobrou fora continua
+    contado como fora.
+    """
+
+    def _aberta(self, org: Organization) -> OutageEvent:
+        set_current_organization(org)
+        return OutageEvent.objects.create(
+            organization=org,
+            scope=OutageEvent.Scope.CTO,
+            element_external_id="CTO-1",
+            element_label="CTO 1",
+            started_at=timezone.now() - timedelta(hours=2),
+            last_detected_at=timezone.now(),
+            affected_count=10,
+            restored_count=4,
+        )
+
+    def test_encerra_agora_e_marca_que_foi_manual(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        outage = self._aberta(organization_a)
+        client.force_login(user_a)
+        resp = client.post(
+            f"/operations/massivas/{outage.pk}/concluir/", {"motivo": "poste trocado"}
+        )
+        assert resp.status_code == 302
+        outage.refresh_from_db()
+        assert outage.ended_at is not None
+        assert outage.closed_manually is True
+        assert outage.closed_manually_by_id == user_a.pk
+        assert outage.closed_manual_reason == "poste trocado"
+        # Quem sobrou fora continua fora: encerrar o evento não devolve ninguém.
+        assert outage.restored_count == 4
+        assert outage.affected_count == 10
+
+    def test_nao_reencerra_o_que_ja_estava_encerrado(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        """Reencerrar mudaria a data de uma massiva que já tem duração medida."""
+        outage = self._aberta(organization_a)
+        fim = timezone.now() - timedelta(hours=1)
+        OutageEvent.objects.filter(pk=outage.pk).update(ended_at=fim)
+
+        client.force_login(user_a)
+        client.post(f"/operations/massivas/{outage.pk}/concluir/")
+        outage.refresh_from_db()
+        assert outage.ended_at == fim
+        assert outage.closed_manually is False
+
+    def test_massiva_de_outra_org_responde_404(
+        self,
+        client: Any,
+        user_a: User,
+        organization_a: Organization,
+        organization_b: Organization,
+    ) -> None:
+        alheia = self._aberta(organization_b)
+        set_current_organization(organization_a)
+        client.force_login(user_a)
+        resp = client.post(f"/operations/massivas/{alheia.pk}/concluir/")
+        assert resp.status_code == 404
+        alheia.refresh_from_db()
+        assert alheia.ended_at is None
+
+    def test_get_nao_encerra(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        """Encerrar por GET deixaria um link capaz de apagar evento da tela."""
+        outage = self._aberta(organization_a)
+        client.force_login(user_a)
+        resp = client.get(f"/operations/massivas/{outage.pk}/concluir/")
+        assert resp.status_code == 405
+        outage.refresh_from_db()
+        assert outage.ended_at is None

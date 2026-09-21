@@ -212,3 +212,36 @@ significa".** Não há arquivo de logo no projeto, então é texto: "VELUS" e,
 embaixo, o nome e o subtítulo do painel. Quando houver imagem, ela entra no
 mesmo lugar. Não é enfeite: uma TV sem título vira "aquele monitor", e quem
 entra na sala não sabe se está vendo a rede, o financeiro ou um print de ontem.
+
+## T10 — Concluir massiva, logo da organização e o caminho para parear a TV
+
+Três pedidos de 21/09/2026, todos pequenos e todos sobre a mesma coisa: a tela
+não pode depender de quem já sabe como ela funciona.
+
+**Concluir massiva manualmente.** Ela encerra sozinha com ≥90% de retorno, ou
+por inanição. Faltava o caso em que a operação *sabe* que acabou antes de o
+número saber — o poste foi trocado e o que sobra na lista é ONU queimada. O
+evento ficava aberto pedindo atenção para um reparo feito, e alarme que toca
+depois de resolvido ensina a sala a ignorar alarme.
+
+Fica gravado em campo próprio (`closed_manually_at/by/reason`), e a tela diz
+"concluída manualmente por fulano". Encerrada por 90% de retorno e encerrada por
+decisão **não medem a mesma coisa**: misturá-las estragaria a duração típica de
+reparo, que é insumo do insight da parede. Quem sobrou fora continua contado
+como fora — o que encerra é o evento, não a queda de cada um.
+
+**Logo como configuração da organização.** `Organization.logo_url`, não
+constante no template: o sistema é multi-tenant e a marca de um cliente não pode
+aparecer na sala de outro. É URL e não upload — o logo já está publicado, e
+guardar arquivo traria armazenamento, versão e permissão para resolver o que uma
+linha de configuração resolve. Sem logo, a TV escreve o nome da organização; se
+a imagem não carregar, o `onerror` devolve o nome escrito, porque ninguém liga
+para o suporte por causa de um ícone de imagem quebrada e a TV passaria meses
+assim.
+
+**O caminho para parear a TV.** O pareamento existe desde o P0, mas só era
+alcançável por quem já soubesse a URL. Agora há um botão na primeira tela e a
+página de aprovação, quando chega sem código, deixa de dizer "código não
+encontrado" (um erro dado a quem não fez nada errado) e passa a ser o começo do
+processo: o endereço a digitar na TV, o que vai aparecer lá, e o campo para o
+código.

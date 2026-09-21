@@ -653,6 +653,26 @@ class OutageEvent(TenantModel):
     # uma mensagem a cada 5 min — que é como se desliga um canal de alerta.
     escalated_at = models.DateTimeField(null=True, blank=True)
 
+    # -- Conclusão manual (21/09/2026) ----------------------------------------
+    # A massiva encerra sozinha quando ≥90% voltou, ou por inanição depois de
+    # horas sem detecção. Faltava o caso em que a operação SABE que acabou antes
+    # do número: o poste foi trocado, os que sobraram são ONU queimada, e o
+    # evento fica aberto na tela chamando atenção para um reparo já feito.
+    #
+    # Campo próprio, e não só um `ended_at` preenchido, porque a diferença
+    # importa depois: uma massiva encerrada por 90% de retorno e uma encerrada
+    # por decisão de gente não medem a mesma coisa, e misturá-las estragaria a
+    # estatística de duração — que é o insumo do "tempo típico de reparo".
+    closed_manually_at = models.DateTimeField(null=True, blank=True)
+    closed_manually_by = models.ForeignKey(
+        "tenancy.User",
+        on_delete=models.SET_NULL,
+        related_name="outages_closed",
+        null=True,
+        blank=True,
+    )
+    closed_manual_reason = models.CharField(max_length=255, blank=True, default="")
+
     # -- Manutenção programada (R10) ------------------------------------------
     # A janela de manutenção é o **evento de rede** que a equipe já cadastra na
     # aba de Tendências (`atendimento.EventoRede` com tipo MANUTENCAO). Um
@@ -711,6 +731,15 @@ class OutageEvent(TenantModel):
     @property
     def cause_waived(self) -> bool:
         return self.cause_waived_at is not None
+
+    @property
+    def closed_manually(self) -> bool:
+        """Encerrada por decisão de gente, não por contagem de retorno.
+
+        A tela diz isso em voz alta: sem a marca, a duração do evento parece
+        medida quando foi declarada.
+        """
+        return self.closed_manually_at is not None
 
     @property
     def is_expected(self) -> bool:

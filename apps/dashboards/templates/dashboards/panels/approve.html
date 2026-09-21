@@ -19,6 +19,66 @@ nenhuma e não enxerga dado nenhum.
     </p>
   </div>
 
+  {% elif sem_codigo %}
+  {% comment %}
+  O começo do pareamento (21/09/2026). Antes, quem chegasse aqui sem código —
+  por um link ou pelo botão da home — via "código não encontrado", que é um erro
+  dado a quem não fez nada errado.
+
+  Três passos, na ordem em que acontecem, porque o primeiro é feito noutro
+  aparelho: o endereço é para digitar no controle da TV.
+  {% endcomment %}
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+    <h1 class="text-xl font-bold text-gray-900">Parear uma TV</h1>
+    <p class="text-sm text-gray-600 mt-2 leading-relaxed">
+      A TV mostra o painel sem login, até alguém revogar. São três passos, e o
+      primeiro é na TV.
+    </p>
+
+    <ol class="mt-5 space-y-4 text-sm text-gray-700">
+      <li>
+        <span class="font-semibold text-gray-900">1.</span>
+        No navegador da TV, abra o endereço do painel:
+        <ul class="mt-2 space-y-2">
+          {% for p in paineis %}
+          <li class="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+            <span class="text-xs uppercase tracking-wider text-gray-400">{{ p.title }}</span>
+            <code class="block text-sm text-gray-900 break-all">{{ p.url }}</code>
+            <span class="text-xs text-gray-400">{{ p.subtitle }}</span>
+          </li>
+          {% empty %}
+          <li class="text-xs text-amber-800">
+            Nenhum painel liberado para o seu acesso.
+          </li>
+          {% endfor %}
+        </ul>
+      </li>
+      <li>
+        <span class="font-semibold text-gray-900">2.</span>
+        A TV mostra um código de seis caracteres e um QR. Escaneie o QR com o
+        celular — ou digite o código abaixo.
+      </li>
+      <li>
+        <span class="font-semibold text-gray-900">3.</span>
+        Aprove. A partir daí a TV entra sozinha, mesmo depois de desligar.
+      </li>
+    </ol>
+
+    <form method="get" class="mt-5 flex gap-2">
+      <input type="text" name="code" maxlength="8" placeholder="código da TV"
+             class="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 uppercase tracking-[0.2em]">
+      <button type="submit"
+              class="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">
+        Continuar
+      </button>
+    </form>
+
+    <p class="text-xs text-gray-400 mt-4 leading-relaxed">
+      O código vale por alguns minutos — se expirar, é só recarregar a tela da TV.
+      As TVs já pareadas, e o botão de revogar, estão em Configurações.
+    </p>
+  </div>
+
   {% elif erro %}
   <div class="bg-white rounded-xl shadow-sm border border-amber-200 p-6">
     <h1 class="text-xl font-bold text-gray-900">Não deu para aprovar</h1>

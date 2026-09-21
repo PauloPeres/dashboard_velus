@@ -42,6 +42,23 @@ class Organization(models.Model):
     name = models.CharField(max_length=200)
     is_active = models.BooleanField(default=True)
 
+    # Marca da empresa nas telas que outras pessoas veem — hoje a TV de parede,
+    # amanhã o relatório impresso. Configuração da organização, e não constante
+    # no template, porque o sistema é multi-tenant: a palavra "VELUS" escrita no
+    # HTML apareceria na sala de outro cliente no dia em que houver um.
+    #
+    # É uma URL, não um arquivo: o logo já está publicado no site da empresa, e
+    # guardar upload traria armazenamento, versão e permissão para resolver um
+    # problema que uma linha de configuração resolve. Quando ela está vazia, a
+    # tela escreve o nome da organização — que é sempre melhor que um espaço em
+    # branco onde deveria haver identidade.
+    logo_url = models.URLField(
+        max_length=500,
+        blank=True,
+        default="",
+        help_text=_("URL pública do logo, exibida no painel de parede."),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

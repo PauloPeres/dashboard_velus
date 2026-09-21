@@ -88,6 +88,8 @@ _ROUTE_TO_KEY.update({
     # quem esteve no reparo e sabe a resposta.
     ("dashboards", "massiva_causa"): "massivas",
     ("dashboards", "massiva_ciente"): "massivas",
+    # Concluir a massiva é ação de quem está tratando o evento — mesma aba.
+    ("dashboards", "massiva_concluir"): "massivas",
     # Os painéis de parede (modo TV) NÃO entram aqui de propósito. Eles têm dois
     # tipos de visitante — a pessoa logada e a TV pareada, que não tem usuário —
     # e o middleware só sabe raciocinar sobre o primeiro: uma TV cairia no

@@ -3373,6 +3373,66 @@ def massiva_ciente(request: HttpRequest, outage_id: int) -> HttpResponse:
 @login_required
 @never_cache
 @require_POST
+def massiva_concluir(request: HttpRequest, outage_id: int) -> HttpResponse:
+    """Encerra a massiva por decisão de gente (pedido de 21/09/2026).
+
+    A massiva encerra sozinha quando ≥90% dos afetados volta, ou por inanição
+    depois de horas sem detecção. Falta o caso em que a operação **sabe** que
+    acabou antes de o número saber: o poste foi trocado, o cabo foi emendado, e
+    os que sobram na lista são ONU queimada ou cliente com o equipamento
+    desligado. O evento fica aberto pedindo atenção para um reparo já feito — e
+    um alarme que continua tocando depois de resolvido é como se ensina uma sala
+    a ignorar alarme.
+
+    Três cuidados, porque isto apaga um evento da tela de quem está agindo:
+
+    - **só encerra o que está aberto.** Reencerrar mudaria a data de uma massiva
+      que já tem duração medida;
+    - **fica marcado como manual**, em campo próprio. Uma massiva encerrada por
+      90% de retorno e uma encerrada por decisão não medem a mesma coisa, e
+      misturá-las estragaria a estatística de duração;
+    - **o `ended_at` é agora**, não o último retorno. Quem clicou está dizendo
+      "acabou neste instante"; datar pelo último retorno encolheria o evento
+      para antes da decisão.
+
+    Quem sobrou fora continua contado como fora. A massiva encerrada não diz que
+    todo mundo voltou — diz que o reparo terminou.
+    """
+    from apps.network.infrastructure.models import OutageEvent
+
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    outage = get_object_or_404(
+        OutageEvent.objects.filter(organization=org), pk=outage_id
+    )
+    if outage.ended_at is None:
+        agora = timezone.now()
+        outage.ended_at = agora
+        outage.closed_manually_at = agora
+        outage.closed_manually_by = request.user
+        outage.closed_manual_reason = (request.POST.get("motivo") or "").strip()[:255]
+        outage.save(
+            update_fields=[
+                "ended_at",
+                "closed_manually_at",
+                "closed_manually_by",
+                "closed_manual_reason",
+                "updated_at",
+            ]
+        )
+
+    destino = request.POST.get("next") or reverse("dashboards:massivas")
+    if not destino.startswith("/"):
+        destino = reverse("dashboards:massivas")
+    return HttpResponseRedirect(destino)
+
+
+@login_required
+@never_cache
+@require_POST
 def massiva_causa(request: HttpRequest, outage_id: int) -> HttpResponse:
     """Grava a causa confirmada de uma massiva encerrada (R9).
 

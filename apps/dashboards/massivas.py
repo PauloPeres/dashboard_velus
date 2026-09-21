@@ -306,6 +306,15 @@ def outage_row(
         # de inventar uma pessoa.
         "acknowledged_by_display": outage.acknowledged_by_display,
         "is_acknowledged": outage.is_acknowledged,
+        # Encerrada por decisão de gente, não por contagem de retorno. A tela
+        # diz isso em voz alta: sem a marca, a duração do evento pareceria
+        # medida quando foi declarada.
+        "closed_manually": outage.closed_manually,
+        "closed_manually_at": outage.closed_manually_at,
+        "closed_manually_by": (
+            outage.closed_manually_by.email if outage.closed_manually_by_id else ""
+        ),
+        "closed_manual_reason": outage.closed_manual_reason,
     }
 
 

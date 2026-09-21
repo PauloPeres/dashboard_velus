@@ -731,6 +731,9 @@ class TestAcaoPeloControle:
 # Mapa do dia (21/09/2026)
 # ---------------------------------------------------------------------------
 @pytest.mark.django_db
+# staticfiles é gitignored: no CI o whitenoise avisa que o diretório não
+# existe e o aviso vira erro. Todo teste com `client` precisa do marker.
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
 class TestMapaDoDia:
     """A TV só tinha mapa dentro de uma massiva aberta; com a rede calma, nenhum.
 
@@ -889,8 +892,25 @@ class TestMapaDoDia:
         tv = Client()
         tv.cookies[COOKIE_NOME] = token
         html = tv.get(PANEL_URL).content.decode()
-        assert "VELUS" in html
+        # O nome vem da organização, não escrito no template: multi-tenant, a
+        # marca de um cliente não pode aparecer na sala do outro.
+        assert organization_a.name.upper() in html
         assert "Quedas e massivas em tempo real" in html
+
+    def test_logo_da_org_substitui_o_nome_escrito(
+        self, organization_a: Organization
+    ) -> None:
+        """`Organization.logo_url` é configuração, não constante no template."""
+        organization_a.logo_url = "https://exemplo.test/logo.png"
+        organization_a.save(update_fields=["logo_url"])
+        token = _tv_pareada(organization_a)
+        tv = Client()
+        tv.cookies[COOKIE_NOME] = token
+        html = tv.get(PANEL_URL).content.decode()
+        assert "https://exemplo.test/logo.png" in html
+        # O nome continua no HTML como plano B: se a imagem não carregar, a TV
+        # não passa meses com um ícone de imagem quebrada no topo.
+        assert organization_a.name.upper() in html
 
     def test_slide_sai_da_rotacao_sem_caixa_no_mapa(self) -> None:
         """Mapa vazio na parede ensina a sala a ignorar a TV (T4)."""

@@ -48,7 +48,29 @@ Três decisões de tela (§2, §3 e §5 do docs/massivas-painel-tv-plano.md):
     entra aqui no lugar da palavra, com o mesmo espaço.
     {% endcomment %}
     <div class="pr-8 border-r border-slate-700">
-      <p class="text-2xl font-black tracking-[0.25em] text-slate-100 leading-none">VELUS</p>
+      {% if organizacao.logo_url %}
+      {% comment %}
+      O logo vem da configuração da organização (`Organization.logo_url`), não
+      do template: multi-tenant, a marca de um cliente não pode aparecer na sala
+      do outro. Altura fixa e largura livre — logo é sempre mais largo que alto,
+      e travar a largura amassaria o desenho.
+
+      Se a imagem não carregar (link quebrado, rede da sala sem saída), o
+      `onerror` troca pelo nome escrito. Uma TV com um ícone de imagem quebrada
+      no topo passa meses assim: ninguém chama o suporte por causa de um logo.
+      {% endcomment %}
+      <img src="{{ organizacao.logo_url }}" alt="{{ organizacao.name }}"
+           class="h-9 w-auto object-contain"
+           onerror="this.remove(); document.getElementById('painel-marca-texto').classList.remove('hidden');">
+      <p id="painel-marca-texto"
+         class="hidden text-2xl font-black tracking-[0.25em] text-slate-100 leading-none">
+        {{ organizacao.name|upper }}
+      </p>
+      {% else %}
+      <p class="text-2xl font-black tracking-[0.25em] text-slate-100 leading-none">
+        {{ organizacao.name|upper|default:"VELUS" }}
+      </p>
+      {% endif %}
       <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400 mt-1.5">
         {{ panel.title }} · {{ panel.subtitle }}
       </p>

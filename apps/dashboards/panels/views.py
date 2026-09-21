@@ -39,7 +39,7 @@ from django.views.decorators.http import require_POST
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import DisplayDevice
 
-from . import PanelSpec, get_panel
+from . import PanelSpec, all_panels, get_panel
 from .pairing import (
     COOKIE_MAX_AGE,
     COOKIE_NOME,
@@ -301,8 +301,16 @@ def panel_approve(request: HttpRequest) -> HttpResponse:
     )
     panel = get_panel(device.panel_key) if device else None
 
+    # Sem código, esta página deixa de ser "aprovar" e vira **o começo do
+    # pareamento**: até 21/09/2026 ela só existia como destino do QR, e quem
+    # chegava por um link (ou pelo botão da home) via "código não encontrado",
+    # que é um erro para quem não fez nada errado.
+    sem_codigo = not codigo
+
     erro = ""
-    if device is None:
+    if sem_codigo:
+        erro = ""
+    elif device is None:
         erro = "Código não encontrado, já usado ou expirado."
     elif codigo_expirou(device.created_at):
         erro = "Este código expirou. Recarregue a tela da TV para gerar outro."
@@ -334,7 +342,30 @@ def panel_approve(request: HttpRequest) -> HttpResponse:
     return render(
         request,
         "dashboards/panels/approve.html",
-        {"aprovado": False, "erro": erro, "codigo": codigo, "panel": panel},
+        {
+            "aprovado": False,
+            "erro": erro,
+            "codigo": codigo,
+            "panel": panel,
+            "sem_codigo": sem_codigo,
+            # Os painéis que ESTA pessoa pode parear, com o endereço a digitar
+            # na TV. Absoluto porque é para alguém teclar num controle remoto,
+            # e um caminho relativo não serve num aparelho que não está aqui.
+            "paineis": [
+                {
+                    "key": p.key,
+                    "title": p.title,
+                    "subtitle": p.subtitle,
+                    "url": request.build_absolute_uri(
+                        reverse("dashboards:panel", args=[p.key])
+                    ),
+                }
+                for p in all_panels()
+                if _pode_no_painel(membership, p)
+            ]
+            if sem_codigo
+            else [],
+        },
     )
 
 
@@ -487,6 +518,9 @@ def panel_view(request: HttpRequest, panel_key: str) -> HttpResponse:
         "dashboards/panels/shell.html",
         {
             "panel": panel,
+            # A TV não tem sessão e o contexto da organização não chega pelo
+            # middleware: o logo e o nome vêm da credencial do aparelho.
+            "organizacao": org,
             "paginas": paginas,
             "snapshot": dados,
             "device": device,
