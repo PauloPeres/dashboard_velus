@@ -133,11 +133,23 @@
           Já voltaram ({{ filtros_clientes.voltaram|intcomma }})
         </button>
       </div>
+      {% comment %}
+      Uma marca só para as duas réguas, confirmado pelo operador: abaixo de
+      -25 dBm e 3 dB pior que a base são ambos "ruim, precisa melhorar, fusão
+      ruim". Quem vai marcar visita quer uma lista, não duas — mas o rótulo
+      mostra a decomposição, porque as duas dizem coisas diferentes sobre o
+      mesmo cliente e a soma delas não é a soma dos números (há quem esteja nos
+      dois).
+      {% endcomment %}
       <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
         <input type="checkbox" id="filtro-sinal-critico" class="rounded border-gray-300">
         <span class="text-gray-600">
-          Só sinal pior que {{ filtros_clientes.limiar_dbm|floatformat:0 }} dBm
-          (<span class="text-red-600 font-semibold">{{ filtros_clientes.criticos|intcomma }}</span>)
+          Só sinal ruim
+          (<span class="text-red-600 font-semibold">{{ filtros_clientes.ruins|intcomma }}</span>)
+          <span class="text-gray-400">
+            — abaixo de {{ filtros_clientes.limiar_dbm|floatformat:0 }} dBm ({{ filtros_clientes.criticos|intcomma }})
+            ou {{ filtros_clientes.degradacao_db|floatformat:0 }} dB pior que a base ({{ filtros_clientes.degradados|intcomma }})
+          </span>
         </span>
       </label>
       <span id="clientes-contagem" class="text-gray-400"></span>
@@ -168,7 +180,7 @@
         {% for l in linhas %}
         <tr class="linha-cliente hover:bg-gray-50 {% if l.sinal.degradado %}bg-amber-50{% endif %}"
             data-voltou="{% if l.voltou %}1{% else %}0{% endif %}"
-            data-critico="{% if l.sinal.critico %}1{% else %}0{% endif %}">
+            data-sinal-ruim="{% if l.sinal.ruim %}1{% else %}0{% endif %}">
           <td class="px-4 py-3 font-medium text-gray-900">{{ l.nome }}</td>
           <td class="px-4 py-3 text-gray-600 tabular-nums">{{ l.contrato }}</td>
           <td class="px-4 py-3 text-gray-600">{{ l.plano }}</td>
@@ -248,7 +260,7 @@
         var okStatus = status === "todos"
           || (status === "fora" && !voltou)
           || (status === "voltaram" && voltou);
-        var okSinal = !soCritico.checked || tr.dataset.critico === "1";
+        var okSinal = !soCritico.checked || tr.dataset.sinalRuim === "1";
         var mostra = okStatus && okSinal;
         tr.classList.toggle("hidden", !mostra);
         if (mostra) visiveis++;

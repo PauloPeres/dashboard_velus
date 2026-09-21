@@ -165,6 +165,12 @@ excludente (todos / ainda fora / já voltaram) e o **sinal** é uma marca que se
 soma. "Quem voltou **e** está abaixo de -25 dBm" é exatamente a lista de quem
 voltou mas vai reclamar de novo.
 
+**As duas réguas entram no mesmo filtro.** Perguntado, o Paulo respondeu que
+"os dois estão certos: -25 dBm e 3 dB a mais estão ruins, precisa melhorar,
+fusão ruim". Então a marca da tabela é a **união** das duas — quem vai marcar
+visita quer uma lista, não duas. O rótulo mostra a decomposição, porque a soma
+dos dois números não é o total: há cliente nos dois lados.
+
 **Duas réguas de sinal, que convivem.** A que já existia é *relativa* — retorno
 mais de 3 dB pior que a base, cheiro de fusão mal feita neste reparo. A nova é
 *absoluta*: -25 dBm é ruim tenha piorado hoje ou não. Uma ONU que sempre esteve

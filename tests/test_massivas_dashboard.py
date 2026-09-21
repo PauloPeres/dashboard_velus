@@ -1955,6 +1955,20 @@ class TestFiltrosDaTabelaDeClientes:
             SimpleNamespace(signal_rx_before=-22.0, signal_rx_after=-24.9)  # type: ignore[arg-type]
         )
         assert celula["critico"] is False
+        assert celula["ruim"] is False
+
+    def test_piorou_3db_entra_no_filtro_mesmo_acima_do_limiar(self) -> None:
+        """Confirmado pelo operador: as duas réguas mandam visita.
+
+        -20 para -24 dBm não cruza o limiar absoluto, mas são 4 dB de piora —
+        fusão mal feita neste reparo. O filtro da tabela é a união das duas.
+        """
+        celula = _signal_cell(
+            SimpleNamespace(signal_rx_before=-20.0, signal_rx_after=-24.0)  # type: ignore[arg-type]
+        )
+        assert celula["critico"] is False
+        assert celula["degradado"] is True
+        assert celula["ruim"] is True
 
     def test_sem_leitura_nao_e_saudavel_e_nem_critico(self) -> None:
         celula = _signal_cell(SimpleNamespace())  # type: ignore[arg-type]
@@ -1994,6 +2008,10 @@ class TestFiltrosDaTabelaDeClientes:
         assert filtros["voltaram"] == 1
         assert filtros["fora"] == 2
         assert filtros["criticos"] == 1
+        # "ruim" é a união das duas réguas — e o "ruim" da amostra está abaixo
+        # do limiar E piorou 4,4 dB, então a união não é a soma.
+        assert filtros["degradados"] == 1
+        assert filtros["ruins"] == 1
         # O não medido é contado à parte — não some dentro de "acima do limiar".
         assert filtros["sem_leitura"] == 1
 
@@ -2002,5 +2020,5 @@ class TestFiltrosDaTabelaDeClientes:
             assert f'data-status="{status}"' in html
         assert 'id="filtro-sinal-critico"' in html
         # A linha carrega o recorte: é por estes atributos que o filtro anda.
-        assert 'data-critico="1"' in html
+        assert 'data-sinal-ruim="1"' in html
         assert "sem leitura óptica" in html

@@ -1720,6 +1720,12 @@ def _signal_cell(drop: ConnectionDropEvent | None) -> dict[str, Any]:
         # vazio: a linha não é "boa", é **não medida**, e a tela conta essas
         # separadamente em vez de deixá-las passar por saudáveis.
         "critico": critico,
+        # As duas réguas juntas — confirmado pelo operador em 21/09/2026: "os
+        # dois estão certos, -25 dBm e 3 dB a mais estão ruins e precisam
+        # melhorar, fusão ruim". É esta a lista de quem precisa de visita, e é
+        # ela que o filtro da tabela usa. As duas continuam separadas no resto
+        # da tela, porque dizem coisas diferentes sobre o mesmo cliente.
+        "ruim": critico or degradado,
         "critico_de": ("retorno" if depois is not None else "base") if referencia is not None else "",
         "sem_leitura": referencia is None,
     }
@@ -1839,8 +1845,11 @@ def compute_massiva_detalhe(
             "fora": sum(1 for linha in linhas if not linha["voltou"]),
             "voltaram": sum(1 for linha in linhas if linha["voltou"]),
             "criticos": sum(1 for linha in linhas if linha["sinal"]["critico"]),
+            "degradados": sum(1 for linha in linhas if linha["sinal"]["degradado"]),
+            "ruins": sum(1 for linha in linhas if linha["sinal"]["ruim"]),
             "sem_leitura": sum(1 for linha in linhas if linha["sinal"]["sem_leitura"]),
             "limiar_dbm": SIGNAL_CRITICAL_DBM,
+            "degradacao_db": SIGNAL_DEGRADATION_DB,
         },
         "mapa": compute_mapa(
             org,
