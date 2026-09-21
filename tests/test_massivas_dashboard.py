@@ -1903,6 +1903,11 @@ class TestIconesEFiltrosDoMapa:
         # O POP está a -23.4; o enquadramento fica no quarteirão do evento.
         assert centro["lat"] < -23.49
 
+    # staticfiles é gitignored: no CI o whitenoise avisa que o diretório não
+    # existe, e o aviso vira erro. Todo teste que passa pelo `client` precisa
+    # deste marker.
+    @pytest.mark.django_db
+    @pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
     def test_a_tela_traz_as_caixas_de_filtro_e_o_foco_no_tecnico(
         self, client: Any, user_a: User, organization_a: Organization
     ) -> None:
