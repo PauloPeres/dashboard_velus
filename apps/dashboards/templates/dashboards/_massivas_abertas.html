@@ -148,20 +148,40 @@ debaixo do dedo de quem está lendo durante o reparo.
           <div class="h-full bg-emerald-500" style="width: {{ l.restored_pct }}%"></div>
         </div>
         <p class="text-xs text-emerald-700 mt-1">{{ l.restored_pct }}% já voltou</p>
-        <a href="{% url 'dashboards:massiva_detalhe' l.id %}"
-           class="inline-block mt-3 text-xs text-blue-600 hover:underline">Ver clientes afetados →</a>
-
         {% comment %}
-        Mensagem pronta para o técnico (pedido de 21/09/2026). O texto é montado
-        no servidor porque repete afirmações que a tela leva a sério — trecho
-        suspeito é inferência, cabo é candidato. Montá-lo em JavaScript
-        separaria o texto das regras que o justificam.
+        As três ações da massiva, lado a lado e visíveis (T1/T2 do plano de
+        campo). A de copiar era um link cinza do tamanho de nota de rodapé —
+        quem está atendendo um rompimento não vai caçá-la.
+
+        A mensagem é montada no servidor porque repete afirmações que a tela
+        leva a sério: trecho suspeito é inferência, cabo é candidato. Montá-la
+        em JavaScript separaria o texto das regras que o justificam.
         {% endcomment %}
-        <button type="button"
-                class="btn-copiar block mt-2 text-xs text-gray-500 hover:text-gray-700 hover:underline"
-                data-mensagem="{{ l.mensagem_tecnico }}">
-          Copiar mensagem para o técnico
-        </button>
+        <div class="flex flex-wrap items-center gap-2 mt-3">
+          <button type="button"
+                  class="btn-copiar inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg
+                         bg-emerald-600 text-white font-medium hover:bg-emerald-700"
+                  data-mensagem="{{ l.mensagem_tecnico }}">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/>
+            </svg>
+            <span class="btn-copiar-texto">Copiar para o técnico</span>
+          </button>
+
+          <a href="{% url 'dashboards:massiva_detalhe' l.id %}#mapa"
+             class="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg
+                    border border-gray-300 text-gray-700 hover:bg-gray-50">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>
+            </svg>
+            Ver só esta no mapa
+          </a>
+
+          <a href="{% url 'dashboards:massiva_detalhe' l.id %}"
+             class="text-xs text-blue-600 hover:underline">Clientes afetados →</a>
+        </div>
       </div>
     </div>
   </div>
@@ -192,10 +212,13 @@ debaixo do dedo de quem está lendo durante o reparo.
     var botao = ev.target.closest(".btn-copiar");
     if (!botao) { return; }
     var texto = botao.dataset.mensagem || "";
-    var original = botao.textContent;
+    // O aviso troca só o rótulo, não o conteúdo do botão: trocar tudo apagaria
+    // o ícone e o botão "piscaria" de tamanho a cada clique.
+    var rotulo = botao.querySelector(".btn-copiar-texto") || botao;
+    var original = rotulo.textContent;
     var avisar = function (msg) {
-      botao.textContent = msg;
-      setTimeout(function () { botao.textContent = original; }, 2000);
+      rotulo.textContent = msg;
+      setTimeout(function () { rotulo.textContent = original; }, 2000);
     };
     // `navigator.clipboard` exige HTTPS (ou localhost). Sem ele, o fallback
     // antigo ainda copia — melhor que um botão que não faz nada.

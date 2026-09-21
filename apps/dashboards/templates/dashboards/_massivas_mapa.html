@@ -8,7 +8,11 @@ CSP é que precisou liberar `tiles.openfreemap.org`. Não usa `renderChart` porq
 aquele helper decide "tem dado?" olhando x/y/labels, que um traço de mapa não
 tem: aqui o mapa renderiza mesmo vazio, e o vazio é informação.
 {% endcomment %}
-<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+{% comment %}
+O `id="mapa"` é o alvo do botão "ver só esta no mapa" da lista: o link leva ao
+detalhe da massiva já rolado até aqui, onde o mapa mostra uma massiva só.
+{% endcomment %}
+<div id="mapa" class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6 scroll-mt-4">
   <div class="flex flex-wrap items-center gap-2 mb-1">
     {% comment %}
     O título vem de fora porque o bloco serve duas telas com recortes

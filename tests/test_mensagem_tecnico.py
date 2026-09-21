@@ -168,5 +168,9 @@ class TestBotaoNaTela:
         _massiva(organization_a)
         client.force_login(user_a)
         html = client.get("/operations/massivas/").content.decode()
-        assert "Copiar mensagem para o técnico" in html
+        # Botão de verdade, não link de rodapé (T1 do plano de campo).
+        assert "Copiar para o técnico" in html
         assert "data-mensagem=" in html
+        # E o caminho curto para ver a massiva sozinha no mapa (T2).
+        assert "Ver só esta no mapa" in html
+        assert "#mapa" in html
