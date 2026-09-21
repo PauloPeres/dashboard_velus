@@ -1836,9 +1836,17 @@ _LISTA_FOCO_LABELS = {
     "rede": "Rede",
     "comercial": "Comercial",
 }
+# O telefone entrou no CSV a pedido do Paulo (21/09/2026), depois de a decisão
+# ter sido levantada explicitamente: na tela é consulta, num arquivo que sai do
+# sistema vira lista de contatos que circula. Ficou com ele — é quem responde
+# pela base.
+#
+# São duas colunas porque são dois números: o de QUEM FALOU (do Opa, sempre com
+# WhatsApp) e o do CADASTRO (do IXC). Em produção eles divergem em quase 30% dos
+# casos, e juntá-los numa coluna só faria a planilha mentir em um a cada três.
 _LISTA_CSV_HEADER = (
-    "Cliente", "Documento", "Horário", "Atendente", "Departamento",
-    "Categorias", "Protocolo", "Status",
+    "Cliente", "Documento", "Telefone (conversa)", "Telefone (cadastro)",
+    "Horário", "Atendente", "Departamento", "Categorias", "Protocolo", "Status",
 )
 # Páginas de onde o drill-down pode vir — whitelist de NOMES de rota, nunca URL
 # crua vinda da querystring (evita open redirect no link de "voltar").
@@ -1887,6 +1895,11 @@ def _lista_csv_response(
         writer.writerow([
             r["customer_name"],
             r["customer_document"],
+            # Prefixo com apóstrofo não entra: o Excel já trata "(15) 99128-2181"
+            # como texto por causa dos parênteses, e um apóstrofo visível na
+            # célula atrapalharia quem for copiar o número.
+            r["telefone_conversa"],
+            r["telefone_cadastro"],
             r["opened_at_str"],
             r["atendente_nome"],
             r["departamento_nome"],

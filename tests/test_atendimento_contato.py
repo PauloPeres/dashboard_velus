@@ -150,3 +150,46 @@ class TestTela:
         html = client.get(url).content.decode()
         assert "https://wa.me/5515991501696" in html
         assert "falou de outro número" in html
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestCsv:
+    """O telefone no CSV — decisão de produto, tomada explicitamente.
+
+    A proposta inicial era deixar o CSV de fora: na tela é consulta, num arquivo
+    que sai do sistema vira lista de contatos que circula. A decisão ficou com
+    quem responde pela base, e foi incluir (21/09/2026).
+
+    São duas colunas porque são dois números, e juntá-los numa só faria a
+    planilha mentir em quase um a cada três casos.
+    """
+
+    def test_csv_traz_as_duas_colunas_de_telefone(
+        self, client: Any, user_a: Any, organization_a: Organization
+    ) -> None:
+        _atendimento(organization_a, canal_cliente="5515991501696@c.us",
+                     telefone_cadastro="(15) 98825-1772")
+        client.force_login(user_a)
+        hoje = timezone.now().date()
+        url = (
+            f"/operations/atendimento-lista/?de={hoje - timedelta(days=1)}"
+            f"&ate={hoje}&foco=todos&origem=atendimento&format=csv"
+        )
+        corpo = client.get(url).content.decode("utf-8")
+        assert "Telefone (conversa);Telefone (cadastro)" in corpo
+        assert "(15) 99150-1696;(15) 98825-1772" in corpo
+
+    def test_sem_numero_a_coluna_sai_vazia_e_nao_quebra(
+        self, client: Any, user_a: Any, organization_a: Organization
+    ) -> None:
+        _atendimento(organization_a, canal_cliente="", telefone_cadastro=None)
+        client.force_login(user_a)
+        hoje = timezone.now().date()
+        url = (
+            f"/operations/atendimento-lista/?de={hoje - timedelta(days=1)}"
+            f"&ate={hoje}&foco=todos&origem=atendimento&format=csv"
+        )
+        resp = client.get(url)
+        assert resp.status_code == 200
+        assert "Fulano;;;" in resp.content.decode("utf-8")

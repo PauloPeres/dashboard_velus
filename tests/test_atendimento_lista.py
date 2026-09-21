@@ -569,9 +569,11 @@ class TestAtendimentoListaCsv:
         raw = resp.content
         assert raw.startswith(b"\xef\xbb\xbf")  # BOM UTF-8
         linhas = [ln for ln in raw.decode("utf-8-sig").split("\r\n") if ln]
+        # As duas colunas de telefone entraram em 21/09/2026: o número de quem
+        # falou (Opa) e o do cadastro (IXC), que divergem em quase 30% dos casos.
         assert linhas[0] == (
-            "Cliente;Documento;Horário;Atendente;Departamento;"
-            "Categorias;Protocolo;Status"
+            "Cliente;Documento;Telefone (conversa);Telefone (cadastro);"
+            "Horário;Atendente;Departamento;Categorias;Protocolo;Status"
         )
         assert len(linhas) == 3  # header + 2 atendimentos
         assert linhas[1].startswith("Cliente Ação;12345678901;")
