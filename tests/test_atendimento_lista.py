@@ -335,7 +335,10 @@ class TestAtendimentoListaView:
         assert "2026080312345" in html
         assert "1 atendimento entre" in html
         assert h.strftime("%d/%m/%Y") in html
-        assert "Exportar CSV" in html
+        # O botão principal virou a planilha em 21/09/2026 (o CSV ficou como
+        # link secundário) — ver `exports/atendimento_xlsx.py`.
+        assert "Exportar planilha" in html
+        assert "format=xlsx" in html
 
     def test_recorte_de_dia(
         self, client: Any, user_a: User, organization_a: Organization

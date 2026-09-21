@@ -35,13 +35,24 @@ recorte, e o período viaja apenas pro link de voltar.
     </p>
     {% if mostrar_periodo %}{% include "dashboards/_period_badge.html" %}{% endif %}
   </div>
-  <a href="?{{ csv_query }}"
-     class="inline-flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">
-    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/>
-    </svg>
-    Exportar CSV
-  </a>
+  {% comment %}
+  A planilha é o export principal desde 21/09/2026: ela leva a mensagem padrão
+  numa aba de configuração e monta o link do WhatsApp por fórmula, então editar a
+  mensagem numa célula atualiza todos os links.
+
+  O CSV continua ali, menor: quem já o usa em algum fluxo não pode ser quebrado
+  por uma melhoria de formato.
+  {% endcomment %}
+  <div class="flex items-center gap-2">
+    <a href="?{{ xlsx_query }}"
+       class="inline-flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/>
+      </svg>
+      Exportar planilha
+    </a>
+    <a href="?{{ csv_query }}" class="text-xs text-gray-500 hover:text-gray-700 hover:underline">CSV</a>
+  </div>
 </div>
 
 {% if mostrar_periodo %}{% include "dashboards/_period_filter.html" %}{% endif %}

@@ -104,6 +104,7 @@ from apps.analytics.application.network_snapshots import compute_network_history
 from apps.shared.context import get_current_organization
 
 from . import charts
+from .exports.atendimento_xlsx import MENSAGEM_PADRAO
 from .massivas import (
     BUCKET_MINUTES,
     SIGNAL_DEGRADATION_DB,
@@ -1882,6 +1883,37 @@ def _parse_dia(raw: str) -> datetime | None:
     return datetime.combine(parsed, time.min, tzinfo=_PERIOD_TZ)
 
 
+def _lista_xlsx_response(
+    rows: Iterable[dict[str, Any]],
+    filename: str,
+    *,
+    recorte: str,
+    mensagem: str,
+) -> HttpResponse:
+    """Planilha com aba de configuração e link de WhatsApp por linha (#21/09).
+
+    Substitui o CSV como export principal. O CSV continua disponível
+    (`format=csv`) porque quem já o usa em algum fluxo não pode ser quebrado por
+    uma melhoria de formato.
+    """
+    from apps.dashboards.exports.atendimento_xlsx import montar_planilha
+
+    wb = montar_planilha(
+        rows,
+        exportado_em=timezone.localtime(timezone.now(), TZ),
+        recorte=recorte,
+        mensagem=mensagem,
+    )
+    response = HttpResponse(
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    )
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    wb.save(response)
+    return response
+
+
 def _lista_csv_response(
     rows: Iterable[dict[str, Any]], filename: str
 ) -> HttpResponse:
@@ -2127,10 +2159,21 @@ def atendimento_lista(request: HttpRequest) -> HttpResponse:
         "tag": filtros["tag"],
     }
 
-    if request.GET.get("format") == "csv":
+    formato = request.GET.get("format")
+    if formato in ("csv", "xlsx"):
         qs = atendimento_lista_queryset(org, **recorte_kwargs)
-        return _lista_csv_response(
-            iter_atendimento_lista_rows(qs), _lista_csv_filename(kind, start, end)
+        nome = _lista_csv_filename(kind, start, end)
+        if formato == "csv":
+            return _lista_csv_response(iter_atendimento_lista_rows(qs), nome)
+        return _lista_xlsx_response(
+            iter_atendimento_lista_rows(qs),
+            nome.replace(".csv", ".xlsx"),
+            recorte=_lista_recorte_label(kind, start, end),
+            # A mensagem pode vir da tela; sem ela, o padrão. Quem exporta ajusta
+            # depois na própria planilha — é para isso que a aba existe.
+            mensagem=(
+                request.GET.get("msg", "").strip() or MENSAGEM_PADRAO
+            )[:500],
         )
 
     raw_page = request.GET.get("page", "1")
@@ -2155,6 +2198,7 @@ def atendimento_lista(request: HttpRequest) -> HttpResponse:
         "per_page": _LISTA_PER_PAGE,
         "base_query": base_query,
         "csv_query": f"{base_query}&format=csv",
+        "xlsx_query": f"{base_query}&format=xlsx",
         "voltar_query": voltar_query,
         "voltar_url": voltar_url,
         "voltar_label": _LISTA_ORIGEM_LABELS[filtros["origem"]],
