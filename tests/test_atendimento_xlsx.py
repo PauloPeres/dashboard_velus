@@ -173,3 +173,37 @@ class TestExportPelaTela:
         )
         assert resp.status_code == 200
         assert resp["Content-Type"].startswith("text/csv")
+
+
+class TestNumeroNoLink:
+    """O telefone sai formatado e o wa.me só aceita dígitos.
+
+    A verificação em produção pegou o hífen: a limpeza tirava espaço e
+    parênteses, mas não o "-", e o link saía como `wa.me/1599172-9534` — uma
+    conversa que não existe.
+    """
+
+    def test_formula_limpa_espaco_parenteses_e_hifen(self) -> None:
+        wb = _abre(montar_planilha(
+            [_linha()], exportado_em=datetime(2026, 9, 21, 10, 30), recorte="x"
+        ))
+        formula = wb["Atendimentos"]["K2"].value
+        for char in (" ", "(", ")", "-"):
+            assert f'"{char}",""' in formula
+
+    def test_ddi_entra_na_formula(self) -> None:
+        """A coluna mostra o número como a pessoa o lê, sem DDI; o wa.me exige
+        o internacional."""
+        wb = _abre(montar_planilha(
+            [_linha()], exportado_em=datetime(2026, 9, 21, 10, 30), recorte="x"
+        ))
+        assert '"https://wa.me/55"' in wb["Atendimentos"]["K2"].value
+
+    def test_nome_vai_cru_para_a_planilha(self) -> None:
+        """Na tela, cliente sem nome vira "—". Na planilha isso viraria
+        "Olá —" na mensagem — pior que "Olá"."""
+        wb = _abre(montar_planilha(
+            [_linha(customer_name="—", customer_name_raw="")],
+            exportado_em=datetime(2026, 9, 21, 10, 30), recorte="x",
+        ))
+        assert wb["Atendimentos"]["A2"].value is None

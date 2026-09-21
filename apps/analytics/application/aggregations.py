@@ -6313,11 +6313,21 @@ def _atendimento_lista_row(at: Any) -> dict[str, Any]:
     """Linha da tabela/CSV a partir de um `Atendimento` carregado."""
     opened_local = timezone.localtime(at.opened_at, _ATENDIMENTO_TZ)
     canal_digitos = telefone_do_canal(at.raw_extras)
-    cadastro = (at.customer.phone if at.customer_id and at.customer else "") or ""
+    cliente = at.customer if at.customer_id else None
+    cadastro = (cliente.phone if cliente else "") or ""
+    # O nome do IXC entra quando o do Opa vem vazio — o que, *medido em produção
+    # (21/09/2026)*, é **sempre**: 1.000 de 1.000 atendimentos sem
+    # `customer_name`, e 758 deles com nome no cliente vinculado. A lista vinha
+    # mostrando "—" no lugar do nome de gente que a gente conhece, e a mensagem
+    # da planilha sairia "Olá —".
+    nome = at.customer_name or (cliente.name if cliente else "") or ""
     return {
         "atendimento_id": at.id,
         "customer_id": at.customer_id,
-        "customer_name": at.customer_name or "—",
+        "customer_name": nome or "—",
+        # Sem o traço: é o que entra na mensagem do WhatsApp, e "Olá —" é pior
+        # que "Olá".
+        "customer_name_raw": nome,
         "customer_document": at.customer_document,
         "opened_at": opened_local,
         "opened_at_str": opened_local.strftime("%d/%m %H:%M"),

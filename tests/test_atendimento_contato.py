@@ -193,3 +193,34 @@ class TestCsv:
         resp = client.get(url)
         assert resp.status_code == 200
         assert "Fulano;;;" in resp.content.decode("utf-8")
+
+
+@pytest.mark.django_db
+class TestNomeDoCliente:
+    def test_usa_o_nome_do_cadastro_quando_o_opa_vem_vazio(
+        self, organization_a: Organization
+    ) -> None:
+        """*Medido em produção (21/09/2026):* 1.000 de 1.000 atendimentos vêm
+        sem `customer_name`, e 758 deles têm nome no cliente vinculado. A lista
+        mostrava "—" no lugar do nome de gente que a gente conhece."""
+        at = _atendimento(organization_a)
+        Atendimento.objects.filter(pk=at.pk).update(customer_name="")
+        Customer.objects.filter(pk=at.customer_id).update(name="BRUNO SILVA MARTINS")
+
+        linha = _atendimento_lista_row(
+            Atendimento.objects.select_related("customer", "departamento").get(pk=at.pk)
+        )
+        assert linha["customer_name"] == "BRUNO SILVA MARTINS"
+        assert linha["customer_name_raw"] == "BRUNO SILVA MARTINS"
+
+    def test_sem_nome_em_lugar_nenhum_a_tela_mostra_traco(
+        self, organization_a: Organization
+    ) -> None:
+        at = _atendimento(organization_a, telefone_cadastro=None)
+        Atendimento.objects.filter(pk=at.pk).update(customer_name="")
+        linha = _atendimento_lista_row(
+            Atendimento.objects.select_related("customer", "departamento").get(pk=at.pk)
+        )
+        assert linha["customer_name"] == "—"
+        # Cru fica vazio: é ele que entra na mensagem do WhatsApp.
+        assert linha["customer_name_raw"] == ""

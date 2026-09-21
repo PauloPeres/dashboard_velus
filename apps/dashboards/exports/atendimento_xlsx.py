@@ -71,6 +71,8 @@ def _formula_whatsapp(linha: int) -> str:
 
     - **`{nome}` é substituído pelo nome da linha**, então a mensagem sai
       pessoal sem ninguém editar 300 células;
+    - **o DDI 55 entra aqui**, porque a coluna mostra o telefone como a pessoa o
+      lê ("(15) 99172-9534") e o `wa.me` exige o número internacional;
     - **`ENCODEURL` codifica o texto** para a URL. Ele existe no Excel e no
       LibreOffice; onde não existir, a planilha mostra `#NAME?` na célula em vez
       de gerar um link quebrado que abriria uma conversa com lixo no texto —
@@ -81,10 +83,16 @@ def _formula_whatsapp(linha: int) -> str:
     numero = f"C{linha}"
     nome = f"A{linha}"
     mensagem = f'SUBSTITUTE({CELULA_MENSAGEM},"{{nome}}",{nome})'
+    # O telefone sai formatado — "(15) 99172-9534" — e o wa.me só aceita
+    # dígitos. Faltava o HÍFEN nesta limpeza, e a verificação em produção pegou:
+    # o link saía como wa.me/1599172-9534 e abriria uma conversa inexistente.
+    limpo = numero
+    for char in (" ", "(", ")", "-"):
+        limpo = f'SUBSTITUTE({limpo},"{char}","")'
     return (
         f'=IF({numero}="","",'
-        f'HYPERLINK("https://wa.me/"&SUBSTITUTE(SUBSTITUTE(SUBSTITUTE({numero},'
-        f'" ",""),"(",""),")","")&"?text="&ENCODEURL({mensagem}),"Abrir conversa"))'
+        f'HYPERLINK("https://wa.me/55"&{limpo}'
+        f'&"?text="&ENCODEURL({mensagem}),"Abrir conversa"))'
     )
 
 
@@ -165,7 +173,9 @@ def montar_planilha(
         if r.get("telefone_conversa"):
             com_numero += 1
         ws.append([
-            r["customer_name"],
+            # Nome cru, sem o traço da tela: esta coluna alimenta a mensagem do
+            # WhatsApp, e "Olá —" é pior que "Olá".
+            r.get("customer_name_raw", r["customer_name"]),
             r["customer_document"],
             r.get("telefone_conversa", ""),
             r.get("telefone_cadastro", ""),
