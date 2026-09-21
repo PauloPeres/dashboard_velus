@@ -370,6 +370,84 @@ def panel_device_revoke(request: HttpRequest, device_id: int) -> HttpResponse:
 
 
 # =============================================================================
+# Ação pelo controle da TV — reconhecer e dizer a causa
+# =============================================================================
+@never_cache
+@require_POST
+def panel_massiva_acao(
+    request: HttpRequest, panel_key: str, outage_id: int
+) -> JsonResponse:
+    """A TV marca "estou tratando" e, se souber, a causa (pedido de 21/09/2026).
+
+    **Quem age aqui é o dispositivo, não uma pessoa** — o controle remoto não faz
+    login. Por isso o autor gravado é o nome da TV ("marcado na TV da bancada")
+    em vez de um usuário inventado: saber que foi alguém na sala já muda a ação
+    de quem chega depois, e fingir autoria seria pior que não ter.
+
+    Só a TV pareada pode fazer isto, e só na organização que a aprovou. Quem
+    está logado usa a aba, que é onde o autor tem nome.
+    """
+    from apps.network.infrastructure.models import OutageEvent
+
+    panel = get_panel(panel_key)
+    if panel is None:
+        raise Http404("Painel não encontrado")
+
+    device = _display_device(request, panel)
+    if device is None or not device.organization_id:
+        return JsonResponse({"erro": "sem_acesso"}, status=403)
+
+    # A TV não tem sessão, então o `TenantMiddleware` não pôs organização no
+    # contexto: quem a define aqui é a credencial do aparelho. Sem isto, o
+    # `TenantManager` recusa a consulta — e é assim que ele deve se comportar.
+    set_current_organization(device.organization)
+
+    outage = OutageEvent.objects.filter(
+        organization=device.organization, pk=outage_id
+    ).first()
+    if outage is None:
+        raise Http404("Massiva não encontrada")
+
+    agora = timezone.now()
+    campos: list[str] = []
+    resposta: dict[str, Any] = {}
+
+    if request.POST.get("acao") == "ciente" and outage.acknowledged_at is None:
+        # Primeiro a assumir é quem fica — igual à aba. Sobrescrever apagaria
+        # quem realmente pegou o evento.
+        outage.acknowledged_at = agora
+        outage.acknowledged_by_display = device.name or "TV"
+        campos += ["acknowledged_at", "acknowledged_by_display"]
+        resposta["ciente"] = outage.acknowledged_by_display
+
+    causa = request.POST.get("causa", "")
+    if causa:
+        if causa not in OutageEvent.Cause.values:
+            return JsonResponse({"erro": "causa_invalida"}, status=400)
+        # A causa pode ser registrada com a massiva ainda aberta: quem está na
+        # sala às vezes já sabe ("é rompimento") antes de o evento encerrar. A
+        # fila da aba continua cobrando apenas as que encerraram sem resposta.
+        outage.confirmed_cause = causa
+        outage.cause_confirmed_at = agora
+        outage.cause_note = (outage.cause_note or "") + f" [marcado na {device.name or 'TV'}]"
+        campos += ["confirmed_cause", "cause_confirmed_at", "cause_note"]
+        resposta["causa"] = outage.get_confirmed_cause_display()
+
+    if not campos:
+        return JsonResponse({"erro": "nada_a_fazer"}, status=400)
+
+    outage.save(update_fields=[*campos, "updated_at"])
+    _logger.info(
+        "panel_massiva_acao",
+        outage=outage.pk,
+        device=device.pk,
+        ciente=bool(resposta.get("ciente")),
+        causa=causa or "",
+    )
+    return JsonResponse({"ok": True, **resposta})
+
+
+# =============================================================================
 # P2 — a casca do painel
 # =============================================================================
 @never_cache

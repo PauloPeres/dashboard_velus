@@ -643,6 +643,11 @@ class OutageEvent(TenantModel):
         blank=True,
     )
     acknowledged_at = models.DateTimeField(null=True, blank=True)
+    # Quando o reconhecimento vem da TV, não há usuário: o controle remoto não
+    # faz login. Guarda-se o nome do dispositivo, e a tela diz "marcado na TV da
+    # bancada" em vez de inventar um autor. Saber que foi alguém na sala já
+    # muda a ação de quem chega depois.
+    acknowledged_by_display = models.CharField(max_length=120, blank=True, default="")
     # Carimbo do push que saiu (P7). Um evento, um escalonamento: massiva que
     # cresce não manda mensagem de novo. Sem este campo, o loop de 5 min viraria
     # uma mensagem a cada 5 min — que é como se desliga um canal de alerta.

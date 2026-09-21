@@ -42,10 +42,27 @@ Espera `pagina.item` (uma linha de massiva) e `pagina.dom_id`.
     {% endif %}
 
     {% if m.is_acknowledged %}
-    <p class="text-base text-indigo-300 mt-4">em tratamento com {{ m.acknowledged_by }}</p>
+    <p class="text-base text-indigo-300 mt-4">
+      em tratamento com {{ m.acknowledged_by|default:m.acknowledged_by_display }}
+    </p>
     {% elif m.is_expected %}
     <p class="text-base text-blue-300 mt-4">dentro de manutenção programada</p>
     {% endif %}
+
+    {% comment %}
+    Ação pelo controle da TV (pedido de 21/09/2026). O remoto não tem teclado,
+    então tudo cabe em teclas que ele tem: OK reconhece, os números dizem a
+    causa. Quem age é o aparelho, não uma pessoa — a tela grava o nome da TV em
+    vez de inventar um autor.
+
+    A legenda fica pequena e embaixo: ela é instrução, e quem olha de longe
+    veio ver o evento.
+    {% endcomment %}
+    <p class="text-xs text-slate-600 mt-8 leading-relaxed" data-massiva="{{ m.id }}">
+      OK: estou tratando · 1 rompimento · 2 energia · 3 equipamento ·
+      4 manutenção · 5 falso positivo
+      <span class="acao-aviso ml-2 text-emerald-400"></span>
+    </p>
   </div>
 
   {% comment %}

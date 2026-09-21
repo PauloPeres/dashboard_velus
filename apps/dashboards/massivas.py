@@ -289,6 +289,10 @@ def outage_row(
         "acknowledged_by": (
             outage.acknowledged_by.email if outage.acknowledged_by_id else ""
         ),
+        # Quando o reconhecimento veio do controle da TV não há usuário: o nome
+        # do aparelho ocupa o lugar do autor, e a tela diz de onde veio em vez
+        # de inventar uma pessoa.
+        "acknowledged_by_display": outage.acknowledged_by_display,
         "is_acknowledged": outage.is_acknowledged,
     }
 

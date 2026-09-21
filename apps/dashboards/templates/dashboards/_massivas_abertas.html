@@ -157,9 +157,15 @@ debaixo do dedo de quem está lendo durante o reparo.
         leva a sério: trecho suspeito é inferência, cabo é candidato. Montá-la
         em JavaScript separaria o texto das regras que o justificam.
         {% endcomment %}
-        <div class="flex flex-wrap items-center gap-2 mt-3">
+        {% comment %}
+        Empilhados, e não lado a lado: eles moram na coluna estreita da direita,
+        onde uma fileira horizontal esticava o card e sobrava espaço vazio.
+        Um embaixo do outro, cada um ocupa a largura da coluna e o alvo do
+        clique fica maior — inclusive no celular.
+        {% endcomment %}
+        <div class="flex flex-col items-stretch gap-2 mt-3 lg:w-48 lg:ml-auto">
           <button type="button"
-                  class="btn-copiar inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg
+                  class="btn-copiar inline-flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg
                          bg-emerald-600 text-white font-medium hover:bg-emerald-700"
                   data-mensagem="{{ l.mensagem_tecnico }}">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -170,7 +176,7 @@ debaixo do dedo de quem está lendo durante o reparo.
           </button>
 
           <a href="{% url 'dashboards:massiva_detalhe' l.id %}#mapa"
-             class="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg
+             class="inline-flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg
                     border border-gray-300 text-gray-700 hover:bg-gray-50">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round"
@@ -180,7 +186,7 @@ debaixo do dedo de quem está lendo durante o reparo.
           </a>
 
           <a href="{% url 'dashboards:massiva_detalhe' l.id %}"
-             class="text-xs text-blue-600 hover:underline">Clientes afetados →</a>
+             class="text-xs text-center text-blue-600 hover:underline py-1">Clientes afetados →</a>
         </div>
       </div>
     </div>

@@ -34,7 +34,12 @@ from apps.dashboards.panels.alerts import (
     nivel_da_massiva,
 )
 from apps.dashboards.panels.atendimento import tem_atendimento
-from apps.dashboards.panels.pairing import COOKIE_NOME, hash_segredo, novo_segredo
+from apps.dashboards.panels.pairing import (
+    COOKIE_NOME,
+    hash_segredo,
+    novo_codigo,
+    novo_segredo,
+)
 from apps.network.infrastructure.models import OutageEvent
 from apps.shared.context import set_current_organization
 from apps.tenancy.models import (
@@ -607,3 +612,116 @@ class TestAvancoManual:
         html = tv.get(PANEL_URL).content.decode()
         assert 'addEventListener("click"' in html
         assert "ArrowRight" in html
+
+
+# =============================================================================
+# Ação pelo controle da TV — reconhecer e dizer a causa
+# =============================================================================
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestAcaoPeloControle:
+    """A TV pode marcar "estou tratando" e a causa (pedido de 21/09/2026).
+
+    Quem age é o **dispositivo**, não uma pessoa: o controle remoto não faz
+    login. Por isso o autor gravado é o nome da TV — fingir autoria seria pior
+    que não ter, e saber que foi alguém na sala já muda a ação de quem chega
+    depois.
+    """
+
+    def _massiva(self, org: Organization) -> OutageEvent:
+        set_current_organization(org)
+        agora = timezone.now()
+        return OutageEvent.objects.create(
+            organization=org,
+            started_at=agora - timedelta(minutes=20),
+            last_detected_at=agora,
+            scope=OutageEvent.Scope.OLT,
+            element_external_id="1",
+            element_label="OLT 1",
+            confidence=OutageEvent.Confidence.HIGH,
+            affected_count=40,
+        )
+
+    def _tv(self, org: Organization, nome: str = "TV da bancada") -> Client:
+        token = novo_segredo()
+        DisplayDevice.objects.create(
+            # Código único por TV: duas na mesma sala é o caso normal.
+            panel_key="noc", code=novo_codigo(), name=nome,
+            device_token_hash=hash_segredo(novo_segredo()),
+            display_token_hash=hash_segredo(token),
+            organization=org, approved_at=timezone.now(),
+        )
+        tv = Client()
+        tv.cookies[COOKIE_NOME] = token
+        return tv
+
+    def test_ok_marca_em_tratamento_com_o_nome_da_tv(
+        self, organization_a: Organization
+    ) -> None:
+        outage = self._massiva(organization_a)
+        tv = self._tv(organization_a)
+        resp = tv.post(f"/paineis/noc/massiva/{outage.pk}/acao/", {"acao": "ciente"})
+        assert resp.status_code == 200
+        outage.refresh_from_db()
+        assert outage.is_acknowledged is True
+        assert outage.acknowledged_by_display == "TV da bancada"
+        # Sem usuário: o controle não faz login, e inventar autor seria pior.
+        assert outage.acknowledged_by_id is None
+
+    def test_numero_registra_a_causa(self, organization_a: Organization) -> None:
+        """Quem está na sala às vezes já sabe ("é rompimento") antes de o evento
+        encerrar — a fila da aba continua cobrando só as que encerraram sem
+        resposta."""
+        outage = self._massiva(organization_a)
+        tv = self._tv(organization_a)
+        resp = tv.post(
+            f"/paineis/noc/massiva/{outage.pk}/acao/",
+            {"causa": OutageEvent.Cause.ROMPIMENTO.value},
+        )
+        assert resp.status_code == 200
+        outage.refresh_from_db()
+        assert outage.confirmed_cause == OutageEvent.Cause.ROMPIMENTO.value
+        assert "marcado na TV da bancada" in outage.cause_note
+
+    def test_causa_invalida_e_recusada(self, organization_a: Organization) -> None:
+        outage = self._massiva(organization_a)
+        tv = self._tv(organization_a)
+        resp = tv.post(f"/paineis/noc/massiva/{outage.pk}/acao/", {"causa": "METEORO"})
+        assert resp.status_code == 400
+        outage.refresh_from_db()
+        assert outage.confirmed_cause == ""
+
+    def test_primeiro_a_assumir_continua_sendo_quem_fica(
+        self, organization_a: Organization
+    ) -> None:
+        outage = self._massiva(organization_a)
+        tv = self._tv(organization_a)
+        tv.post(f"/paineis/noc/massiva/{outage.pk}/acao/", {"acao": "ciente"})
+        outage.refresh_from_db()
+        primeiro = outage.acknowledged_at
+
+        outra = self._tv(organization_a, nome="TV da diretoria")
+        outra.post(f"/paineis/noc/massiva/{outage.pk}/acao/", {"acao": "ciente"})
+        outage.refresh_from_db()
+        assert outage.acknowledged_at == primeiro
+        assert outage.acknowledged_by_display == "TV da bancada"
+
+    def test_sem_credencial_nao_age(self, organization_a: Organization) -> None:
+        outage = self._massiva(organization_a)
+        resp = Client().post(
+            f"/paineis/noc/massiva/{outage.pk}/acao/", {"acao": "ciente"}
+        )
+        assert resp.status_code == 403
+        outage.refresh_from_db()
+        assert outage.acknowledged_at is None
+
+    def test_tv_de_outra_org_nao_alcanca_a_massiva(
+        self, organization_a: Organization, organization_b: Organization
+    ) -> None:
+        alheia = self._massiva(organization_b)
+        set_current_organization(organization_a)
+        tv = self._tv(organization_a)
+        resp = tv.post(f"/paineis/noc/massiva/{alheia.pk}/acao/", {"acao": "ciente"})
+        assert resp.status_code == 404
+        alheia.refresh_from_db()
+        assert alheia.acknowledged_at is None

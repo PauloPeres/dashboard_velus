@@ -179,11 +179,63 @@ Três decisões de tela (§2, §3 e §5 do docs/massivas-painel-tv-plano.md):
   // slide avançado trocaria sozinho logo em seguida.
   document.addEventListener("click", function () { proximo(); });
   document.addEventListener("keydown", function (ev) {
-    // Seta e espaço: controle remoto de TV manda seta, e teclado de bancada
-    // manda espaço.
-    if (ev.key === "ArrowRight" || ev.key === " " || ev.key === "Enter") {
+    // Seta e espaço avançam: controle remoto de TV manda seta, teclado de
+    // bancada manda espaço. Enter NÃO avança — ele é o "OK" que reconhece a
+    // massiva, e uma tecla com dois significados erraria os dois.
+    if (ev.key === "ArrowRight" || ev.key === " ") {
       ev.preventDefault();
       proximo();
+    }
+  });
+
+  // --- ação pelo controle (reconhecer e dizer a causa) ---------------------
+  // Só vale na página de uma massiva: é ela que tem o evento na tela, e agir
+  // sobre "a massiva" enquanto se olha o semáforo seria agir no escuro.
+  var CAUSAS = {
+    "1": "ROMPIMENTO", "2": "ENERGIA", "3": "EQUIPAMENTO",
+    "4": "MANUTENCAO", "5": "FALSO_POSITIVO"
+  };
+
+  function massivaVisivel() {
+    var secao = slides[atual];
+    return secao ? secao.querySelector("[data-massiva]") : null;
+  }
+
+  function enviarAcao(alvo, corpo) {
+    var aviso = alvo.querySelector(".acao-aviso");
+    var dados = new URLSearchParams(corpo);
+    fetch("{% url 'dashboards:panel_massiva_acao' panel.key 0 %}".replace("/0/", "/" + alvo.dataset.massiva + "/"), {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: dados.toString()
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!aviso) { return; }
+        if (d.ok) {
+          aviso.textContent = d.causa ? ("registrado: " + d.causa) : ("em tratamento · " + d.ciente);
+          // Segura o slide um pouco para quem apertou ver que funcionou.
+          agendar();
+        } else {
+          aviso.textContent = "não deu certo";
+        }
+        setTimeout(function () { aviso.textContent = ""; }, 6000);
+      })
+      .catch(function () { if (aviso) { aviso.textContent = "sem conexão"; } });
+  }
+
+  document.addEventListener("keydown", function (ev) {
+    var alvo = massivaVisivel();
+    if (!alvo) { return; }
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      enviarAcao(alvo, { acao: "ciente" });
+      return;
+    }
+    if (CAUSAS[ev.key]) {
+      ev.preventDefault();
+      enviarAcao(alvo, { causa: CAUSAS[ev.key] });
     }
   });
 

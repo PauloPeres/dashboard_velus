@@ -132,5 +132,11 @@ urlpatterns = [
         panel_views.panel_snapshot,
         name="panel_snapshot",
     ),
+    # Ação pelo controle da TV: reconhecer a massiva e dizer a causa.
+    path(
+        "paineis/<str:panel_key>/massiva/<int:outage_id>/acao/",
+        panel_views.panel_massiva_acao,
+        name="panel_massiva_acao",
+    ),
     path("paineis/<str:panel_key>/", panel_views.panel_view, name="panel"),
 ]

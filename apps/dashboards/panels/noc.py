@@ -23,6 +23,8 @@ from apps.dashboards.massivas import (
 from . import PanelSpec, SlideSpec, register
 from .alerts import classificar
 from .atendimento import snapshot_atendimento, tem_atendimento
+from .insights import coletar as coletar_insights
+from .insights import sortear as sortear_insight
 
 # Acima disto o dado é velho o bastante para a tela avisar em vez de deixar a
 # sala supor que está tudo calmo. É o mesmo limite do poll (§7 do plano de
@@ -84,6 +86,9 @@ def _snapshot(org: Any, now: datetime) -> dict[str, Any]:
         # A fila do atendimento (P10): é o sintoma que aparece antes de a
         # massiva fechar escopo.
         "atendimento": snapshot_atendimento(org, now),
+        # O que a parede mostra quando a rede está calma: um número medido da
+        # operação e a pergunta que ele levanta. Sorteado a cada carregamento.
+        "insight": sortear_insight(coletar_insights(org, now)),
         "timeline": dados["timeline"],
         "mapa": dados["mapa"],
         "mapa_quedas_avulsas": dados["mapa_quedas_avulsas"],
@@ -119,6 +124,15 @@ def _tem_massiva(snapshot: dict[str, Any]) -> bool:
     return bool(snapshot.get("massivas"))
 
 
+def _sem_massiva_e_com_insight(snapshot: dict[str, Any]) -> bool:
+    """O insight ocupa a parede só quando não há evento.
+
+    Com massiva aberta, a tela tem assunto — e disputar espaço com ele seria
+    trocar o urgente pelo interessante.
+    """
+    return not snapshot.get("massivas") and bool(snapshot.get("insight"))
+
+
 def _tem_timeline(snapshot: dict[str, Any]) -> bool:
     """A linha do tempo só entra com barra para mostrar (T4).
 
@@ -150,6 +164,15 @@ PANEL = register(
                 template="dashboards/panels/slides/_massiva_pagina.html",
                 seconds=20,
                 repeat_key="massivas",
+            ),
+            # Rede calma: em vez de tela parada, um número da operação e a
+            # pergunta que ele levanta (pedido de 21/09/2026).
+            SlideSpec(
+                key="insight",
+                title="Para pensar",
+                template="dashboards/panels/slides/_insight.html",
+                seconds=18,
+                only_when=_sem_massiva_e_com_insight,
             ),
             SlideSpec(
                 key="ultimas24h",

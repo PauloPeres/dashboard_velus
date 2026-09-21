@@ -1,0 +1,24 @@
+{% comment %}
+O slide de "para pensar", que ocupa a parede quando a rede está calma.
+
+Regra que o mantém vivo: é sempre um NÚMERO MEDIDO da operação, com a pergunta
+que ele levanta. Frase de efeito vira papel de parede em uma semana; número que
+a sala reconhece, não.
+
+Nada de dinheiro aqui — MRR e meta mudam a audiência da tela, e a operação para
+de olhar.
+{% endcomment %}
+<div class="h-full flex flex-col items-center justify-center text-center px-16">
+  <p class="text-[11px] uppercase tracking-[0.4em] text-slate-600">Para pensar</p>
+
+  <p class="text-9xl font-black text-slate-100 mt-6 tabular-nums">
+    {{ snapshot.insight.numero }}
+  </p>
+  <p class="text-3xl text-slate-300 mt-3 max-w-4xl leading-snug">
+    {{ snapshot.insight.titulo }}
+  </p>
+
+  <p class="text-xl text-slate-500 mt-10 max-w-3xl leading-relaxed">
+    {{ snapshot.insight.pergunta }}
+  </p>
+</div>
