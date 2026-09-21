@@ -153,3 +153,26 @@ cruzam o mapa e nunca são destino de ninguém — e, fora do enquadramento,
 deixaram de encolher o evento a um punhado de pixels), e o botão **"foco no
 técnico"**, que é o pedido dito por inteiro: fica só caixa e cabo, que é para
 onde o carro vai.
+
+## T8 — Filtrar a lista de clientes afetados
+
+Pedido do Paulo, 21/09/2026: *"na parte de Clientes afetados dentro da massiva,
+poder filtrar quem voltou e quem não voltou, e poder filtrar quem teve aumento
+significativo de dBm — nosso threshold é -25 dBm."*
+
+São duas perguntas independentes, então são dois controles: o **status** é
+excludente (todos / ainda fora / já voltaram) e o **sinal** é uma marca que se
+soma. "Quem voltou **e** está abaixo de -25 dBm" é exatamente a lista de quem
+voltou mas vai reclamar de novo.
+
+**Duas réguas de sinal, que convivem.** A que já existia é *relativa* — retorno
+mais de 3 dB pior que a base, cheiro de fusão mal feita neste reparo. A nova é
+*absoluta*: -25 dBm é ruim tenha piorado hoje ou não. Uma ONU que sempre esteve
+a -27 nunca acende a relativa, e é justamente quem precisa de visita.
+
+**Sem leitura não é saudável.** Se a ausência de medição contasse como "acima do
+limiar", a tela diria que está tudo bem com quem ninguém mediu. Então a linha
+sem leitura fica fora dos dois lados e a contagem aparece escrita ao lado do
+filtro. O selo na célula também diz **de qual leitura** saiu o julgamento: -27
+dBm na base (varredura das ~06:30, o cliente já estava assim) e -27 dBm no
+retorno (saiu assim deste reparo) mandam o técnico a lugares diferentes.

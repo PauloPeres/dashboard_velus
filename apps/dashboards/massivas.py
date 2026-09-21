@@ -58,6 +58,18 @@ POLL_STALE_MINUTES = 10
 # variou menos de 0,7 dB em dez dias, então 3 dB é inequívoco.
 SIGNAL_DEGRADATION_DB = 3.0
 
+# Limiar absoluto de sinal ruim, dado pelo operador em 21/09/2026: "nosso
+# threshold é -25 dBm". É uma régua diferente da de cima, e as duas convivem
+# porque respondem perguntas diferentes:
+#
+# - `SIGNAL_DEGRADATION_DB` é **relativa**: o cliente piorou em relação a ele
+#   mesmo, o que cheira a fusão mal feita neste reparo;
+# - `SIGNAL_CRITICAL_DBM` é **absoluta**: o cliente está num nível ruim,
+#   tenha piorado hoje ou já estivesse assim. Uma ONU a -27 dBm que sempre
+#   esteve a -27 não acende o alerta relativo, e é justamente quem precisa de
+#   visita.
+SIGNAL_CRITICAL_DBM = -25.0
+
 # Campos que a #148 traz. Enquanto não existirem, a tabela mostra "sem leitura"
 # em vez de quebrar — as duas issues correm em paralelo.
 _SIGNAL_FIELD_NAMES = (
@@ -1686,6 +1698,13 @@ def _signal_cell(drop: ConnectionDropEvent | None) -> dict[str, Any]:
         delta = float(depois) - float(antes)
         degradado = delta < -SIGNAL_DEGRADATION_DB
 
+    # Leitura que vale para o limiar absoluto: a do retorno quando existe, a da
+    # base quando não. A tela diz qual das duas está julgando — "-27 dBm" da
+    # varredura das 06:30 e "-27 dBm" depois do reparo levam o técnico a lugares
+    # diferentes.
+    referencia = depois if depois is not None else antes
+    critico = referencia is not None and float(referencia) <= SIGNAL_CRITICAL_DBM
+
     return {
         "campos_disponiveis": disponivel,
         "antes_str": _fmt_dbm(antes),
@@ -1696,6 +1715,13 @@ def _signal_cell(drop: ConnectionDropEvent | None) -> dict[str, Any]:
             f"{delta:+.1f} dB".replace(".", ",") if delta is not None else ""
         ),
         "degradado": degradado,
+        # Abaixo do limiar do operador (-25 dBm), com a leitura que sustenta a
+        # afirmação. Sem leitura nenhuma, `critico` é False e `critico_de` é
+        # vazio: a linha não é "boa", é **não medida**, e a tela conta essas
+        # separadamente em vez de deixá-las passar por saudáveis.
+        "critico": critico,
+        "critico_de": ("retorno" if depois is not None else "base") if referencia is not None else "",
+        "sem_leitura": referencia is None,
     }
 
 
@@ -1803,6 +1829,18 @@ def compute_massiva_detalhe(
         "sinal_cobertura": {
             "com_base": com_leitura_base,
             "total": len(linhas),
+        },
+        # Contagens dos filtros da tabela (pedido de 21/09/2026). Vêm do
+        # servidor, e não de contar linha no JavaScript, porque é este número
+        # que a pessoa lê antes de clicar — e porque "3 sem leitura" precisa
+        # aparecer mesmo quando o filtro está desligado.
+        "filtros_clientes": {
+            "total": len(linhas),
+            "fora": sum(1 for linha in linhas if not linha["voltou"]),
+            "voltaram": sum(1 for linha in linhas if linha["voltou"]),
+            "criticos": sum(1 for linha in linhas if linha["sinal"]["critico"]),
+            "sem_leitura": sum(1 for linha in linhas if linha["sinal"]["sem_leitura"]),
+            "limiar_dbm": SIGNAL_CRITICAL_DBM,
         },
         "mapa": compute_mapa(
             org,

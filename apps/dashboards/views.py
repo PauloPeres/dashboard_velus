@@ -3514,6 +3514,9 @@ def massiva_detalhe(request: HttpRequest, outage_id: int) -> HttpResponse:
             "linhas": detalhe["linhas"],
             "sinal_disponivel": detalhe["sinal_disponivel"],
             "sinal_cobertura": detalhe["sinal_cobertura"],
+            # Contagens dos filtros da tabela de clientes (quem voltou, quem
+            # não, quem está abaixo do limiar de sinal da casa).
+            "filtros_clientes": detalhe["filtros_clientes"],
             "mapa": detalhe["mapa"],
             "mapa_chart_json": charts.outage_map(detalhe["mapa"]),
             # No detalhe o vermelho é a extensão da massiva, não só quem segue

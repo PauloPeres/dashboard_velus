@@ -1912,3 +1912,90 @@ class TestIconesEFiltrosDoMapa:
             assert f'data-grupo="{grupo}"' in html
         assert 'data-preset="tecnico"' in html
         assert "Foco no técnico" in html
+
+
+# ---------------------------------------------------------------------------
+# Filtros da tabela de clientes (21/09/2026)
+# ---------------------------------------------------------------------------
+@pytest.mark.django_db
+class TestFiltrosDaTabelaDeClientes:
+    """Quem voltou, quem não voltou, e quem está abaixo de -25 dBm.
+
+    O limiar absoluto (-25 dBm, dado pelo operador) convive com o alerta
+    relativo de 3 dB e responde outra pergunta: o relativo diz *piorou neste
+    reparo*, o absoluto diz *está ruim*. Uma ONU que sempre esteve a -27 não
+    acende o relativo, e é quem precisa de visita.
+
+    A armadilha que os testes travam: **sem leitura não é saudável**. Se a
+    ausência de sinal contasse como "acima do limiar", a tela diria que está
+    tudo bem num cliente que ninguém mediu.
+    """
+
+    def test_abaixo_do_limiar_e_marcado_pela_leitura_de_retorno(self) -> None:
+        celula = _signal_cell(
+            SimpleNamespace(signal_rx_before=-23.0, signal_rx_after=-27.0)  # type: ignore[arg-type]
+        )
+        assert celula["critico"] is True
+        assert celula["critico_de"] == "retorno"
+
+    def test_sem_retorno_o_limiar_julga_a_base(self) -> None:
+        celula = _signal_cell(
+            SimpleNamespace(signal_rx_before=-26.2)  # type: ignore[arg-type]
+        )
+        assert celula["critico"] is True
+        assert celula["critico_de"] == "base"
+
+    def test_acima_do_limiar_nao_e_marcado(self) -> None:
+        celula = _signal_cell(
+            SimpleNamespace(signal_rx_before=-22.0, signal_rx_after=-24.9)  # type: ignore[arg-type]
+        )
+        assert celula["critico"] is False
+
+    def test_sem_leitura_nao_e_saudavel_e_nem_critico(self) -> None:
+        celula = _signal_cell(SimpleNamespace())  # type: ignore[arg-type]
+        assert celula["critico"] is False
+        assert celula["sem_leitura"] is True
+
+    @pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+    def test_a_tela_conta_cada_recorte_e_separa_quem_nao_tem_leitura(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        outage = _outage(organization_a, affected=3, restored=1)
+        casos = (
+            # login,     voltou, antes,  depois
+            ("ruim", True, -23.0, -27.4),
+            ("bom", False, -21.0, -21.5),
+            ("sem-leitura", False, None, None),
+        )
+        for login, voltou, antes, depois in casos:
+            drop = _drop(organization_a, login=login, restored=voltou)
+            if antes is not None:
+                drop.signal_rx_before = antes
+                drop.signal_rx_after = depois
+                drop.save(update_fields=["signal_rx_before", "signal_rx_after"])
+            OutageAffectedLogin.objects.create(
+                organization=organization_a,
+                outage=outage,
+                drop_event=drop,
+                login=drop.login,
+                dropped_at=drop.dropped_at,
+                restored_at=drop.restored_at,
+            )
+
+        client.force_login(user_a)
+        resp = client.get(f"{URL}{outage.pk}/")
+        filtros = resp.context["filtros_clientes"]
+        assert filtros["total"] == 3
+        assert filtros["voltaram"] == 1
+        assert filtros["fora"] == 2
+        assert filtros["criticos"] == 1
+        # O não medido é contado à parte — não some dentro de "acima do limiar".
+        assert filtros["sem_leitura"] == 1
+
+        html = resp.content.decode()
+        for status in ("todos", "fora", "voltaram"):
+            assert f'data-status="{status}"' in html
+        assert 'id="filtro-sinal-critico"' in html
+        # A linha carrega o recorte: é por estes atributos que o filtro anda.
+        assert 'data-critico="1"' in html
+        assert "sem leitura óptica" in html
