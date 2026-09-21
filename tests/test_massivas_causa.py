@@ -356,3 +356,88 @@ class TestFracaoSemDenominador:
         linha = outage_row(outage)
         assert linha["sem_denominador"] is False
         assert "40%" in linha["elemento_frase"]
+
+
+# =============================================================================
+# Dispensar a fila do passado (T3 do plano de campo)
+# =============================================================================
+@pytest.mark.django_db
+class TestDispensarCausa:
+    """Massiva descartada não é massiva sem resposta.
+
+    Decisão do operador em 21/09/2026: a fila tinha 56 eventos de antes de o
+    campo existir, boa parte sem nome (cluster geográfico). Ninguém lembra o que
+    foi um evento de duas semanas atrás, e chute vira rótulo errado no treino.
+
+    Elas saem da fila **dispensadas**, com data e motivo — porque no dia em que
+    o modelo for treinado, "ninguém respondeu" e "decidimos descartar" são
+    informações diferentes.
+    """
+
+    def test_dispensada_sai_da_fila(self, organization_a: Organization) -> None:
+        from django.core.management import call_command
+
+        _outage(organization_a, inicio_min_atras=60 * 24 * 10)
+        assert compute_sem_causa(organization_a)["total"] == 1
+
+        call_command(
+            "dispensar_causa_antigas", "acme",
+            "--ate", timezone.now().date().isoformat(),
+        )
+        assert compute_sem_causa(organization_a)["total"] == 0
+
+    def test_o_registro_guarda_data_e_motivo(
+        self, organization_a: Organization
+    ) -> None:
+        from django.core.management import call_command
+
+        outage = _outage(organization_a, inicio_min_atras=60 * 24 * 10)
+        call_command(
+            "dispensar_causa_antigas", "acme",
+            "--ate", timezone.now().date().isoformat(),
+        )
+        outage.refresh_from_db()
+        assert outage.cause_waived is True
+        assert "chute vira rótulo errado" in outage.cause_waived_reason
+        # E continua sem causa: dispensar não é responder.
+        assert outage.confirmed_cause == ""
+
+    def test_nao_toca_no_que_ja_tem_causa(
+        self, organization_a: Organization
+    ) -> None:
+        from django.core.management import call_command
+
+        outage = _outage(
+            organization_a, causa=OutageEvent.Cause.ROMPIMENTO,
+            inicio_min_atras=60 * 24 * 10,
+        )
+        call_command(
+            "dispensar_causa_antigas", "acme",
+            "--ate", timezone.now().date().isoformat(),
+        )
+        outage.refresh_from_db()
+        assert outage.cause_waived_at is None
+
+    def test_massiva_posterior_ao_corte_continua_na_fila(
+        self, organization_a: Organization
+    ) -> None:
+        """O corte é uma data, não "tudo": o que veio depois ainda tem dono e
+        memória."""
+        from datetime import timedelta as _td
+        from django.core.management import call_command
+
+        _outage(organization_a, inicio_min_atras=60)
+        ontem = (timezone.now() - _td(days=1)).date().isoformat()
+        call_command("dispensar_causa_antigas", "acme", "--ate", ontem)
+        assert compute_sem_causa(organization_a)["total"] == 1
+
+    def test_dry_run_nao_grava(self, organization_a: Organization) -> None:
+        from django.core.management import call_command
+
+        outage = _outage(organization_a, inicio_min_atras=60 * 24 * 10)
+        call_command(
+            "dispensar_causa_antigas", "acme",
+            "--ate", timezone.now().date().isoformat(), "--dry-run",
+        )
+        outage.refresh_from_db()
+        assert outage.cause_waived_at is None

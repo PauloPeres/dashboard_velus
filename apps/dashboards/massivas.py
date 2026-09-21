@@ -1853,7 +1853,13 @@ def compute_sem_causa(org: Any, *, limit: int = _MAX_NA_FILA) -> dict[str, Any]:
     diferentes.
     """
     pendentes = OutageEvent.objects.filter(
-        organization=org, ended_at__isnull=False, confirmed_cause=""
+        organization=org,
+        ended_at__isnull=False,
+        confirmed_cause="",
+        # Dispensada sai da fila sem ter sido respondida — ver
+        # `cause_waived_at`. São estados diferentes, e juntá-los aqui traria de
+        # volta o que alguém decidiu descartar.
+        cause_waived_at__isnull=True,
     ).order_by("-ended_at")
     total = pendentes.count()
     eventos = list(pendentes[:limit])

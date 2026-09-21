@@ -616,6 +616,15 @@ class OutageEvent(TenantModel):
         help_text=_("Quem preencheu. Rótulo sem autor não se audita."),
     )
     cause_confirmed_at = models.DateTimeField(null=True, blank=True)
+    # Massiva descartada da fila de causa **de propósito**. Não é o mesmo que
+    # "sem causa": é "ninguém vai lembrar o que foi isso, e chute vira rótulo
+    # errado no treino".
+    #
+    # Guardar a diferença importa no dia em que o modelo for treinado: sem este
+    # campo, a série não distingue o que ficou por responder do que foi
+    # deliberadamente descartado — e a segunda categoria não é ruído, é decisão.
+    cause_waived_at = models.DateTimeField(null=True, blank=True)
+    cause_waived_reason = models.CharField(max_length=255, blank=True, default="")
 
     # -- Reconhecimento (P8 do painel de TV) ----------------------------------
     # "Ciente, o Fulano está tratando". Converte o painel de gritador em
@@ -693,6 +702,10 @@ class OutageEvent(TenantModel):
     @property
     def is_acknowledged(self) -> bool:
         return self.acknowledged_at is not None
+
+    @property
+    def cause_waived(self) -> bool:
+        return self.cause_waived_at is not None
 
     @property
     def is_expected(self) -> bool:
