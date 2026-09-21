@@ -150,6 +150,18 @@ debaixo do dedo de quem está lendo durante o reparo.
         <p class="text-xs text-emerald-700 mt-1">{{ l.restored_pct }}% já voltou</p>
         <a href="{% url 'dashboards:massiva_detalhe' l.id %}"
            class="inline-block mt-3 text-xs text-blue-600 hover:underline">Ver clientes afetados →</a>
+
+        {% comment %}
+        Mensagem pronta para o técnico (pedido de 21/09/2026). O texto é montado
+        no servidor porque repete afirmações que a tela leva a sério — trecho
+        suspeito é inferência, cabo é candidato. Montá-lo em JavaScript
+        separaria o texto das regras que o justificam.
+        {% endcomment %}
+        <button type="button"
+                class="btn-copiar block mt-2 text-xs text-gray-500 hover:text-gray-700 hover:underline"
+                data-mensagem="{{ l.mensagem_tecnico }}">
+          Copiar mensagem para o técnico
+        </button>
       </div>
     </div>
   </div>
@@ -171,3 +183,38 @@ debaixo do dedo de quem está lendo durante o reparo.
 
   {% include "dashboards/_massivas_causas.html" %}
 </div>
+
+<script>
+(function () {
+  // Delegação no documento: a lista se recarrega inteira a cada 3 min pelo
+  // HTMX, e um listener por botão morreria na primeira troca.
+  document.addEventListener("click", function (ev) {
+    var botao = ev.target.closest(".btn-copiar");
+    if (!botao) { return; }
+    var texto = botao.dataset.mensagem || "";
+    var original = botao.textContent;
+    var avisar = function (msg) {
+      botao.textContent = msg;
+      setTimeout(function () { botao.textContent = original; }, 2000);
+    };
+    // `navigator.clipboard` exige HTTPS (ou localhost). Sem ele, o fallback
+    // antigo ainda copia — melhor que um botão que não faz nada.
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(texto).then(
+        function () { avisar("copiado!"); },
+        function () { avisar("não deu para copiar"); }
+      );
+      return;
+    }
+    var area = document.createElement("textarea");
+    area.value = texto;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    try { document.execCommand("copy"); avisar("copiado!"); }
+    catch (e) { avisar("não deu para copiar"); }
+    document.body.removeChild(area);
+  });
+})();
+</script>

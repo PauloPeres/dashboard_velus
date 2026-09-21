@@ -393,6 +393,12 @@ def compute_massivas_agora(org: Any, *, now: datetime) -> dict[str, Any]:
         )
         for o in abertas
     ]
+    # A mensagem do técnico depende da linha pronta (ela repete o destaque, o
+    # cabo e o veredito), por isso vem depois e não dentro de `outage_row`.
+    for linha, o in zip(linhas, abertas, strict=True):
+        linha["mensagem_tecnico"] = compute_mensagem_tecnico(
+            org, linha, quedas_por_massiva.get(o.pk, []), now=now
+        )
     # As caixas que escaparam entram no mapa como ponto vazado. Vêm de todas as
     # massivas abertas, sem repetir a mesma caixa.
     intactas_no_mapa: dict[str, dict[str, Any]] = {}
@@ -980,6 +986,110 @@ def compute_reincidencia(
 
 
 # =============================================================================
+# Mensagem para o técnico — o que mandar no WhatsApp de quem vai atender
+# =============================================================================
+# Pedido do operador (21/09/2026): um botão que copia uma mensagem pronta com o
+# necessário para o técnico sair de casa sabendo para onde ir — quantos estão
+# fora, onde é, o ponto no mapa, a caixa e o cabo que passa ali.
+#
+# A mensagem é montada no servidor, e não no navegador, por um motivo: ela
+# repete afirmações que a tela leva a sério (trecho suspeito é inferência, cabo
+# é candidato). Montá-la em JavaScript separaria o texto das regras que o
+# justificam, e no dia em que a regra mudasse a mensagem continuaria a antiga.
+
+
+def _ponto_no_mapa(lat: float, lon: float) -> str:
+    """Link do Google Maps — o que o técnico abre no celular.
+
+    Formato de busca por coordenada, não de rota: quem recebe decide se vai
+    traçar caminho de onde está, e uma rota pré-montada a partir do POP seria um
+    palpite sobre de onde a pessoa sai.
+    """
+    return f"https://www.google.com/maps/search/?api=1&query={lat:.6f},{lon:.6f}"
+
+
+def compute_mensagem_tecnico(
+    org: Any,
+    linha: dict[str, Any],
+    quedas: list[ConnectionDropEvent],
+    *,
+    now: datetime | None = None,
+) -> str:
+    """Texto pronto para colar no WhatsApp do técnico.
+
+    Ordem deliberada: primeiro **o tamanho** (quantos estão fora), depois **onde**
+    (caixa e ponto no mapa), depois **o que ajuda a procurar** (cabo, emenda,
+    causa provável). É a ordem em que a pergunta aparece na cabeça de quem vai
+    atender.
+
+    As ressalvas vêm juntas, curtas: "trecho suspeito" e "cabo candidato" são
+    inferência de cadastro, e mandar um técnico com falsa certeza é pior que
+    mandá-lo sem informação — ele para de procurar onde deveria.
+    """
+    now = now or timezone.now()
+    partes: list[str] = []
+
+    minutos = int((now - linha["started_at"]).total_seconds() // 60)
+    partes.append(f"*MASSIVA* · {linha['ainda_fora']} clientes fora agora")
+    partes.append(
+        f"{linha['affected_count']} afetados desde {linha['started_at']:%H:%M} "
+        f"({minutos} min) · confiança {linha['confidence_label'].lower()}"
+    )
+
+    if linha["tem_trecho"]:
+        partes.append(f"\nTrecho suspeito: {linha['trecho_suspeito']}")
+        partes.append("(inferência pelo cadastro, não leitura do cabo)")
+    else:
+        partes.append(f"\n{linha['elemento_frase']}")
+    if linha.get("referencia"):
+        partes.append(linha["referencia"])
+
+    # Caixas afetadas e o ponto no mapa. A coordenada é a da primeira caixa com
+    # posição — é o lugar concreto para onde o técnico vai; sem caixa
+    # cadastrada, não se inventa ponto.
+    ctos_ids = {q.cto_external_id for q in quedas if q.cto_external_id}
+    caixas = list(
+        NetworkElement.objects.filter(
+            organization=org,
+            kind=NetworkElement.Kind.CTO,
+            external_id__in=ctos_ids,
+        ).only("external_id", "name", "latitude", "longitude")
+    )
+    nomes = [c.name or c.external_id for c in caixas]
+    if nomes:
+        partes.append(f"\nCaixas: {', '.join(sorted(nomes)[:6])}")
+        if len(nomes) > 6:
+            partes.append(f"(+{len(nomes) - 6} caixas)")
+
+    com_posicao = [c for c in caixas if c.latitude is not None and c.longitude is not None]
+    if com_posicao:
+        alvo = sorted(com_posicao, key=lambda c: c.name or c.external_id)[0]
+        partes.append(f"\nMapa: {_ponto_no_mapa(float(alvo.latitude), float(alvo.longitude))}")
+        partes.append(f"({alvo.name or alvo.external_id} · {alvo.latitude:.6f}, {alvo.longitude:.6f})")
+
+    cabos = (linha.get("cabos") or {}).get("cabos") or []
+    if cabos:
+        principal = cabos[0]
+        classe = f" ({principal['classe'].lower()})" if principal["classe"] else ""
+        partes.append(
+            f"\nCabo candidato: {principal['nome']}{classe} — "
+            f"passa a {principal['distancia_m']:.0f} m de {principal['ctos_tocadas']} "
+            f"caixa{'s' if principal['ctos_tocadas'] != 1 else ''} do evento"
+        )
+
+    veredito = linha.get("veredito") or {}
+    if veredito.get("rotulo"):
+        partes.append(f"\nCausa provável: {veredito['rotulo']}")
+        if veredito.get("base"):
+            partes.append(f"({veredito['base']})")
+
+    if linha.get("is_expected"):
+        partes.append("\n⚠ Dentro de manutenção programada.")
+
+    return "\n".join(partes)
+
+
+# =============================================================================
 # Cabos candidatos (R5) — destravado pela geometria (spike R2)
 # =============================================================================
 # Até 2026-09-19 esta pergunta não tinha resposta possível: nenhum campo liga
@@ -1558,6 +1668,20 @@ def _signal_cell(drop: ConnectionDropEvent | None) -> dict[str, Any]:
     }
 
 
+def _cabecalho_com_mensagem(
+    org: Any,
+    outage: OutageEvent,
+    quedas: list[ConnectionDropEvent],
+    *,
+    now: datetime,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """`outage_row` + a mensagem do técnico, que depende da linha já montada."""
+    linha = outage_row(outage, **kwargs)
+    linha["mensagem_tecnico"] = compute_mensagem_tecnico(org, linha, quedas, now=now)
+    return linha
+
+
 def compute_massiva_detalhe(
     org: Any, outage: OutageEvent, *, now: datetime | None = None
 ) -> dict[str, Any]:
@@ -1626,8 +1750,11 @@ def compute_massiva_detalhe(
     return {
         "causas_onu": compute_causas_onu(quedas),
         "motivos": compute_motivos(quedas),
-        "cabecalho": outage_row(
+        "cabecalho": _cabecalho_com_mensagem(
+            org,
             outage,
+            quedas,
+            now=now or timezone.now(),
             referencia=element_references(org, [outage]).get(outage.pk, ""),
             veredito=compute_veredito(quedas, scope=outage.scope),
             vizinhanca=compute_vizinhanca(org, quedas),
