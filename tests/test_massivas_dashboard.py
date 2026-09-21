@@ -2022,3 +2022,37 @@ class TestFiltrosDaTabelaDeClientes:
         # A linha carrega o recorte: é por estes atributos que o filtro anda.
         assert 'data-sinal-ruim="1"' in html
         assert "sem leitura óptica" in html
+
+
+@pytest.mark.django_db
+# staticfiles é gitignored: no CI o whitenoise avisa que o diretório não existe
+# e o aviso vira erro. Todo teste com `client` precisa do marker.
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestCopiarNoDetalhe:
+    """O botão de copiar a mensagem também dentro da massiva (21/09/2026).
+
+    Quem abre o detalhe para entender o evento é justamente quem vai mandar
+    alguém para a rua. Voltar à lista só para copiar é a ida e volta que faz a
+    pessoa desistir e escrever o texto na mão — e texto na mão perde as
+    ressalvas que a mensagem carrega.
+    """
+
+    def test_o_detalhe_traz_o_botao_com_a_mesma_mensagem_da_lista(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        outage = _outage(organization_a, affected=2)
+        drop = _drop(organization_a, login="a1", cto="CTO-1", lat=-23.5, lon=-47.4)
+        OutageAffectedLogin.objects.create(
+            organization=organization_a,
+            outage=outage,
+            drop_event=drop,
+            login=drop.login,
+            dropped_at=drop.dropped_at,
+        )
+        client.force_login(user_a)
+        html = client.get(f"{URL}{outage.pk}/").content.decode()
+        assert "btn-copiar" in html
+        assert "Copiar para o técnico" in html
+        # O comportamento é o mesmo arquivo das duas telas: um segundo script
+        # divergiria no dia em que só um fosse corrigido.
+        assert "btn-copiar-texto" in html

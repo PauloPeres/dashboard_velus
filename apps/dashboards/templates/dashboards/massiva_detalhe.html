@@ -57,6 +57,29 @@
       <p class="text-xs text-emerald-700 mt-1">{{ outage.restored_pct }}% já voltou</p>
 
       {% comment %}
+      Copiar a mensagem do técnico também aqui (21/09/2026). Ela já existia na
+      lista, mas quem abre o detalhe para entender o evento é justamente quem
+      vai mandar alguém para a rua — e voltar à lista só para copiar é o tipo de
+      ida e volta que faz a pessoa desistir e escrever o texto na mão.
+
+      A mensagem é montada no servidor, a mesma da lista: repete afirmações que
+      a tela leva a sério (trecho suspeito é inferência, cabo é candidato), e
+      montá-la em JavaScript separaria o texto das regras que o justificam.
+      {% endcomment %}
+      {% if outage.mensagem_tecnico %}
+      <button type="button"
+              class="btn-copiar mt-3 inline-flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg
+                     bg-emerald-600 text-white font-medium hover:bg-emerald-700"
+              data-mensagem="{{ outage.mensagem_tecnico }}">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/>
+        </svg>
+        <span class="btn-copiar-texto">Copiar para o técnico</span>
+      </button>
+      {% endif %}
+
+      {% comment %}
       Concluir a massiva (21/09/2026): para quando a operação sabe que o reparo
       acabou e o que sobra na lista é ONU queimada. Só aparece com o evento
       aberto — reencerrar mudaria a data de uma massiva que já tem duração.
@@ -317,4 +340,5 @@
     soCritico.addEventListener("change", aplicar);
   })();
 </script>
+{% include "dashboards/_massivas_copiar_js.html" %}
 {% endblock %}

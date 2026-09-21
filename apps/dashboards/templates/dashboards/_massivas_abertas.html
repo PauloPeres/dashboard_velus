@@ -234,40 +234,4 @@ debaixo do dedo de quem está lendo durante o reparo.
   {% include "dashboards/_massivas_causas.html" %}
 </div>
 
-<script>
-(function () {
-  // Delegação no documento: a lista se recarrega inteira a cada 3 min pelo
-  // HTMX, e um listener por botão morreria na primeira troca.
-  document.addEventListener("click", function (ev) {
-    var botao = ev.target.closest(".btn-copiar");
-    if (!botao) { return; }
-    var texto = botao.dataset.mensagem || "";
-    // O aviso troca só o rótulo, não o conteúdo do botão: trocar tudo apagaria
-    // o ícone e o botão "piscaria" de tamanho a cada clique.
-    var rotulo = botao.querySelector(".btn-copiar-texto") || botao;
-    var original = rotulo.textContent;
-    var avisar = function (msg) {
-      rotulo.textContent = msg;
-      setTimeout(function () { rotulo.textContent = original; }, 2000);
-    };
-    // `navigator.clipboard` exige HTTPS (ou localhost). Sem ele, o fallback
-    // antigo ainda copia — melhor que um botão que não faz nada.
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(texto).then(
-        function () { avisar("copiado!"); },
-        function () { avisar("não deu para copiar"); }
-      );
-      return;
-    }
-    var area = document.createElement("textarea");
-    area.value = texto;
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    document.body.appendChild(area);
-    area.select();
-    try { document.execCommand("copy"); avisar("copiado!"); }
-    catch (e) { avisar("não deu para copiar"); }
-    document.body.removeChild(area);
-  });
-})();
-</script>
+{% include "dashboards/_massivas_copiar_js.html" %}

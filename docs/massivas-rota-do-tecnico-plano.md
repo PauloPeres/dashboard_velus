@@ -12,6 +12,14 @@ dita de sete jeitos: *por onde eu começo?*
 > 6. o cabo tem **direção** no projeto do IXC — uma setinha no desenho ajudaria;
 > 7. se der para **inferir onde está o rompimento**, marcar um "X" ali.
 
+E mais dois, que chegaram em seguida:
+
+> 8. ter o botão de **copiar a mensagem para o técnico dentro da massiva** também, e não só na lista;
+> 9. **puxar uma caixa (CTO e CEO) anterior ao rompimento**, para o caminho ficar claro.
+
+O 8 já está feito — era pequeno e independente do resto (ver o fim deste
+documento). O 9 virou o C9.
+
 O pedido é bom e a tela hoje não responde nada disso: ela mostra pontos e o
 traçado dos cabos candidatos, sem dizer o que vem antes do quê.
 
@@ -168,6 +176,22 @@ entraram nele**. "3 das 4 CTOs desta massiva estão no desenho do projeto; a
 quarta não aparece na rota" é informação; omitir seria deixar o técnico achar que
 viu o mapa inteiro.
 
+### C9 — Uma caixa antes do rompimento, para o caminho ficar claro
+
+Pedido 9, que chegou depois: o mapa não mostra só o que caiu. Ele mostra
+**também a caixa imediatamente anterior** ao provável rompimento — a última CEO
+e a última CTO que continuam no ar naquela rota.
+
+É o que transforma um ponto num caminho: com a caixa de trás no desenho, o
+técnico vê de onde a fibra vem e para onde ela ia, e o "X" do C5 passa a ter as
+duas pontas visíveis em vez de flutuar sobre o traçado. Ela entra em cor de "no
+ar", como as vizinhas intactas da R6 já fazem hoje — o mesmo vocabulário visual,
+porque é a mesma afirmação: *esta aqui não caiu, e é ela que delimita o trecho*.
+
+Sem POP na rota (C3b), a "anterior" é a caixa do lado da caixa comum que
+continua no ar; se não houver nenhuma, a tela diz isso em vez de desenhar uma
+seta partindo do nada.
+
 ---
 
 ## O que precisa de decisão ou de dado novo
@@ -188,3 +212,17 @@ viu o mapa inteiro.
    entra em que caixa), o grafo deixa de ser inferência e vira leitura — e o
    plano inteiro fica mais barato e mais honesto. Vale uma pergunta ao suporte
    antes de começar o C1.
+
+---
+
+## Feito fora do plano
+
+**Pedido 8 — botão de copiar dentro da massiva** (21/09/2026). Quem abre o
+detalhe para entender o evento é justamente quem vai mandar alguém para a rua;
+voltar à lista só para copiar é a ida e volta que faz a pessoa desistir e
+escrever o texto na mão — e o texto na mão perde as ressalvas que a mensagem
+carrega ("trecho suspeito", "cabo candidato").
+
+O comportamento do botão virou um parcial só (`_massivas_copiar_js.html`), usado
+pelas duas telas: um segundo script divergiria no dia em que só um fosse
+corrigido.
