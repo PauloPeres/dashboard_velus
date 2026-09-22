@@ -96,6 +96,9 @@ class TestTracadoDoCabo:
             (-23.5020, -47.4020),
         )
         assert geo.is_line is True
+        # Os ids das coordenadas vêm na MESMA ordem dos pontos: é por eles que
+        # dois elementos se descobrem ligados, sem tolerância de metros.
+        assert geo.coordinate_ids == ("10", "11", "12")
 
     def test_cabo_sem_ponto_nao_vira_dto(self, respx_mock: respx.MockRouter) -> None:
         _sem_catalogo_de_tipos(respx_mock)
@@ -290,3 +293,33 @@ class TestSplittersEPostes:
 
         assert "SPLITTER" in NETWORK_ELEMENT_KINDS
         assert "POLE" in NETWORK_ELEMENT_KINDS
+
+
+class TestLigacaoPorCoordenada:
+    """O id da coordenada viaja junto com o ponto (descoberta de 22/09/2026).
+
+    Dois elementos que se conectam compartilham a MESMA linha de
+    `df_coordenada` — não coordenadas parecidas, a mesma linha. Guardar o id
+    transforma "estão a 3 m um do outro" em "são o mesmo ponto".
+    """
+
+    def test_o_dto_carrega_os_ids_na_ordem_dos_pontos(self) -> None:
+        from apps.network.domain.dto import ElementGeometryDTO
+
+        dto = ElementGeometryDTO(
+            external_id="CB-1",
+            kind="CABLE",
+            points=((-23.5, -47.4), (-23.6, -47.5)),
+            coordinate_ids=("101", "102"),
+        )
+        assert dto.coordinate_ids == ("101", "102")
+        assert len(dto.coordinate_ids) == len(dto.points)
+
+    def test_sem_ids_o_dto_continua_valido(self) -> None:
+        """Origem que não expõe o id não quebra: quem consome cai na distância."""
+        from apps.network.domain.dto import ElementGeometryDTO
+
+        dto = ElementGeometryDTO(
+            external_id="CB-1", kind="CABLE", points=((-23.5, -47.4), (-23.6, -47.5))
+        )
+        assert dto.coordinate_ids == ()

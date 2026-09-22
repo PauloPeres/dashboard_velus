@@ -148,11 +148,16 @@ class IxcNetworkElementSource:
                             errors=exc.errors()[:1],
                         )
                         continue
-                    pontos = tuple(
-                        ponto
+                    # Os ids viajam junto com os pontos, na mesma ordem: é por
+                    # eles que dois elementos se descobrem ligados (mesma linha
+                    # de `df_coordenada`), sem depender de tolerância de metros.
+                    pares = [
+                        (ponto, id_coordenada)
                         for _, id_coordenada in sorted(vinculos.get(schema.id, []))
                         if (ponto := coordenadas.get(id_coordenada)) is not None
-                    )
+                    ]
+                    pontos = tuple(p for p, _ in pares)
+                    ids_coordenada = tuple(i for _, i in pares)
                     if not pontos:
                         sem_ponto += 1
                         continue
@@ -164,6 +169,7 @@ class IxcNetworkElementSource:
                         name=schema.descricao,
                         project_external_id=schema.id_projeto,
                         type_name=tipos.get(schema.id_tipo_elemento, ""),
+                        coordinate_ids=ids_coordenada,
                     )
             _logger.info(
                 "ixc_geometry_done",

@@ -343,6 +343,23 @@ class NetworkElementGeometry(TenantModel):
         help_text=_("[[lat, lon], ...] na ordem do traçado."),
     )
 
+    # O id da coordenada na origem, um por vértice, na mesma ordem de `points`.
+    #
+    # Não é enfeite de auditoria: **é a ligação da planta**. Descoberto em
+    # 22/09/2026, sondando a API — dois elementos que se conectam compartilham a
+    # MESMA linha de `df_coordenada`, e não apenas coordenadas parecidas. São
+    # 1.814 coordenadas com dois ou mais elementos, das quais 1.420 ligam cabo a
+    # cabo: emendas que nenhuma tolerância de distância enxergaria com
+    # segurança.
+    #
+    # Guardar o id transforma "estas duas coisas estão a 3 m uma da outra" em
+    # "estas duas coisas são o mesmo ponto" — inferência virando leitura.
+    coordinate_ids = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=_("id da coordenada na origem, um por vértice, na ordem de points."),
+    )
+
     class Meta:
         verbose_name = _("Traçado de elemento")
         verbose_name_plural = _("Traçados de elementos")

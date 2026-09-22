@@ -174,6 +174,11 @@ class ElementGeometryDTO:
     # É ele que diz a classe do cabo — o nome do próprio elemento só diz em 47%
     # dos casos, e 57 cabos de tipo drop se chamam apenas "01FO".
     type_name: str = ""
+    # Id da coordenada na origem, um por vértice e na ordem de `points`. É a
+    # ligação real da planta: elementos que se conectam compartilham o mesmo id
+    # (medido: 1.814 coordenadas com 2+ elementos). Vazio quando a origem não
+    # expõe — e aí quem consome cai na inferência por distância.
+    coordinate_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.external_id:

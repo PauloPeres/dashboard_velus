@@ -243,6 +243,7 @@ class NetworkElementGeometryRepository:
                 # na próxima leitura de qualquer jeito, e gravar tupla faria o
                 # objeto em memória divergir do que o banco entrega.
                 "points": [[lat, lon] for lat, lon in dto.points],
+                "coordinate_ids": list(dto.coordinate_ids),
             },
         )
         return geometry, created
