@@ -226,6 +226,13 @@ class NetworkElement(TenantModel):
         # InMap (`df_elemento` tipo CA), com posição própria, e por isso entra
         # como elemento de planta e não como detalhe do cabo.
         SPLICE = "SPLICE", _("Caixa de emenda")
+        # Splitter e poste também vêm do projeto do InMap (`df_elemento` tipos
+        # SP e PT). O splitter importa porque é ele que diz quantos clientes
+        # pendem de uma caixa; o poste, porque é o que o técnico sobe — e é a
+        # única coisa no desenho que corresponde a um objeto físico visível da
+        # rua.
+        SPLITTER = "SPLITTER", _("Splitter")
+        POLE = "POLE", _("Poste")
 
     source_type = models.CharField(
         max_length=32,

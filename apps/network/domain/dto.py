@@ -143,7 +143,9 @@ class BandwidthUsageDTO:
 # Tipos de elemento de rede reconhecidos pelo domínio. Tupla de strings (e não
 # Enum) porque o DTO é neutro e atravessa a fronteira do adapter; quem restringe
 # o vocabulário no banco é o model.
-NETWORK_ELEMENT_KINDS: tuple[str, ...] = ("CTO", "POP", "PON", "OLT", "CABLE", "SPLICE")
+NETWORK_ELEMENT_KINDS: tuple[str, ...] = (
+    "CTO", "POP", "PON", "OLT", "CABLE", "SPLICE", "SPLITTER", "POLE",
+)
 
 
 @dataclass(frozen=True)

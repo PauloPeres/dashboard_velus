@@ -266,3 +266,27 @@ class TestCaixaDeEmenda:
         assert emendas[0].name == "Caixa de Emenda Vermelha 142"
         assert emendas[0].points == ((-23.6068, -47.4890),)
         assert emendas[0].is_line is False
+
+
+class TestSplittersEPostes:
+    """Splitter e poste também vêm do projeto (pedido do operador, 22/09/2026).
+
+    O splitter importa porque é ele que diz quantos clientes pendem de uma
+    caixa; o poste, porque é o único objeto do desenho que o técnico enxerga da
+    rua. Ambos são elementos de UM ponto, como a caixa de emenda — não linha.
+    """
+
+    def test_os_tipos_do_projeto_incluem_splitter_e_poste(self) -> None:
+        from apps.integrations.ixc.network_elements import IxcNetworkElementSource
+
+        tipos = IxcNetworkElementSource._GEOMETRY_TYPES
+        assert tipos["SP"] == "SPLITTER"
+        assert tipos["PT"] == "POLE"
+        # E o cabo continua sendo o único que vira linha.
+        assert tipos["CB"] == "CABLE"
+
+    def test_o_dominio_aceita_os_novos_tipos(self) -> None:
+        from apps.network.domain.dto import NETWORK_ELEMENT_KINDS
+
+        assert "SPLITTER" in NETWORK_ELEMENT_KINDS
+        assert "POLE" in NETWORK_ELEMENT_KINDS

@@ -106,7 +106,16 @@ class IxcNetworkElementSource:
     # ela entra porque é onde o cabo é aberto e refeito: quando o trecho
     # suspeito passa por uma emenda, é ali que o técnico abre primeiro. São 317
     # em produção, todas com coordenada.
-    _GEOMETRY_TYPES: ClassVar[dict[str, str]] = {"CB": "CABLE", "CA": "SPLICE"}
+    # Tipos do projeto que viram geometria. CB é linha (o cabo); os demais são
+    # ponto. Splitter e poste entraram em 22/09/2026 a pedido do operador: o
+    # splitter diz quantos clientes pendem de uma caixa, e o poste é o objeto
+    # que o técnico enxerga da rua.
+    _GEOMETRY_TYPES: ClassVar[dict[str, str]] = {
+        "CB": "CABLE",
+        "CA": "SPLICE",
+        "SP": "SPLITTER",
+        "PT": "POLE",
+    }
 
     def list_element_geometries(self) -> Iterator[ElementGeometryDTO]:
         """Monta a polilinha de cada cabo: elemento + vínculos + coordenadas.
