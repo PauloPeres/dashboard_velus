@@ -2056,3 +2056,92 @@ class TestCopiarNoDetalhe:
         # O comportamento é o mesmo arquivo das duas telas: um segundo script
         # divergiria no dia em que só um fosse corrigido.
         assert "btn-copiar-texto" in html
+
+
+@pytest.mark.django_db
+# staticfiles é gitignored: no CI o whitenoise avisa que o diretório não existe
+# e o aviso vira erro. Todo teste com `client` precisa do marker.
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestRotaDoTecnicoNaTela:
+    """A rota chega na tela e na mensagem — e cala quando não sabe.
+
+    O risco aqui não é layout: é a tela afirmar um ponto de partida que o grafo
+    não sustenta. Uma caixa errada custa uma subida de poste.
+    """
+
+    def _planta(self, org: Organization) -> None:
+        """POP → CEO → CTO-1, tudo sobre o mesmo cabo."""
+        set_current_organization(org)
+        NetworkElement.objects.create(
+            organization=org, source_type="IXC", kind=NetworkElement.Kind.POP,
+            external_id="POP-1", name="POP Centro", latitude=-23.5000, longitude=-47.45,
+        )
+        NetworkElement.objects.create(
+            organization=org, source_type="IXC", kind=NetworkElement.Kind.CTO,
+            external_id="CTO-1", name="CTO 1", latitude=-23.5036, longitude=-47.45,
+        )
+        NetworkElementGeometry.objects.create(
+            organization=org, source_type="IXC", kind=NetworkElement.Kind.SPLICE,
+            external_id="CEO-1", name="Caixa de Emenda 1",
+            points=[[-23.5018, -47.45]],
+        )
+        NetworkElementGeometry.objects.create(
+            organization=org, source_type="IXC", kind=NetworkElement.Kind.CABLE,
+            external_id="CB-1", name="FIBRA AS80 12FO BACKBONE 1",
+            type_name="FIBRA AS80 12FO BACKBONE",
+            points=[[-23.5000, -47.45], [-23.5018, -47.45], [-23.5036, -47.45]],
+        )
+
+    def test_a_tela_mostra_a_caixa_de_partida_e_a_mensagem_comeca_por_ela(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        self._planta(organization_a)
+        outage = _outage(organization_a, affected=1)
+        drop = _drop(organization_a, login="a1", cto="CTO-1", lat=-23.5036, lon=-47.45)
+        OutageAffectedLogin.objects.create(
+            organization=organization_a, outage=outage, drop_event=drop,
+            login=drop.login, dropped_at=drop.dropped_at,
+        )
+
+        client.force_login(user_a)
+        resp = client.get(f"{URL}{outage.pk}/")
+        rota = resp.context["rota_tecnico"]
+        assert rota["tem"] is True
+        assert rota["partida"] is not None
+        html = resp.content.decode()
+        assert "Por onde começar" in html
+        # E a mesma resposta vai no texto que o técnico recebe.
+        assert "COMECE POR" in resp.context["outage"]["mensagem_tecnico"]
+
+    def test_sem_planta_a_tela_diz_que_nao_da_para_tracar(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        """Bloco ausente se leria como "não há o que dizer"."""
+        outage = _outage(organization_a, affected=1)
+        drop = _drop(organization_a, login="a1", cto="CTO-SEM-DESENHO")
+        OutageAffectedLogin.objects.create(
+            organization=organization_a, outage=outage, drop_event=drop,
+            login=drop.login, dropped_at=drop.dropped_at,
+        )
+        client.force_login(user_a)
+        resp = client.get(f"{URL}{outage.pk}/")
+        assert resp.context["rota_tecnico"]["tem"] is False
+        assert "Não dá para traçar a rota" in resp.content.decode()
+        # E a mensagem do técnico não inventa um começo.
+        assert "COMECE POR" not in resp.context["outage"]["mensagem_tecnico"]
+
+    def test_a_rota_vira_camada_do_mapa(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        self._planta(organization_a)
+        outage = _outage(organization_a, affected=1)
+        drop = _drop(organization_a, login="a1", cto="CTO-1", lat=-23.5036, lon=-47.45)
+        OutageAffectedLogin.objects.create(
+            organization=organization_a, outage=outage, drop_event=drop,
+            login=drop.login, dropped_at=drop.dropped_at,
+        )
+        client.force_login(user_a)
+        resp = client.get(f"{URL}{outage.pk}/")
+        mapa = resp.context["mapa"]
+        assert mapa["rota_partida"], "a caixa de partida não virou ponto no mapa"
+        assert "comece por aqui" in mapa["rota_partida"][0]["label"]

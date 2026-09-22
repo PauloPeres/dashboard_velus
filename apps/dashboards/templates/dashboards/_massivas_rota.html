@@ -1,0 +1,130 @@
+{% load humanize %}
+{% comment %}
+Por onde o técnico começa (C3/C4/C8 do plano da rota).
+
+Este bloco é o único da tela que **manda** em vez de descrever, e por isso ele
+fica antes do mapa e diz, na mesma frase, o quanto se sabe. As três formas de
+dizer são diferentes de propósito:
+
+- "comece por" — a caixa foi confirmada: tudo abaixo dela caiu;
+- "caixa comum a todas as afetadas" — ainda há cliente no ar abaixo dela, então
+  não é o ponto de partida, é o ponto de encontro das rotas;
+- nada — as caixas da massiva não estão no desenho do projeto, e a tela diz isso
+  em vez de sumir com o bloco (bloco ausente se lê como "não há o que dizer").
+{% endcomment %}
+{% if rota_tecnico.ctos_afetadas %}
+<div class="bg-white rounded-xl shadow-sm border {% if rota_tecnico.partida_confirmada %}border-rose-300{% else %}border-gray-200{% endif %} p-5 mb-4">
+  <div class="flex flex-wrap items-baseline gap-2 mb-2">
+    <h2 class="text-sm font-semibold text-gray-700">Por onde começar</h2>
+    <span class="text-[10px] uppercase tracking-wider text-gray-400">
+      inferência de topologia — o sistema segue o cabo do projeto, não a fibra
+    </span>
+  </div>
+
+  {% if rota_tecnico.partida %}
+  <p class="text-lg font-bold text-gray-900 leading-snug">
+    {% if rota_tecnico.partida_confirmada %}
+    <span class="text-rose-700">&#9650;</span> {{ rota_tecnico.partida.label }}
+    {% else %}
+    {{ rota_tecnico.partida.label }}
+    {% endif %}
+  </p>
+  <p class="text-xs text-gray-500 mt-0.5">
+    {% if rota_tecnico.partida_confirmada %}
+      Todos os clientes abaixo dela caíram — acima ainda há gente no ar.
+    {% else %}
+      É a caixa comum a todas as afetadas, e <strong>não</strong> o ponto de partida:
+      abaixo dela ainda há cliente no ar, então o problema pode estar mais adiante.
+    {% endif %}
+    {% if not rota_tecnico.tem_origem_no_pop %}
+      A rota desta caixa não chega a nenhum POP no desenho, então "primeira da rota"
+      não pode ser afirmado.
+    {% endif %}
+  </p>
+
+  <div class="grid sm:grid-cols-3 gap-3 mt-3 text-sm">
+    {% if rota_tecnico.primeira_cto %}
+    <div class="bg-gray-50 rounded-lg px-3 py-2">
+      <p class="text-[10px] uppercase tracking-wider text-gray-400">1ª CTO afetada na rota</p>
+      <p class="text-gray-800">{{ rota_tecnico.primeira_cto.label }}</p>
+    </div>
+    {% endif %}
+    {% if rota_tecnico.caixa_anterior %}
+    <div class="bg-gray-50 rounded-lg px-3 py-2">
+      <p class="text-[10px] uppercase tracking-wider text-gray-400">Última caixa no ar antes</p>
+      <p class="text-gray-800"><span class="text-teal-700">&#9660;</span> {{ rota_tecnico.caixa_anterior.label }}</p>
+    </div>
+    {% endif %}
+    {% if rota_tecnico.abaixo_da_partida %}
+    <div class="bg-gray-50 rounded-lg px-3 py-2">
+      <p class="text-[10px] uppercase tracking-wider text-gray-400">Abaixo da caixa</p>
+      <p class="text-gray-800">
+        <span class="text-red-600 font-semibold">{{ rota_tecnico.abaixo_da_partida.fora }}</span> fora ·
+        <span class="text-emerald-700">{{ rota_tecnico.abaixo_da_partida.no_ar }}</span> no ar
+      </p>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if rota_tecnico.trecho %}
+  <p class="text-sm text-gray-800 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mt-3 leading-relaxed">
+    <span class="font-semibold">&#10005; Provável rompimento</span> entre
+    <strong>{{ rota_tecnico.trecho.de.label }}</strong> e
+    <strong>{{ rota_tecnico.trecho.para.label }}</strong>{% if rota_tecnico.trecho.metros %},
+    ~{{ rota_tecnico.trecho.metros|intcomma }} m de cabo{% endif %}{% if rota_tecnico.trecho.cabo %},
+    pelo cabo {{ rota_tecnico.trecho.cabo }}{% endif %}.
+    O "X" no mapa está no meio desse pedaço — é onde procurar, não onde está.
+  </p>
+  {% elif rota_tecnico.partida_confirmada and not rota_tecnico.cobertura_suficiente %}
+  <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-3 leading-relaxed">
+    O trecho não é afirmado: só {{ rota_tecnico.ctos_no_grafo }} de
+    {{ rota_tecnico.ctos_afetadas }} caixas afetadas estão no desenho, e com o resto fora
+    "ainda no ar" pode ser gente que caiu e não foi mapeada.
+  </p>
+  {% endif %}
+
+  {% if rota_tecnico.ceos %}
+  {% comment %}
+  Pedido 1 do técnico: de cada emenda da rota, quais CTOs caíram e quais não. É
+  o que dá (ou tira) confiança na caixa de partida — uma CEO com 9 de 9 fora é
+  outra conversa que uma com 2 de 11.
+  {% endcomment %}
+  <table class="min-w-full text-sm mt-4">
+    <thead>
+      <tr class="text-left text-[10px] uppercase tracking-wider text-gray-400 border-b border-gray-200">
+        <th class="py-2 pr-3">Caixa de emenda</th>
+        <th class="py-2 pr-3">Do POP</th>
+        <th class="py-2 pr-3">CTOs fora</th>
+        <th class="py-2">CTOs no ar</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for c in rota_tecnico.ceos %}
+      <tr class="{% if c.tudo_fora %}bg-rose-50{% endif %}">
+        <td class="py-2 pr-3 text-gray-800">{{ c.label }}</td>
+        <td class="py-2 pr-3 text-gray-500 tabular-nums">{{ c.metros_do_pop|intcomma }} m</td>
+        <td class="py-2 pr-3 text-red-600 tabular-nums">{{ c.fora|length }}</td>
+        <td class="py-2 text-emerald-700 tabular-nums">{{ c.no_ar|length }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% else %}
+  <p class="text-sm text-gray-600 leading-relaxed">
+    Não dá para traçar a rota desta massiva: nenhuma das
+    {{ rota_tecnico.ctos_afetadas }} caixa{{ rota_tecnico.ctos_afetadas|pluralize }} afetada{{ rota_tecnico.ctos_afetadas|pluralize }}
+    está ligada ao desenho do projeto — ou a caixa não foi desenhada, ou o cabo que
+    chega nela não encosta em nenhum POP cadastrado.
+  </p>
+  {% endif %}
+
+  {% if rota_tecnico.partida and rota_tecnico.ctos_no_grafo < rota_tecnico.ctos_afetadas %}
+  <p class="text-xs text-gray-400 mt-3 leading-relaxed">
+    Rota montada com {{ rota_tecnico.ctos_no_grafo }} de {{ rota_tecnico.ctos_afetadas }} caixas
+    afetadas; as demais não estão no desenho do projeto. O mapa é menor que a massiva.
+  </p>
+  {% endif %}
+</div>
+{% endif %}

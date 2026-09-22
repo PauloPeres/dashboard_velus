@@ -99,6 +99,13 @@
   </div>
 </div>
 
+{% comment %}
+"Por onde começar" vem ANTES do mapa: é a única coisa da tela que manda em vez
+de descrever, e quem abre a página durante um evento está decidindo para onde
+mandar o carro.
+{% endcomment %}
+{% include "dashboards/_massivas_rota.html" %}
+
 {% include "dashboards/_massivas_mapa.html" %}
 
 <details class="bg-white rounded-xl shadow-sm border border-gray-200 mb-6">

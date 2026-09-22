@@ -60,6 +60,16 @@ virou caixa de marcar, que além de nomear a camada liga e desliga ela.
       <input type="checkbox" data-grupo="cabo" checked class="rounded border-gray-300">
       <span class="text-orange-600 font-bold">&#9473;</span><span class="text-gray-600">Cabo e trecho suspeito</span>
     </label>
+    {% if mapa.rota_partida %}
+    {% comment %}
+    A rota do técnico (C6) só ganha filtro quando existe: uma caixa marcada que
+    nunca acende ensina a desconfiar das outras.
+    {% endcomment %}
+    <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+      <input type="checkbox" data-grupo="rota" checked class="rounded border-gray-300">
+      <span class="text-rose-700 font-semibold">&#9650;</span><span class="text-gray-900 font-semibold">&#10005;</span><span class="text-gray-600">Por onde começar</span>
+    </label>
+    {% endif %}
     <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
       <input type="checkbox" data-grupo="pop" class="rounded border-gray-300">
       <span class="text-blue-600 font-semibold">&#9733;</span><span class="text-gray-600">POP e ligação lógica</span>
@@ -93,6 +103,14 @@ virou caixa de marcar, que além de nomear a camada liga e desliga ela.
   <details class="mt-2 text-xs text-gray-400">
     <summary class="cursor-pointer select-none text-gray-500 hover:text-gray-700">Como ler o mapa</summary>
     <div class="mt-2 space-y-1">
+      <p class="leading-relaxed">
+        <strong>&#9650; triângulo vermelho</strong>: a caixa por onde começar.
+        <strong>&#9660; triângulo verde-escuro</strong>: a última caixa que continua no ar
+        antes dela — é ela que fecha o trecho.
+        <strong>&#10005;</strong>: o provável rompimento, entre as duas.
+        Os três saem de <strong>inferência de topologia</strong>: o sistema segue o cabo do
+        projeto e vê quem caiu, não a fibra.
+      </p>
       <p class="leading-relaxed">
         <strong>&#8962; casa</strong>: cliente — vermelho está fora agora, verde já voltou.
         <strong>&#9632; quadrado laranja</strong>: caixa (CTO) afetada.
@@ -171,8 +189,8 @@ virou caixa de marcar, que além de nomear a camada liga e desliga ela.
           // "Para onde o carro vai": caixas e cabo. O cliente sai do mapa
           // porque a casa dele não é destino de reparo — o que se conserta é a
           // caixa e o cabo entre elas.
-          tecnico: ["caixas", "cabo"],
-          tudo: ["fora", "voltaram", "caixas", "cabo", "pop"]
+          tecnico: ["caixas", "cabo", "rota"],
+          tudo: ["fora", "voltaram", "caixas", "cabo", "pop", "rota"]
         };
         document.querySelectorAll('#mapa-filtros button[data-preset]').forEach(function (b) {
           b.addEventListener("click", function () {

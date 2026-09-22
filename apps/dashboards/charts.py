@@ -2460,6 +2460,12 @@ _ICONE_CLIENTE = "\u2302"  # ⌂ casa
 _ICONE_CAIXA = "\u25a0"  # ■ caixa (CTO)
 _ICONE_EMENDA = "\u25c6"  # ◆ emenda
 _ICONE_POP = "\u2605"  # ★ POP
+# A rota do técnico (C6). O X é o provável rompimento; a bandeira é por onde
+# começar. São os dois únicos símbolos do mapa que MANDAM em vez de descrever,
+# e por isso são os maiores.
+_ICONE_PARTIDA = "\u25b2"  # ▲ comece por aqui
+_ICONE_ANTERIOR = "\u25bc"  # ▼ última caixa no ar antes do trecho
+_ICONE_X = "\u2715"  # ✕ provável rompimento
 
 # Camadas que começam desligadas. Não somem — viram caixa desmarcada acima do
 # mapa. O critério é o do pedido: reduzir ruído e deixar na tela o que responde
@@ -2639,6 +2645,11 @@ def outage_map(mapa: dict[str, Any]) -> str:
         # evento; as 317 do cadastro seriam pontos sem pergunta.
         ("emendas", "Caixa de emenda", "#7c3aed", 20, _ICONE_EMENDA, "caixas"),
         ("pops", "POP", "#2563eb", 23, _ICONE_POP, "pop"),
+        # A rota entra por último: é o que precisa ficar POR CIMA de tudo. Um X
+        # escondido atrás de um ponto de cliente não serve para nada.
+        ("rota_anterior", "Última caixa no ar", "#0f766e", 24, _ICONE_ANTERIOR, "rota"),
+        ("rota_partida", "Comece por aqui", "#be123c", 28, _ICONE_PARTIDA, "rota"),
+        ("rota_x", "Provável rompimento", "#111827", 30, _ICONE_X, "rota"),
     ]
     # As ligações entram ANTES dos pontos para ficarem por baixo deles.
     traces = [
