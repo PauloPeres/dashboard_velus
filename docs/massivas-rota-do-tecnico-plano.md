@@ -275,3 +275,41 @@ a rota foi montada.
 3. **Postes e splitters** (162 elementos do projeto) seguem fora do sync.
 4. A pergunta ao suporte do IXC sobre **existir uma ligação de verdade entre
    elementos**. Se existir, o grafo deixa de ser inferência e vira leitura.
+
+---
+
+# A ligação exata (22/09/2026)
+
+Perguntado se o IXC guarda a ligação de verdade entre elementos, sondei a API:
+**não há tabela de fusão** (26 nomes testados — `df_ligacao`, `df_fusao`,
+`df_conexao`, `df_porta`, `df_splitter`… todos vazios), **mas a ligação está
+gravada em outro lugar**. Dois elementos que se conectam compartilham a *mesma
+linha* de `df_coordenada` — não coordenadas parecidas, o mesmo registro.
+
+Medido: **1.814 coordenadas com dois ou mais elementos**, das quais **1.420
+ligam cabo a cabo** e 170 das 317 caixas de emenda ligam a um cabo por id
+exato.
+
+O grafo passou a ler isso. Onde o id existe, a ligação é leitura; a tolerância
+de 15 m ficou só para a CTO, que não existe no projeto. As junções cabo-a-cabo
+viraram nó próprio, chamado "Junção de cabos" — não fingem ser caixa cadastrada.
+
+**Cobertura, medida antes e depois:**
+
+| versão | CTOs alcançáveis do POP | CEOs |
+|---|---|---|
+| ligando só as pontas dos cabos | 428 de 1.438 | 87 de 317 |
+| cortando nos elementos do caminho | 977 | 224 |
+| + ligação exata por coordenada | **1.055** | **242** |
+
+Uma armadilha no meio do caminho, que só apareceu medindo: na primeira versão o
+id exato **substituía** o elemento próximo, e a cobertura caiu para 817 CTOs —
+as caixas que dividem poste com uma junção sumiam. Um vértice pode hospedar dois
+elementos, e os dois valem.
+
+## Splitter e poste (pedido 7)
+
+Os 90 postes entraram. Os **72 splitters não existem como objeto no desenho**:
+sem coordenada, sem diretório, com `id_projeto` = 0, e chamados "SPLITER 1X8" e
+"1X16". São o catálogo de material do projeto. Ou seja, a pergunta que motivava
+o pedido — *quantos clientes pendem desta caixa* — **não tem resposta por aí**.

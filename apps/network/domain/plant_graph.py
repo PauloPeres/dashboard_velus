@@ -26,7 +26,8 @@ fica sobre o traçado**, e cada pedaço entre dois elementos consecutivos vira u
 aresta com o comprimento real daquele pedaço.
 
 A diferença não é de estilo. Ligando só as pontas, o grafo alcançava 428 das
-1.438 CTOs a partir de um POP. Cortando nos elementos do caminho, alcança 949.
+1.438 CTOs a partir de um POP. Cortando nos elementos do caminho, 977. Somando a
+ligação exata por id de coordenada (ver `JUNCAO`), **1.055**.
 
 ## O que este módulo NÃO afirma
 
@@ -249,23 +250,36 @@ def build_graph(
         for i, vertice in enumerate(cabo.points):
             if i:
                 acumulado += haversine_meters(cabo.points[i - 1], vertice)
-            # O id da coordenada vem primeiro: onde ele existe, a ligação é
-            # leitura, e uma caixa a 14 m não pode ganhar do elemento que está
-            # gravado como o MESMO ponto.
+            # Um vértice pode hospedar DOIS elementos, e os dois valem: a
+            # junção gravada na coordenada (leitura) e a CTO a poucos metros
+            # dela (inferência), que é o caso comum de uma caixa de cliente
+            # pendurada na emenda do poste.
+            #
+            # A primeira versão tratava os dois como alternativa — o exato
+            # ganhava e o próximo era descartado —, e a cobertura CAIU de 977
+            # para 817 CTOs: as caixas que dividiam poste com uma junção
+            # sumiam do grafo. Os dois entram, o exato primeiro.
             coord = cabo.coordinate_ids[i] if i < len(cabo.coordinate_ids) else ""
-            achado = por_coordenada.get(coord) if coord else None
-            if achado is None:
-                achado = indice.mais_proximo(vertice, tolerancia)
-            if achado is None and tolerancia_pop > tolerancia:
-                # O POP tem alcance próprio (ver TOLERANCIA_POP_METROS).
-                achado = indice.mais_proximo(vertice, tolerancia_pop, kinds=(POP,))
-            if achado is None:
-                continue
-            if na_rota and na_rota[-1][0].key == achado.key:
-                # O mesmo elemento encostando em vértices seguidos é um ponto
-                # só: contar duas vezes criaria uma aresta de zero metro.
-                continue
-            na_rota.append((achado, acumulado))
+            achados: list[NodeInput] = []
+            exato = por_coordenada.get(coord) if coord else None
+            if exato is not None:
+                achados.append(exato)
+            perto = indice.mais_proximo(vertice, tolerancia)
+            if perto is None and exato is None and tolerancia_pop > tolerancia:
+                # O POP tem alcance próprio (ver TOLERANCIA_POP_METROS) — mas
+                # só quando o vértice está órfão. Aplicá-lo também onde já há
+                # elemento faria cada vértice a 300 m do POP virar uma ligação
+                # direta com ele, encurtando rotas que na fibra não existem.
+                perto = indice.mais_proximo(vertice, tolerancia_pop, kinds=(POP,))
+            if perto is not None and (exato is None or perto.key != exato.key):
+                achados.append(perto)
+
+            for achado in achados:
+                if na_rota and na_rota[-1][0].key == achado.key:
+                    # O mesmo elemento encostando em vértices seguidos é um
+                    # ponto só: contar duas vezes criaria aresta de zero metro.
+                    continue
+                na_rota.append((achado, acumulado))
 
         if len(na_rota) < 2:
             grafo.cabos_soltos += 1
