@@ -107,13 +107,21 @@ class IxcNetworkElementSource:
     # suspeito passa por uma emenda, é ali que o técnico abre primeiro. São 317
     # em produção, todas com coordenada.
     # Tipos do projeto que viram geometria. CB é linha (o cabo); os demais são
-    # ponto. Splitter e poste entraram em 22/09/2026 a pedido do operador: o
-    # splitter diz quantos clientes pendem de uma caixa, e o poste é o objeto
+    # ponto.
+    #
+    # O poste entrou em 22/09/2026 a pedido do operador — são 90, e é o objeto
     # que o técnico enxerga da rua.
+    #
+    # O **splitter ficou de fora, e não por escolha**: sondando a API na mesma
+    # data, os 72 elementos tipo SP não têm coordenada nenhuma
+    # (`df_elemento_coordenada` vazio para todos), `id_diretorio` vazio e
+    # `id_projeto` = 0. Eles são o CATÁLOGO DE MATERIAL ("SPLITER 1X8",
+    # "1X16"), não objetos colocados no desenho. Sincronizá-los traria 72
+    # registros sem posição que não respondem "quantos clientes pendem desta
+    # caixa" — que era justamente o motivo de querê-los.
     _GEOMETRY_TYPES: ClassVar[dict[str, str]] = {
         "CB": "CABLE",
         "CA": "SPLICE",
-        "SP": "SPLITTER",
         "PT": "POLE",
     }
 

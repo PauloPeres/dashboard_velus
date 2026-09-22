@@ -272,19 +272,23 @@ class TestCaixaDeEmenda:
 
 
 class TestSplittersEPostes:
-    """Splitter e poste também vêm do projeto (pedido do operador, 22/09/2026).
+    """O poste entra; o splitter não existe como objeto no desenho.
 
-    O splitter importa porque é ele que diz quantos clientes pendem de uma
-    caixa; o poste, porque é o único objeto do desenho que o técnico enxerga da
-    rua. Ambos são elementos de UM ponto, como a caixa de emenda — não linha.
+    Pedido do operador em 22/09/2026, e a sondagem respondeu metade dele: os 90
+    postes são elementos colocados, com coordenada. Os 72 "splitters" são o
+    catálogo de material do projeto — sem coordenada, sem diretório, sem
+    projeto —, então não respondem quantos clientes pendem de uma caixa.
     """
 
     def test_os_tipos_do_projeto_incluem_splitter_e_poste(self) -> None:
         from apps.integrations.ixc.network_elements import IxcNetworkElementSource
 
         tipos = IxcNetworkElementSource._GEOMETRY_TYPES
-        assert tipos["SP"] == "SPLITTER"
         assert tipos["PT"] == "POLE"
+        # O splitter NÃO entra: medido em 22/09/2026, os 72 elementos SP do
+        # projeto não têm coordenada, diretório nem projeto — são catálogo de
+        # material, não objeto colocado no desenho.
+        assert "SP" not in tipos
         # E o cabo continua sendo o único que vira linha.
         assert tipos["CB"] == "CABLE"
 
