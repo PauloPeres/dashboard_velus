@@ -189,3 +189,76 @@ class TestDrop:
                           ((_lat(0), _LON), (_lat(1), _LON)))
         grafo = build_graph(nodes, [cabo])
         assert grafo.vizinhos((CEO, "ceo1"))[0].e_drop is False
+
+
+class TestLigacaoExata:
+    """A ligação por id de coordenada (descoberta de 22/09/2026).
+
+    Dois elementos que se conectam compartilham a MESMA linha de
+    `df_coordenada`. Onde esse id existe, a ligação deixa de ser "estão a 3 m um
+    do outro" e passa a ser "são o mesmo ponto" — e é isso que faz o grafo
+    deixar de ser inferência.
+    """
+
+    def test_o_id_da_coordenada_liga_mesmo_fora_da_tolerancia(self) -> None:
+        """A caixa está a 40 m do vértice, longe da tolerância de 15 m.
+
+        Mas o projeto diz que são o mesmo ponto — provavelmente a coordenada da
+        caixa foi cadastrada à parte. A leitura ganha da distância.
+        """
+        caixa = NodeInput(CEO, "ceo1", "CEO 1", _lat(2.4), _LON, coordinate_id="777")
+        nodes = [_no(POP, "pop", 0), caixa, _no(CTO, "cto1", 4)]
+        cabo = CableInput(
+            "c1", "tronco", "FIBRA",
+            tuple((_lat(p), _LON) for p in (0, 2, 4)),
+            coordinate_ids=("1", "777", "3"),
+        )
+        grafo = build_graph(nodes, [cabo])
+        assert {a.destino for a in grafo.vizinhos((CEO, "ceo1"))} == {
+            (POP, "pop"),
+            (CTO, "cto1"),
+        }
+
+    def test_dois_cabos_que_compartilham_coordenada_viram_um_caminho(self) -> None:
+        """1.420 coordenadas do projeto ligam cabo a cabo.
+
+        Sem um nó ali, os dois cabos ficam em pedaços separados do grafo — que
+        é o que impedia a rota de chegar ao POP em dois terços da planta.
+        """
+        nodes = [_no(POP, "pop", 0), _no(CTO, "cto1", 4)]
+        cabo_a = CableInput(
+            "a", "tronco A", "FIBRA",
+            tuple((_lat(p), _LON) for p in (0, 1, 2)),
+            coordinate_ids=("1", "2", "meio"),
+        )
+        cabo_b = CableInput(
+            "b", "tronco B", "FIBRA",
+            tuple((_lat(p), _LON) for p in (2, 3, 4)),
+            coordinate_ids=("meio", "5", "6"),
+        )
+        grafo = build_graph(nodes, [cabo_a, cabo_b])
+        dist, anterior = distances_from(grafo, [(POP, "pop")])
+        rota = route_to(grafo, dist, anterior, (CTO, "cto1"))
+        assert [h.node.kind for h in rota] == [POP, "JUNCAO", CTO]
+        # E a junção diz o que é, em vez de fingir ser uma caixa cadastrada.
+        assert rota[1].node.label == "Junção de cabos"
+
+    def test_coordenada_de_um_cabo_so_nao_vira_junção(self) -> None:
+        """Vértice comum é o normal de uma polilinha; junção é encontro."""
+        nodes = [_no(POP, "pop", 0), _no(CTO, "cto1", 2)]
+        cabo = CableInput(
+            "c1", "tronco", "FIBRA",
+            tuple((_lat(p), _LON) for p in (0, 1, 2)),
+            coordinate_ids=("1", "2", "3"),
+        )
+        grafo = build_graph(nodes, [cabo])
+        assert not [k for k in grafo.nodes if k[0] == "JUNCAO"]
+
+    def test_sem_ids_o_grafo_continua_funcionando_por_distancia(self) -> None:
+        """Origem que não expõe o id não quebra nada — só perde exatidão."""
+        nodes = [_no(POP, "pop", 0), _no(CEO, "ceo1", 2), _no(CTO, "cto1", 4)]
+        cabo = CableInput("c1", "tronco", "FIBRA",
+                          tuple((_lat(p), _LON) for p in (0, 1, 2, 3, 4)))
+        grafo = build_graph(nodes, [cabo])
+        dist, _ = distances_from(grafo, [(POP, "pop")])
+        assert (CTO, "cto1") in dist

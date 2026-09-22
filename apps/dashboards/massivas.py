@@ -1276,12 +1276,20 @@ def grafo_da_planta(org: Any) -> Any:
     # A CEO só existe no projeto (não há elemento "CTO" no desenho do InMap), e
     # por isso entra pela geometria e não pelo cadastro.
     for g in geometrias.filter(kind=NetworkElement.Kind.SPLICE).only(
-        "external_id", "name", "points"
+        "external_id", "name", "points", "coordinate_ids"
     ):
         if g.points:
             nodes.append(
-                NodeInput(CEO, g.external_id, g.name or g.external_id,
-                          float(g.points[0][0]), float(g.points[0][1]))
+                NodeInput(
+                    CEO,
+                    g.external_id,
+                    g.name or g.external_id,
+                    float(g.points[0][0]),
+                    float(g.points[0][1]),
+                    # O id da coordenada é a ligação exata com o cabo: mesmo
+                    # ponto, não ponto próximo.
+                    coordinate_id=(g.coordinate_ids or [""])[0],
+                )
             )
 
     cabos = [
@@ -1290,9 +1298,10 @@ def grafo_da_planta(org: Any) -> Any:
             g.name or g.external_id,
             g.type_name or "",
             tuple((float(lat), float(lon)) for lat, lon in g.points),
+            coordinate_ids=tuple(str(c) for c in (g.coordinate_ids or [])),
         )
         for g in geometrias.filter(kind=NetworkElement.Kind.CABLE).only(
-            "external_id", "name", "type_name", "points"
+            "external_id", "name", "type_name", "points", "coordinate_ids"
         )
         if len(g.points) >= 2
     ]

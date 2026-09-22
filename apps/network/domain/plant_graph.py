@@ -65,6 +65,12 @@ TOLERANCIA_POP_METROS = 300.0
 POP = "POP"
 CEO = "CEO"
 CTO = "CTO"
+# Ponto onde dois ou mais cabos compartilham a MESMA coordenada de origem. Não
+# tem caixa cadastrada, mas tem fibra emendada: medido no projeto, são 1.420
+# coordenadas ligando cabo a cabo. Sem este nó, dois cabos que se emendam no
+# meio da rua ficam em pedaços separados do grafo — e era por isso que a rota
+# não chegava ao POP em dois terços da planta.
+JUNCAO = "JUNCAO"
 
 NodeKey = tuple[str, str]
 
@@ -78,6 +84,11 @@ class NodeInput:
     label: str
     lat: float
     lon: float
+    # Id da coordenada na origem, quando o elemento vem do projeto. É a ligação
+    # EXATA: um cabo que tem este id entre seus vértices passa por dentro deste
+    # elemento — não "perto dele". A CTO não tem (ela não existe no projeto) e
+    # por isso continua sendo ligada por distância.
+    coordinate_id: str = ""
 
     @property
     def key(self) -> NodeKey:
@@ -96,6 +107,9 @@ class CableInput:
     name: str
     type_name: str
     points: tuple[tuple[float, float], ...]
+    # Id da coordenada de cada vértice, na mesma ordem. Vazio quando a origem
+    # não expõe — e aí só resta a distância.
+    coordinate_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -202,6 +216,31 @@ def build_graph(
     grafo = Graph(nodes={n.key: n for n in nodes})
     indice = _IndiceEspacial(nodes)
 
+    # Ligação EXATA: elemento do projeto ↔ vértice de cabo pelo id da
+    # coordenada. É a mesma linha de `df_coordenada` nos dois, não dois pontos
+    # parecidos.
+    por_coordenada: dict[str, NodeInput] = {
+        n.coordinate_id: n for n in nodes if n.coordinate_id
+    }
+
+    # Junções: coordenada usada por dois ou mais CABOS. Ali a fibra é emendada
+    # mesmo sem caixa cadastrada, e sem um nó o grafo se parte em dois.
+    uso: dict[str, list[tuple[CableInput, int]]] = {}
+    for cabo in cables:
+        for i, coord in enumerate(cabo.coordinate_ids):
+            if coord:
+                uso.setdefault(coord, []).append((cabo, i))
+    for coord, ocorrencias in uso.items():
+        if coord in por_coordenada or len({c.external_id for c, _ in ocorrencias}) < 2:
+            continue
+        cabo, i = ocorrencias[0]
+        if i >= len(cabo.points):
+            continue
+        lat, lon = cabo.points[i]
+        node = NodeInput(JUNCAO, f"coord-{coord}", "Junção de cabos", lat, lon, coord)
+        grafo.nodes[node.key] = node
+        por_coordenada[coord] = node
+
     for cabo in cables:
         if len(cabo.points) < 2:
             continue
@@ -210,7 +249,13 @@ def build_graph(
         for i, vertice in enumerate(cabo.points):
             if i:
                 acumulado += haversine_meters(cabo.points[i - 1], vertice)
-            achado = indice.mais_proximo(vertice, tolerancia)
+            # O id da coordenada vem primeiro: onde ele existe, a ligação é
+            # leitura, e uma caixa a 14 m não pode ganhar do elemento que está
+            # gravado como o MESMO ponto.
+            coord = cabo.coordinate_ids[i] if i < len(cabo.coordinate_ids) else ""
+            achado = por_coordenada.get(coord) if coord else None
+            if achado is None:
+                achado = indice.mais_proximo(vertice, tolerancia)
             if achado is None and tolerancia_pop > tolerancia:
                 # O POP tem alcance próprio (ver TOLERANCIA_POP_METROS).
                 achado = indice.mais_proximo(vertice, tolerancia_pop, kinds=(POP,))
