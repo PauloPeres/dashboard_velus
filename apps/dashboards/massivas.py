@@ -1554,6 +1554,97 @@ def _tracados_do_mapa(org: Any, ids: list[str]) -> list[dict[str, Any]]:
     ]
 
 
+# Raio em que um cabo é "o que há em volta" da massiva. Medido em produção
+# (22/09/2026), a 200 m: 39 cabos numa massiva de OLT com 60 pontos, 43 numa de
+# PON, 4 num cluster geográfico pequeno. A 500 m os números dobram e o desenho
+# vira rabisco; a 100 m ficam de fora ruas vizinhas que o técnico usa para se
+# situar.
+RAIO_CABOS_AO_REDOR = 200.0
+
+# Teto de cabos desenhados como contexto. A massiva de OLT inteira toca 425
+# cabos a 200 m — a cidade inteira. Acima do teto a tela desenha os mais
+# próximos e **diz** que truncou, em vez de engasgar o navegador em silêncio.
+MAX_CABOS_AO_REDOR = 250
+
+# Quantos pontos da massiva entram na conta de distância. Uma massiva de OLT tem
+# 283 pontos; medir 1.189 cabos contra todos eles é meio milhão de contas de
+# polilinha por carregamento de página. Uma amostra espalhada dá o mesmo desenho.
+_MAX_PONTOS_NA_CONTA = 40
+
+
+def _cabos_ao_redor(
+    org: Any,
+    quedas: list[ConnectionDropEvent],
+    candidatos: list[str],
+    *,
+    raio: float = RAIO_CABOS_AO_REDOR,
+) -> dict[str, Any]:
+    """Todos os cabos do projeto que passam perto do evento (pedido do Paulo).
+
+    Os candidatos já saem desenhados em roxo e grosso; estes entram finos e
+    cinza, como **contexto**: é a planta da região, não a explicação do evento.
+    A legenda diz isso com todas as letras — desenhar um cabo ao lado de uma
+    massiva, sem dizer o que ele é, faz qualquer um ler "este aqui também".
+    """
+    from apps.network.domain.geometry import distance_to_path
+
+    pontos = [
+        (float(q.latitude), float(q.longitude))
+        for q in quedas
+        if q.latitude is not None and q.longitude is not None
+    ]
+    if not pontos:
+        return {"cabos": [], "total": 0, "truncado": 0}
+
+    # Amostra espalhada, e não os 40 primeiros: as quedas chegam ordenadas por
+    # horário, e os 40 primeiros de uma massiva de bairro seriam todos da mesma
+    # esquina.
+    passo = max(1, len(pontos) // _MAX_PONTOS_NA_CONTA)
+    amostra = pontos[::passo][:_MAX_PONTOS_NA_CONTA]
+
+    graus = raio / 111_000.0
+    lat_min = min(p[0] for p in amostra) - graus
+    lat_max = max(p[0] for p in amostra) + graus
+    lon_min = min(p[1] for p in amostra) - graus * 1.1
+    lon_max = max(p[1] for p in amostra) + graus * 1.1
+
+    ja_desenhados = set(candidatos)
+    perto: list[tuple[float, dict[str, Any]]] = []
+    for g in NetworkElementGeometry.objects.filter(
+        organization=org, kind=NetworkElement.Kind.CABLE
+    ).only("external_id", "name", "type_name", "points"):
+        if g.external_id in ja_desenhados or len(g.points) < 2:
+            continue
+        pts = [(float(lat), float(lon)) for lat, lon in g.points]
+        # Caixa envolvente primeiro: é uma comparação de números contra a conta
+        # de distância ponto-segmento, que é cara e roda 1.189 vezes.
+        if (
+            max(p[0] for p in pts) < lat_min
+            or min(p[0] for p in pts) > lat_max
+            or max(p[1] for p in pts) < lon_min
+            or min(p[1] for p in pts) > lon_max
+        ):
+            continue
+        distancia = min(distance_to_path(p, pts) for p in amostra)
+        if distancia <= raio:
+            perto.append((
+                distancia,
+                {
+                    "nome": f"{g.name or g.external_id} · {g.type_name or 'cabo'}",
+                    "pontos": [[lat, lon] for lat, lon in pts],
+                },
+            ))
+
+    perto.sort(key=lambda item: item[0])
+    total = len(perto)
+    return {
+        "cabos": [c for _, c in perto[:MAX_CABOS_AO_REDOR]],
+        "total": total,
+        "truncado": max(0, total - MAX_CABOS_AO_REDOR),
+        "raio": int(raio),
+    }
+
+
 def compute_mapa(
     org: Any,
     quedas: list[ConnectionDropEvent],
@@ -1646,6 +1737,9 @@ def compute_mapa(
         "ligacoes": ligacoes,
         "trecho": trecho,
         "cabos": _tracados_do_mapa(org, cabos_candidatos or []),
+        # Tudo que o projeto desenha em volta do evento — contexto, não
+        # explicação. Fica numa camada própria, fina e cinza, com filtro.
+        "cabos_ao_redor": _cabos_ao_redor(org, quedas, cabos_candidatos or []),
         "trecho_no_cabo": trecho_no_cabo,
         "emendas": emendas_proximas(org, quedas),
         "sem_coordenada": sem_coordenada,

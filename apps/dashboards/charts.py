@@ -2684,6 +2684,16 @@ def outage_map(mapa: dict[str, Any]) -> str:
     ]
     # As ligações entram ANTES dos pontos para ficarem por baixo deles.
     traces = [
+        # Os cabos de CONTEXTO entram antes de tudo, finos e cinza: é a planta
+        # da região, não a explicação do evento. Desenhá-los por cima faria o
+        # candidato (roxo, grosso) sumir no meio deles.
+        *_map_solid_path_trace(
+            (mapa.get("cabos_ao_redor") or {}).get("cabos") or [],
+            nome="Cabos ao redor (contexto)",
+            cor="#cbd5e1",
+            largura=1,
+            grupo="contexto",
+        ),
         # O cabo entra primeiro: é o que fica por baixo de tudo, como no papel.
         *_map_solid_path_trace(
             mapa.get("cabos") or [],

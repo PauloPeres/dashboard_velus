@@ -2176,3 +2176,93 @@ class TestSetasDeSentido:
 
         assert _setas_do_caminho([[-23.5, -47.45]]) == []
         assert _setas_do_caminho([]) == []
+
+
+@pytest.mark.django_db
+class TestCabosAoRedor:
+    """Tudo que o projeto desenha em volta do evento (pedido de 22/09/2026).
+
+    O risco desta camada não é técnico, é de leitura: desenhar um cabo ao lado
+    de uma massiva, sem dizer o que ele é, faz qualquer um concluir "este aqui
+    também". Por isso ela é fina, cinza, tem filtro próprio e a legenda diz
+    "contexto, não explicação" — e por isso o candidato continua sendo o único
+    grosso e colorido.
+    """
+
+    def _cabo(self, org: Organization, ident: str, pontos: list[list[float]]) -> None:
+        NetworkElementGeometry.objects.create(
+            organization=org, source_type="IXC", kind=NetworkElement.Kind.CABLE,
+            external_id=ident, name=f"cabo {ident}", type_name="FIBRA AS80 06 FO",
+            points=pontos,
+        )
+
+    def test_pega_o_que_esta_perto_e_deixa_o_que_esta_longe(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.dashboards.massivas import _cabos_ao_redor
+
+        set_current_organization(organization_a)
+        self._cabo(organization_a, "perto", [[-23.5001, -47.45], [-23.5005, -47.45]])
+        self._cabo(organization_a, "longe", [[-23.6000, -47.45], [-23.6005, -47.45]])
+        quedas = [_drop(organization_a, login="a1", lat=-23.5000, lon=-47.45)]
+
+        saida = _cabos_ao_redor(organization_a, quedas, [])
+        nomes = [c["nome"] for c in saida["cabos"]]
+        assert any("perto" in n for n in nomes)
+        assert not any("longe" in n for n in nomes)
+
+    def test_candidato_nao_se_repete_no_contexto(
+        self, organization_a: Organization
+    ) -> None:
+        """Ele já está desenhado em roxo e grosso — duas linhas no mesmo lugar
+        só engrossariam a cinza por cima da roxa."""
+        from apps.dashboards.massivas import _cabos_ao_redor
+
+        set_current_organization(organization_a)
+        self._cabo(organization_a, "candidato", [[-23.5001, -47.45], [-23.5005, -47.45]])
+        quedas = [_drop(organization_a, login="a1", lat=-23.5000, lon=-47.45)]
+
+        saida = _cabos_ao_redor(organization_a, quedas, ["candidato"])
+        assert saida["cabos"] == []
+
+    def test_sem_coordenada_nenhuma_nao_desenha_contexto(
+        self, organization_a: Organization
+    ) -> None:
+        from apps.dashboards.massivas import _cabos_ao_redor
+
+        set_current_organization(organization_a)
+        self._cabo(organization_a, "perto", [[-23.5001, -47.45], [-23.5005, -47.45]])
+        quedas = [_drop(organization_a, login="sem-posicao")]
+
+        saida = _cabos_ao_redor(organization_a, quedas, [])
+        assert saida == {"cabos": [], "total": 0, "truncado": 0}
+
+    def test_acima_do_teto_desenha_os_mais_proximos_e_declara(
+        self, organization_a: Organization
+    ) -> None:
+        """Uma massiva de OLT toca 425 cabos: a tela trunca e diz que truncou."""
+        from apps.dashboards import massivas
+
+        set_current_organization(organization_a)
+        for i in range(6):
+            self._cabo(
+                organization_a, f"c{i}",
+                [[-23.5001 - i * 0.0001, -47.45], [-23.5005 - i * 0.0001, -47.45]],
+            )
+        quedas = [_drop(organization_a, login="a1", lat=-23.5000, lon=-47.45)]
+
+        saida = massivas._cabos_ao_redor(organization_a, quedas, [])
+        assert saida["total"] == 6
+        assert saida["truncado"] == 0
+
+        # Com o teto baixo, o comportamento tem de ser: desenhar os mais
+        # próximos e declarar o resto.
+        original = massivas.MAX_CABOS_AO_REDOR
+        try:
+            massivas.MAX_CABOS_AO_REDOR = 2
+            saida = massivas._cabos_ao_redor(organization_a, quedas, [])
+        finally:
+            massivas.MAX_CABOS_AO_REDOR = original
+        assert len(saida["cabos"]) == 2
+        assert saida["truncado"] == 4
+        assert "c0" in saida["cabos"][0]["nome"]

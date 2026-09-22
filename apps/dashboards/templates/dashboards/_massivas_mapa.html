@@ -70,6 +70,12 @@ virou caixa de marcar, que além de nomear a camada liga e desliga ela.
       <span class="text-rose-700 font-semibold">&#9650;</span><span class="text-gray-900 font-semibold">&#10005;</span><span class="text-gray-600">Por onde começar</span>
     </label>
     {% endif %}
+    {% if mapa.cabos_ao_redor.cabos %}
+    <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+      <input type="checkbox" data-grupo="contexto" checked class="rounded border-gray-300">
+      <span class="text-gray-300 font-bold">&#9473;</span><span class="text-gray-600">Cabos ao redor ({{ mapa.cabos_ao_redor.cabos|length }})</span>
+    </label>
+    {% endif %}
     <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
       <input type="checkbox" data-grupo="pop" class="rounded border-gray-300">
       <span class="text-blue-600 font-semibold">&#9733;</span><span class="text-gray-600">POP e ligação lógica</span>
@@ -151,6 +157,18 @@ virou caixa de marcar, que além de nomear a camada liga e desliga ela.
         que atravessa quarteirão. Ela só aparece quando um cabo candidato passa pelas duas pontas.
       </p>
       {% endif %}
+      {% if mapa.cabos_ao_redor.cabos %}
+      <p class="leading-relaxed">
+        As linhas <strong>cinza-claras e finas</strong> são todos os cabos do projeto que
+        passam a até {{ mapa.cabos_ao_redor.raio }} m do evento — <strong>contexto</strong>,
+        não explicação: estão ali porque a rua é aquela, não porque tenham relação com a
+        queda. Quem diz "pode ser este" é o cabo candidato, roxo e grosso.
+        {% if mapa.cabos_ao_redor.truncado %}
+        São {{ mapa.cabos_ao_redor.total }} no raio; o mapa desenha os
+        {{ mapa.cabos_ao_redor.cabos|length }} mais próximos.
+        {% endif %}
+      </p>
+      {% endif %}
       {% if mapa_nota %}
       <p class="leading-relaxed">{{ mapa_nota }}</p>
       {% endif %}
@@ -193,8 +211,10 @@ virou caixa de marcar, que além de nomear a camada liga e desliga ela.
           // "Para onde o carro vai": caixas e cabo. O cliente sai do mapa
           // porque a casa dele não é destino de reparo — o que se conserta é a
           // caixa e o cabo entre elas.
+          // "Foco no técnico" tira o contexto: com a planta do bairro inteiro
+          // desenhada, o cabo candidato deixa de saltar aos olhos.
           tecnico: ["caixas", "cabo", "rota"],
-          tudo: ["fora", "voltaram", "caixas", "cabo", "pop", "rota"]
+          tudo: ["fora", "voltaram", "caixas", "cabo", "pop", "rota", "contexto"]
         };
         document.querySelectorAll('#mapa-filtros button[data-preset]').forEach(function (b) {
           b.addEventListener("click", function () {
