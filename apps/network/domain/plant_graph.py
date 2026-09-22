@@ -43,6 +43,7 @@ from __future__ import annotations
 import heapq
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from itertools import pairwise
 
 from .outage import haversine_meters
 
@@ -226,7 +227,7 @@ def build_graph(
             continue
 
         grafo.cabos_usados += 1
-        for (a, da), (b, db) in zip(na_rota, na_rota[1:], strict=False):
+        for (a, da), (b, db) in pairwise(na_rota):
             # Um metro de piso: dois elementos no mesmo vértice existem (caixa
             # dupla no poste), e aresta de peso zero faria o Dijkstra empatar
             # rotas que não são a mesma.

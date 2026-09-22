@@ -2621,6 +2621,37 @@ def _map_solid_path_trace(
     ]
 
 
+def _map_arrow_trace(setas: list[dict[str, Any]], *, cor: str) -> list[go.Scattermap]:
+    """As cabeças de seta, desenhadas como segmentos soltos.
+
+    O Plotly não tem marcador com ângulo em traço de mapa, então cada seta são
+    dois riscos curtos partindo do mesmo ponto (calculados em `massivas.py`).
+    Ficam num traço só, separados por `None`, para não virar duas centenas de
+    traços numa figura.
+    """
+    if not setas:
+        return []
+    lats: list[float | None] = []
+    lons: list[float | None] = []
+    for seta in setas:
+        (lat1, lon1), (lat2, lon2) = seta["de"], seta["para"]
+        lats += [lat1, lat2, None]
+        lons += [lon1, lon2, None]
+    return [
+        go.Scattermap(
+            lat=lats,
+            lon=lons,
+            mode="lines",
+            name="Sentido",
+            line={"width": 2, "color": cor},
+            hoverinfo="skip",
+            showlegend=False,
+            meta={"grupo": "rota"},
+            visible="rota" not in _GRUPOS_OCULTOS,
+        )
+    ]
+
+
 def outage_map(mapa: dict[str, Any]) -> str:
     """Mapa da massiva — quem está fora, quem voltou, CTOs afetadas e POPs (#146).
 
@@ -2686,6 +2717,17 @@ def outage_map(mapa: dict[str, Any]) -> str:
             largura=4,
             grupo="cabo",
         ),
+        # O caminho da rota e as setas de sentido (pedido 6 do técnico). Linha
+        # cheia porque, onde há cabo, é o traçado do cabo — e as setas dizem
+        # para que lado a fibra anda, coisa que o desenho do IXC não diz.
+        *_map_solid_path_trace(
+            mapa.get("rota_caminho") or [],
+            nome="Sentido da fibra (POP → cliente)",
+            cor="#be123c",
+            largura=2,
+            grupo="rota",
+        ),
+        *_map_arrow_trace(mapa.get("rota_setas") or [], cor="#be123c"),
     ]
     todos: list[dict[str, Any]] = []
     for chave, nome, cor, tamanho, icone, grupo in camadas:

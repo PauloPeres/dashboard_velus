@@ -2145,3 +2145,34 @@ class TestRotaDoTecnicoNaTela:
         mapa = resp.context["mapa"]
         assert mapa["rota_partida"], "a caixa de partida não virou ponto no mapa"
         assert "comece por aqui" in mapa["rota_partida"][0]["label"]
+
+
+@pytest.mark.django_db
+class TestSetasDeSentido:
+    """A seta do pedido 6 — e por que ela não vem do desenho do IXC.
+
+    Medido em produção: 654 cabos começam mais perto do POP e 513 terminam. Se
+    o sentido saísse da ordem dos vértices, metade das setas apontaria para o
+    POP — mandando o técnico andar para trás.
+    """
+
+    def test_as_setas_seguem_a_rota_e_nao_a_ordem_do_desenho(self) -> None:
+        from apps.dashboards.massivas import _setas_do_caminho
+
+        # Caminho de ~400 m para o sul: as setas têm de abrir para o norte
+        # (para trás), que é o que faz a ponta apontar para o sul.
+        caminho = [[-23.5000, -47.45], [-23.5036, -47.45]]
+        setas = _setas_do_caminho(caminho)
+        assert setas, "nenhuma seta desenhada num caminho de 400 m"
+        # Duas pernas por seta.
+        assert len(setas) % 2 == 0
+        for seta in setas:
+            (lat1, _), (lat2, _) = seta["de"], seta["para"]
+            assert lat2 > lat1, "a perna da seta abriu para o lado errado"
+
+    def test_caminho_curto_demais_nao_ganha_seta(self) -> None:
+        """Seta em cima de seta vira linha pontilhada e não diz sentido."""
+        from apps.dashboards.massivas import _setas_do_caminho
+
+        assert _setas_do_caminho([[-23.5, -47.45]]) == []
+        assert _setas_do_caminho([]) == []

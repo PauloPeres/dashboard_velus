@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 from typing import Any
 
 from django.utils import timezone
@@ -1385,7 +1386,11 @@ def compute_rota_do_tecnico(
         ],
         "rota": [
             {"label": h.node.label, "kind": h.node.kind, "cabo": h.cabo_nome,
-             "metros": round(h.metros_do_pop)}
+             "metros": round(h.metros_do_pop),
+             # As coordenadas viajam junto porque é com elas que o mapa desenha
+             # o caminho e as setas — sem isso, a rota seria só uma lista de
+             # nomes e o sentido ficaria só no texto.
+             "lat": h.node.lat, "lon": h.node.lon}
             for h in rota.rota
         ],
     }
@@ -1664,7 +1669,13 @@ def _camadas_da_rota(
     quintal de alguém. Quando nenhum cabo liga as duas pontas, cai na reta — e
     aí o X vale como "por aqui", que é o que a legenda diz.
     """
-    vazio = {"rota_partida": [], "rota_anterior": [], "rota_x": []}
+    vazio = {
+        "rota_partida": [],
+        "rota_anterior": [],
+        "rota_x": [],
+        "rota_caminho": [],
+        "rota_setas": [],
+    }
     if not rota or not rota.get("partida"):
         return vazio
 
@@ -1683,6 +1694,18 @@ def _camadas_da_rota(
             "label": f"{anterior['label']} · última no ar antes do trecho",
         }]
 
+    # O caminho da fibra do POP até a caixa de partida, com setas (pedido 6).
+    #
+    # O técnico pediu "a setinha do IXC". Ela não serve: medido, 654 cabos
+    # começam mais perto do POP e 513 terminam, então a ordem dos vértices do
+    # desenho não diz para onde a luz anda. A seta aqui sai do grafo — do lado
+    # de menor distância de cabo até o POP para o de maior —, que é a mesma
+    # pergunta respondida por dado que se sustenta.
+    caminho = _caminho_da_rota(org, rota, cabos_candidatos)
+    if caminho:
+        saida["rota_caminho"] = [{"nome": "sentido da fibra", "pontos": caminho}]
+        saida["rota_setas"] = _setas_do_caminho(caminho)
+
     trecho = rota.get("trecho")
     if trecho and trecho.get("de") and trecho.get("para"):
         de = (trecho["de"]["lat"], trecho["de"]["lon"])
@@ -1696,6 +1719,106 @@ def _camadas_da_rota(
             ),
         }]
     return saida
+
+
+# Distância entre setas no caminho da rota. Uma seta a cada 120 m dá duas ou
+# três por quarteirão: menos que isso vira linha pontilhada, mais que isso some
+# nos zooms em que o técnico olha a rua.
+_METROS_ENTRE_SETAS = 120.0
+_TAMANHO_DA_SETA_METROS = 18.0
+
+
+def _caminho_da_rota(
+    org: Any, rota: dict[str, Any], cabos_candidatos: list[str]
+) -> list[list[float]]:
+    """A polilinha da rota, seguindo o cabo sempre que houver cabo.
+
+    Entre dois elementos vizinhos usa o pedaço real do traçado; onde o cabo não
+    liga os dois (ou não é candidato), usa a reta — e a reta aqui é honesta,
+    porque a legenda diz que a linha mostra **sentido**, não caminho de fibra.
+    """
+    passos = rota.get("rota") or []
+    if len(passos) < 2:
+        return []
+
+    coordenadas = [
+        (p["lat"], p["lon"])
+        for p in passos
+        if p.get("lat") is not None and p.get("lon") is not None
+    ]
+    if len(coordenadas) < 2:
+        return []
+
+    caminho: list[list[float]] = []
+    for a, b in pairwise(coordenadas):
+        pedaco = _pedaco_de_cabo(org, a, b, cabos_candidatos)
+        if not caminho:
+            caminho.append([pedaco[0][0], pedaco[0][1]])
+        caminho += [[lat, lon] for lat, lon in pedaco[1:]]
+    return caminho
+
+
+def _pedaco_de_cabo(
+    org: Any,
+    de: tuple[float, float],
+    para: tuple[float, float],
+    cabos_candidatos: list[str],
+) -> list[tuple[float, float]]:
+    from apps.network.domain.geometry import sub_path_between
+
+    if cabos_candidatos:
+        for g in NetworkElementGeometry.objects.filter(
+            organization=org,
+            kind=NetworkElement.Kind.CABLE,
+            external_id__in=cabos_candidatos,
+        ).only("external_id", "points"):
+            pontos = [(float(lat), float(lon)) for lat, lon in g.points]
+            if len(pontos) < 2:
+                continue
+            pedaco = sub_path_between(pontos, de, para)
+            if pedaco:
+                return list(pedaco)
+    return [de, para]
+
+
+def _setas_do_caminho(caminho: list[list[float]]) -> list[dict[str, Any]]:
+    """Cabeças de seta em V ao longo do caminho, apontando para o cliente.
+
+    Desenhadas na mão porque o Plotly não tem marcador com ângulo em traço de
+    mapa: cada seta são dois segmentos curtos partindo do mesmo ponto, abertos
+    para trás. O ângulo de 150° é o que ainda se lê como seta num traçado fino.
+    """
+    import math
+
+    if len(caminho) < 2:
+        return []
+
+    setas: list[dict[str, Any]] = []
+    acumulado = 0.0
+    proxima = _METROS_ENTRE_SETAS / 2
+    for (lat1, lon1), (lat2, lon2) in pairwise(caminho):
+        m_lat = 111_132.0
+        m_lon = 111_320.0 * math.cos(math.radians(lat1))
+        dx = (lon2 - lon1) * m_lon
+        dy = (lat2 - lat1) * m_lat
+        comprimento = math.hypot(dx, dy)
+        if comprimento < 1e-6:
+            continue
+        while acumulado + comprimento >= proxima:
+            t = (proxima - acumulado) / comprimento
+            plat = lat1 + (lat2 - lat1) * t
+            plon = lon1 + (lon2 - lon1) * t
+            angulo = math.atan2(dy, dx)
+            for giro in (math.radians(150), math.radians(-150)):
+                ax = math.cos(angulo + giro) * _TAMANHO_DA_SETA_METROS
+                ay = math.sin(angulo + giro) * _TAMANHO_DA_SETA_METROS
+                setas.append({
+                    "de": (plat, plon),
+                    "para": (plat + ay / m_lat, plon + ax / m_lon),
+                })
+            proxima += _METROS_ENTRE_SETAS
+        acumulado += comprimento
+    return setas
 
 
 def _meio_do_cabo(
