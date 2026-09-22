@@ -226,3 +226,52 @@ carrega ("trecho suspeito", "cabo candidato").
 O comportamento do botão virou um parcial só (`_massivas_copiar_js.html`), usado
 pelas duas telas: um segundo script divergiria no dia em que só um fosse
 corrigido.
+
+---
+
+# Como ficou (22/09/2026)
+
+Os nove pedidos entraram. O que mudou em relação ao plano, e por quê:
+
+**C1/C2 — o grafo.** `apps/network/domain/plant_graph.py`. Na planta real:
+1.762 nós, 1.016 cabos viram aresta, 173 ficam soltos, e **977 das 1.438 CTOs**
+e **224 das 317 CEOs** são alcançáveis a partir de um POP. Monta em 1,8 s, e por
+isso fica em cache por 30 min — é barato para uma página e caro para cada card
+de uma lista que recarrega de 3 em 3 min.
+
+**C3/C4/C5/C9 — a rota.** `apps/network/domain/repair_route.py`. Duas travas
+nasceram da validação contra a planta real, e as duas fazem o sistema **calar**
+em vez de afirmar:
+
+- **sem caixa com tudo fora abaixo dela, não há trecho.** Caso real (#115): 2
+  CTOs fora e 35 no ar sob a mesma caixa. Dizer "rompimento aqui" mandaria o
+  técnico subir num poste bom;
+- **com menos de metade das CTOs afetadas no grafo, também não.** Caso real
+  (#137): 1 de 16. Com o resto fora do desenho, "ainda no ar" pode ser gente que
+  caiu e não foi mapeada, e o X apontaria para o poste errado.
+
+Consequência honesta: **hoje o X aparece pouco.** Não é timidez do código, é a
+cobertura do desenho — e os quatro POPs fora dele são a maior parte disso.
+
+**C6 — a seta.** Saiu do grafo, não do IXC, pelo motivo medido: 654 cabos
+começam mais perto do POP e 513 terminam. As cabeças de seta são desenhadas na
+mão (dois riscos a 150°, a cada 120 m), porque o Plotly não tem marcador com
+ângulo em traço de mapa.
+
+**C7 — o texto.** "COMECE POR" virou a **primeira linha** da mensagem, antes do
+número de clientes fora: o técnico lê a primeira linha no celular dentro do
+carro.
+
+**C8 — cobertura.** Toda tela que usa o grafo diz com quantas das CTOs afetadas
+a rota foi montada.
+
+## O que continua aberto
+
+1. Os **quatro POPs que não encostam no desenho** — a maior alavanca, e ela não
+   é código.
+2. Uma **massiva com escopo de CTO ou PON** para o técnico validar em campo. A
+   141, que originou o pedido, é cluster geográfico e suas 4 caixas estão num
+   pedaço de planta sem POP.
+3. **Postes e splitters** (162 elementos do projeto) seguem fora do sync.
+4. A pergunta ao suporte do IXC sobre **existir uma ligação de verdade entre
+   elementos**. Se existir, o grafo deixa de ser inferência e vira leitura.
