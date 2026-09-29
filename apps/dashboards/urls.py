@@ -25,6 +25,7 @@ urlpatterns = [
     path("financial/compromissos/", views.compromissos, name="compromissos"),
     path("financial/descasamento/", views.descasamento, name="descasamento"),
     path("churn/", views.churn, name="churn"),
+    path("churn/auditoria/", views.churn_auditoria, name="churn_auditoria"),
     path("risk/", views.risk, name="risk"),
     path("operations/", views.operations, name="operations"),
     path("operations/os/", views.os_dashboard, name="os_dashboard"),

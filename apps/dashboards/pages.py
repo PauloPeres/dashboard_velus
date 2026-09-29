@@ -45,6 +45,7 @@ PAGES: list[dict[str, Any]] = [
     {"key": "compromissos", "label": "Compromissos", "nav_label": "Compromissos Futuros", "url": "dashboards:compromissos", "section": "Financeiro", "group": "Despesas"},
     {"key": "descasamento", "label": "Descasamento", "nav_label": "Descasamento de Caixa", "url": "dashboards:descasamento", "section": "Financeiro", "group": "Despesas"},
     {"key": "churn", "label": "Churn", "url": "dashboards:churn", "section": "Risco"},
+    {"key": "churn_auditoria", "label": "Auditoria de Churn", "url": "dashboards:churn_auditoria", "section": "Risco"},
     {"key": "risk", "label": "Risco de Churn", "url": "dashboards:risk", "section": "Risco"},
     {"key": "operations", "label": "Operações", "url": "dashboards:operations", "section": "Operações"},
     {"key": "os_dashboard", "label": "Ordens de Serviço", "url": "dashboards:os_dashboard", "section": "Operações"},

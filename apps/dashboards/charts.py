@@ -771,6 +771,213 @@ def churn_logo_line(series: list[dict[str, Any]]) -> str:
     return _to_json(fig)
 
 
+# -----------------------------------------------------------------------------
+# Auditoria de churn
+# -----------------------------------------------------------------------------
+# Paleta categórica validada (8 slots na ordem fixa, CVD e visão normal passam
+# nos pares adjacentes da pilha). A cor é do MOTIVO, não da posição no ranking:
+# filtrar um recorte não pode repintar os que sobram. "Outros" é o rabo dobrado,
+# em cinza neutro de propósito. Amarelo, aqua e rosa ficam abaixo de 3:1 no
+# fundo branco — o total no topo, o hover e a tabela da página são o alívio.
+AUDITORIA_MOTIVO_CORES: dict[str, str] = {
+    "Inadimplência": "#2a78d6",
+    "Mudou de operadora": "#eb6834",
+    "Desconexão por opção": "#1baf7a",
+    "Mudou de endereço": "#eda100",
+    "Endereço não cabeado": "#e87ba4",
+    "Mudou de cidade": "#008300",
+    "Problemas técnicos": "#4a3aa7",
+    "Troca de titularidade": "#e34948",
+    "Outros": "#9ca3af",
+}
+
+# Níveis de controle são ORDINAIS (a fila de prioridade): um tom só, escuro =
+# mais acionável. Rampa validada com --ordinal (monotônica, passos visíveis, a
+# ponta clara ainda acima de 2:1 no branco).
+AUDITORIA_NIVEL_CORES: dict[str, str] = {
+    "deveria": "#104281",
+    "poderia": "#1c5cab",
+    "parcial": "#2a78d6",
+    "inevitavel": "#5598e7",
+    "fora": "#86b6ef",
+}
+
+_AUDITORIA_LAYOUT: dict[str, Any] = {
+    **_LAYOUT_BASE,
+    "plot_bgcolor": "#ffffff",
+    "barmode": "stack",
+    "bargap": 0.35,
+    "barcornerradius": 4,
+    "showlegend": True,
+    "hovermode": "closest",
+    "margin": {"l": 44, "r": 12, "t": 24, "b": 40},
+    # Pilha vertical inverte a legenda por padrão; na horizontal isso só
+    # embaralha a leitura — a ordem é a dos slots.
+    "legend": {"orientation": "h", "y": -0.16, "font": {"size": 11}, "traceorder": "normal"},
+    "xaxis": {"type": "category", "showgrid": False, "linecolor": "#e5e7eb"},
+    "yaxis": {"title": "Cancelamentos", "rangemode": "tozero", "gridcolor": "#f1f5f9"},
+}
+
+
+def _auditoria_pilha(
+    labels: list[str],
+    series: list[tuple[str, str, list[int]]],
+    totais: list[int],
+    *,
+    rotulo_total: str,
+) -> str:
+    """Colunas empilhadas por mês + o total escrito no topo de cada coluna.
+
+    `series` é (nome, cor, valores). O hover diz quanto o segmento é do mês.
+    """
+    traces: list[Any] = []
+    for nome, cor, valores in series:
+        pcts = [round(v / t * 100) if t else 0 for v, t in zip(valores, totais, strict=True)]
+        traces.append(
+            go.Bar(
+                name=nome,
+                x=labels,
+                y=valores,
+                marker={"color": cor, "line": {"color": "#ffffff", "width": 2}},
+                customdata=pcts,
+                hovertemplate=(
+                    "<b>%{fullData.name}</b><br>%{x}: %{y} (%{customdata}% do mês)"
+                    "<extra></extra>"
+                ),
+            )
+        )
+    # O total é rótulo direto, não uma série: sem legenda e sem hover próprio.
+    traces.append(
+        go.Scatter(
+            x=labels,
+            y=totais,
+            mode="text",
+            text=[str(t) if t else "" for t in totais],
+            textposition="top center",
+            textfont={"size": 12, "color": "#374151"},
+            showlegend=False,
+            hoverinfo="skip",
+            name=rotulo_total,
+        )
+    )
+    teto = max(totais, default=0)
+    layout = {
+        **_AUDITORIA_LAYOUT,
+        "yaxis": {**_AUDITORIA_LAYOUT["yaxis"], "range": [0, teto * 1.15 + 1]},
+    }
+    return _to_json(go.Figure(data=traces, layout=layout))
+
+
+def _tinta_sobre(fundo: str) -> str:
+    """Texto escuro ou branco, o que contrastar mais com a fatia."""
+    r, g, b = (int(fundo[i : i + 2], 16) / 255 for i in (1, 3, 5))
+
+    def canal(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    luminancia = 0.2126 * canal(r) + 0.7152 * canal(g) + 0.0722 * canal(b)
+    contraste_branco = 1.05 / (luminancia + 0.05)
+    contraste_escuro = (luminancia + 0.05) / (0.0137 + 0.05)  # #111827
+    return "#ffffff" if contraste_branco >= contraste_escuro else "#111827"
+
+
+# Fatia abaixo disso fica só no hover: número dentro de fatia fina não cabe.
+_PIZZA_ROTULO_MIN = 0.075
+
+
+def _auditoria_pizza(nomes: list[str], valores: list[int]) -> str:
+    """Uma pizza de um mês: fatias na ordem fixa dos motivos, total no centro."""
+    fatias = [(n, v) for n, v in zip(nomes, valores, strict=True) if v]
+    total = sum(v for _, v in fatias)
+    cores = [AUDITORIA_MOTIVO_CORES.get(n, AUDITORIA_MOTIVO_CORES["Outros"]) for n, _ in fatias]
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=[n for n, _ in fatias],
+                values=[v for _, v in fatias],
+                hole=0.42,
+                # Sem reordenar por tamanho: cada motivo fica sempre no mesmo
+                # lugar e com a mesma cor, mês a mês.
+                sort=False,
+                direction="clockwise",
+                marker={"colors": cores, "line": {"color": "#ffffff", "width": 2}},
+                text=[
+                    f"{v} · {round(v / total * 100)}%" if total and v / total >= _PIZZA_ROTULO_MIN else ""
+                    for _, v in fatias
+                ],
+                textinfo="text",
+                textposition="inside",
+                insidetextorientation="horizontal",
+                textfont={"size": 11, "color": [_tinta_sobre(c) for c in cores]},
+                hovertemplate="<b>%{label}</b><br>%{value} cancelamentos (%{percent})<extra></extra>",
+            )
+        ],
+        layout={
+            **_LAYOUT_BASE,
+            "margin": {"l": 6, "r": 6, "t": 6, "b": 6},
+            "showlegend": False,
+            "annotations": [
+                {
+                    "text": f"<b>{total}</b><br><span style='font-size:10px;color:#6b7280'>TOTAL</span>",
+                    "x": 0.5, "y": 0.5, "showarrow": False, "font": {"size": 20, "color": "#111827"},
+                }
+            ],
+        },
+    )
+    return _to_json(fig)
+
+
+def churn_audit_pizzas(
+    mensal: dict[str, Any], *, ultimos: int = 6, so_mes: str | None = None
+) -> dict[str, Any]:
+    """Pizzas mensais por motivo cadastrado — a "visão executiva" da auditoria.
+
+    Uma por mês de competência: os `ultimos` meses da janela, ou só `so_mes`
+    quando a página está recortada numa competência. A legenda é uma só para
+    todas (as cores são fixas por motivo), com os motivos que aparecem nelas.
+    """
+    indices = list(range(len(mensal["labels"])))
+    if so_mes is not None:
+        indices = [i for i in indices if mensal["chaves"][i] == so_mes]
+    else:
+        indices = indices[-ultimos:]
+
+    nomes = [s["nome"] for s in mensal["por_motivo"]]
+    pizzas = []
+    presentes: set[str] = set()
+    for posicao, i in enumerate(indices, start=1):
+        valores = [s["valores"][i] for s in mensal["por_motivo"]]
+        presentes.update(n for n, v in zip(nomes, valores, strict=True) if v)
+        pizzas.append(
+            {
+                "label": mensal["labels"][i],
+                "total": mensal["totais"][i],
+                "div_id": f"auditoria-pizza-{posicao}",
+                "data_id": f"auditoria-pizza-{posicao}-data",
+                "json": _auditoria_pizza(nomes, valores),
+            }
+        )
+    legenda = [
+        {"nome": nome, "cor": AUDITORIA_MOTIVO_CORES.get(nome, AUDITORIA_MOTIVO_CORES["Outros"])}
+        for nome in nomes
+        if nome in presentes
+    ]
+    return {"pizzas": pizzas, "legenda": legenda}
+
+
+def churn_audit_mensal_nivel(mensal: dict[str, Any]) -> str:
+    """Churn real por competência, empilhado pelo nível de controle.
+
+    "Fora do churn" não entra — titularidade e saneamento não são perda.
+    """
+    series = [
+        (s["nome"], AUDITORIA_NIVEL_CORES[s["slug"]], s["valores"]) for s in mensal["por_nivel"]
+    ]
+    return _auditoria_pilha(
+        mensal["labels"], series, mensal["churn_real"], rotulo_total="Churn real"
+    )
+
+
 def people_expenses_stacked_bar(data: dict[str, Any]) -> str:
     """Barras empilhadas — despesas por pessoa por mês (prestadores PJ + coletivo)."""
     labels = data.get("month_labels", [])

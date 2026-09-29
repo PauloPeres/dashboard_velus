@@ -79,6 +79,9 @@ Código em **inglês**, UI/templates em **português**. Glossário:
 | Elemento de rede (CTO/POP/PON/OLT/cabo) | NetworkElement |
 | Queda (de conexão)         | ConnectionDropEvent    |
 | Massiva (queda coletiva)   | Outage                 |
+| Auditoria de churn (motivo cadastrado × observação) | churn_audit (`classificar`, `Veredito`) |
+| Nível de controle (deveria/poderia reter…) | `Nivel`         |
+| Competência real (mês em que o churn pesa) | `Competencia`   |
 
 Quando aparecer um termo novo de negócio, **adicione aqui antes de codar**.
 

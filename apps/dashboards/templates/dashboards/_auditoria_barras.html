@@ -1,0 +1,25 @@
+{% load l10n %}
+{% comment %}
+Barras horizontais da Auditoria de Churn — uma série por card, então uma cor
+só (`cor`); a exceção é a barra por nível de controle, em que cada linha traz a
+sua (`b.cor`, rampa ordinal). Rótulo e número numa linha, a barra embaixo:
+nos cards estreitos o rótulo inteiro cabe, e o hover (title) só repete o que
+já está escrito.
+{% endcomment %}
+{% if barras %}
+<div class="space-y-2.5">
+  {% for b in barras %}
+  <div title="{{ b.label }}: {{ b.n }}">
+    <div class="flex items-baseline justify-between gap-3 text-xs">
+      <span class="text-gray-700 leading-snug">{{ b.label }}</span>
+      <span class="font-semibold text-gray-800 tabular-nums">{{ b.n }}</span>
+    </div>
+    <div class="h-2 bg-gray-100 rounded mt-1">
+      <div class="h-full rounded" style="width: {{ b.pct_barra|unlocalize }}%; background: {% if b.cor %}{{ b.cor }}{% else %}{{ cor }}{% endif %}"></div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="text-xs text-gray-400 py-2">Sem casos neste recorte.</p>
+{% endif %}

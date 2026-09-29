@@ -7,6 +7,7 @@ e via context_processor exposto em `current_organization`.
 from __future__ import annotations
 
 import csv
+import re
 from collections.abc import Iterable
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -99,6 +100,9 @@ from apps.analytics.application.aggregations import (
     search_customers,
 )
 from apps.analytics.application import time_buckets
+from apps.analytics.application.churn_audit import CAUSAS_CONHECIDAS, NIVEL_SLUGS
+from apps.analytics.application.churn_audit import Filtros as AuditoriaFiltros
+from apps.analytics.application.churn_audit import compute_churn_audit
 from apps.analytics.application.cto_snapshots import compute_cto_history
 from apps.analytics.application.network_snapshots import compute_network_history
 from apps.shared.context import get_current_organization
@@ -1189,6 +1193,123 @@ def churn(request: HttpRequest) -> HttpResponse:
             "churn_reason_json": charts.churn_reason_pareto(reasons),
             "ltv_hist_json": charts.ltv_histogram(ltv_dist),
             "churn_scatter_json": charts.churn_plan_risk_scatter(plan_detail_display, overall_rate),
+        },
+    )
+
+
+_COMPETENCIA_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+_BUSCA_MAX = 80
+_AUDITORIA_TABELA_MAX = 600
+
+
+def _auditoria_filtros(request: HttpRequest) -> AuditoriaFiltros:
+    """Os quatro recortes da auditoria, validados. Valor estranho vira "sem filtro".
+
+    A causa é conferida contra o catálogo do domínio — o seletor é fechado, e
+    uma causa digitada na URL que não existe esvaziaria a página sem dizer por
+    quê.
+    """
+    competencia = request.GET.get("competencia", "").strip()
+    nivel = request.GET.get("nivel", "").strip()
+    causa = request.GET.get("causa", "").strip()
+    busca = request.GET.get("q", "").strip()[:_BUSCA_MAX]
+    return AuditoriaFiltros(
+        competencia=competencia if _COMPETENCIA_RE.match(competencia) else None,
+        nivel=nivel if nivel in NIVEL_SLUGS else None,
+        causa=causa if causa in CAUSAS_CONHECIDAS else None,
+        busca=busca or None,
+    )
+
+
+@login_required
+@never_cache
+def churn_auditoria(request: HttpRequest) -> HttpResponse:
+    """Auditoria semântica de churn — motivo cadastrado × história da observação.
+
+    A página nasceu de uma auditoria feita à mão (set/2026) sobre um export do
+    IXC; aqui ela roda sobre a base viva, com as mesmas categorias, níveis e
+    regra de competência. O recorte de tempo é pela COMPETÊNCIA real, então o
+    período escolhido diz em que meses o churn pesou, não quando foi baixado.
+    """
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    period = get_period(request, granularity="month", default_key="6m")
+
+    # A competência de inadimplência (bloqueio + 30 dias) pode cair mais adiante
+    # no mês corrente: a janela vai até o fim do mês, não até hoje.
+    fim = period.end_date + relativedelta(day=31)
+    dados = compute_churn_audit(
+        org, inicio=period.start_date, fim=fim, filtros=_auditoria_filtros(request)
+    )
+    filtros = dados["filtros"]  # já sem a competência que caiu fora da janela
+    set_period_extra_params(
+        request,
+        {
+            "competencia": filtros.competencia,
+            "nivel": filtros.nivel,
+            "causa": filtros.causa,
+            "q": filtros.busca,
+        },
+    )
+
+    kpis = dados["kpis"]
+    kpi_cards = [
+        ("Registros auditados", kpis["auditados"],
+         "Cancelamentos cuja competência cai no período — inclusive os que não são churn."),
+        ("Churn real", kpis["churn_real"],
+         "Auditados menos titularidade e saneamento de base (migração, teste, duplicidade)."),
+        ("Retenção direta possível", kpis["retencao_direta"],
+         "Deveria + poderia ter retido: o que a operação tinha como segurar. É a meta de retenção."),
+        ("Parcialmente influenciáveis", kpis["parcial"],
+         "Inadimplência, perda de necessidade, internet já existente no destino: a empresa "
+         "reduz uma parcela, mas não controla o evento."),
+        ("Inevitáveis", kpis["inevitavel"],
+         "Mudança para local explicitamente sem cobertura e falecimento."),
+        ("Fora do churn", kpis["fora"],
+         "Troca de titularidade e baixas administrativas — saem da meta de churn."),
+    ]
+
+    cores = charts.AUDITORIA_NIVEL_CORES
+    niveis = [{**n, "cor": cores[n["slug"]]} for n in dados["niveis"]]
+    nivel_cor = {n["nivel"]: n["cor"] for n in niveis}
+    # A tabela para nos 600 mais recentes: 6 meses cabem inteiros (~570), e 24
+    # meses sem teto viravam 4 MB de HTML. Os KPIs e gráficos seguem contando
+    # tudo; quem precisa do resto recorta pelos filtros.
+    linhas = [
+        {"r": r, "nivel_cor": nivel_cor[r.veredito.nivel.value]}
+        for r in dados["registros"][:_AUDITORIA_TABELA_MAX]
+    ]
+
+    competencia_label = dict(dados["opcoes"]["competencias"]).get(filtros.competencia or "")
+    nivel_label = next(
+        (n["nivel"] for n in niveis if n["slug"] == filtros.nivel), None
+    )
+
+    return render(
+        request,
+        "dashboards/churn_auditoria.html",
+        {
+            "dados": dados,
+            "kpis": kpis,
+            "kpi_cards": [
+                {"label": label, "n": v["n"], "mrr": v["mrr"], "tooltip": dica}
+                for label, v, dica in kpi_cards
+            ],
+            "niveis": niveis,
+            "niveis_barras": [
+                {"label": n["prioridade"], "n": n["n"], "pct_barra": n["pct_barra"], "cor": n["cor"]}
+                for n in niveis
+            ],
+            "linhas": linhas,
+            "linhas_total": len(dados["registros"]),
+            "filtros": filtros,
+            "competencia_label": competencia_label,
+            "nivel_label": nivel_label,
+            "visao_mensal": charts.churn_audit_pizzas(dados["mensal"], so_mes=filtros.competencia),
+            "mensal_nivel_json": charts.churn_audit_mensal_nivel(dados["mensal"]),
         },
     )
 

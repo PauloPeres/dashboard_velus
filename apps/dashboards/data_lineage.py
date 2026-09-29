@@ -43,6 +43,22 @@ LINEAGE: dict[str, list[dict[str, str]]] = {
         {"source": _IXC, "detail": _D_IXC_CUST},
         {"source": _INT, "detail": "Modelo de churn (features + score) — analytics/ML interno."},
     ],
+    "churn_auditoria": [
+        {
+            "source": _IXC,
+            "detail": (
+                "IXC (contratos cancelados: motivo_cancelamento, obs_cancelamento, "
+                "data de cancelamento, dt_ult_bloq_auto/manual) → customers_contract."
+            ),
+        },
+        {
+            "source": _INT,
+            "detail": (
+                "Classificação por regras sobre a observação (causa raiz, nível de "
+                "controle, competência real) — analytics/domain/churn_audit.py."
+            ),
+        },
+    ],
     "risk": [
         {"source": _IXC, "detail": _D_IXC_CUST},
         {"source": _INT, "detail": "Score de risco de churn — modelo interno."},
