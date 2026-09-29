@@ -90,7 +90,7 @@ def base(organization_a: Organization) -> dict[str, Any]:
     )
     basico_cancelado = _contrato(
         organization_a, plano="Básico", mrr="80",
-        status="CANCELED", cancelado_dias=1, motivo="9",  # cobertura (não controlável)
+        status="CANCELED", cancelado_dias=1, motivo="9",  # desconexão por opção (neutro)
     )
     # Base ativa no início do mês: 2 de cada plano (denominador da taxa).
     for plano in ("Premium", "Básico"):
@@ -245,9 +245,11 @@ class TestFiltroPorMotivo:
             motivos_por_controle,
         )
 
-        # "6" (inadimplência) é controlável; "9" (fora de cobertura) não é.
+        # "6" (inadimplência) é controlável; "31" (mudou de cidade) não é; "9"
+        # (desconexão por opção) é neutro — não entra em nenhum dos dois cortes.
         assert "6" in motivos_por_controle(True)
-        assert "9" in motivos_por_controle(False)
+        assert "31" in motivos_por_controle(False)
+        assert "9" not in motivos_por_controle(True) + motivos_por_controle(False)
 
         _contrato(
             organization_a, plano="Premium", mrr="100",
@@ -255,6 +257,10 @@ class TestFiltroPorMotivo:
         )
         _contrato(
             organization_a, plano="Premium", mrr="200",
+            status="CANCELED", cancelado_dias=1, motivo="31",
+        )
+        _contrato(
+            organization_a, plano="Premium", mrr="400",
             status="CANCELED", cancelado_dias=1, motivo="9",
         )
         assert compute_churn_summary(organization_a, controlavel=CONTROLAVEL_SIM)[

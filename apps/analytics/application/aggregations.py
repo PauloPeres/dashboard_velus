@@ -2477,26 +2477,38 @@ def compute_at_risk_contracts(
 # ---------------------------------------------------------------------------
 # Mapeamento de motivos de cancelamento IXC → label legível + categoria
 # ---------------------------------------------------------------------------
-# Fonte: análise de obs_cancelamento nos contratos cancelados da base real.
+# Fonte dos NOMES: o export de contratos do próprio IXC (auditoria do Felipe,
+# set/2026), cruzado contrato a contrato com `raw_extras.motivo_cancelamento` —
+# 514 contratos, cada nome caiu num id só. Até ali os rótulos eram deduzidos da
+# observação e vários estavam trocados: o 9 aparecia como "Fora da área de
+# cobertura" e é "Desconexão por opção"; o 3 era "Troca de titularidade" e é
+# desistência; o 8 era "Outros" e é falecimento.
+#
+# Os nomes seguem o cadastro do IXC (só a caixa foi acertada) porque a auditoria
+# de churn (`domain/churn_audit.py`) deduz o tipo do motivo pelo nome.
+#
 # Categoria: True = controlável (ação de retenção possível)
-#            False = não controlável (mobilidade, titularidade, etc.)
+#            False = não controlável (mobilidade, falecimento, etc.)
 #            None = neutro/operacional
 _IXC_MOTIVO_MAP: dict[str, tuple[str, bool | None]] = {
     "0":  ("Sem motivo registrado", None),
-    "3":  ("Troca de titularidade", None),
-    "4":  ("Mudança de titularidade", None),
-    "5":  ("Mudança de endereço", False),
-    "6":  ("Inadimplência acumulada", True),   # sistema cancela após bloqueio prolongado
-    "8":  ("Outros", None),
-    "9":  ("Fora da área de cobertura", False),
-    "24": ("Desistência pré-instalação", None),
-    "25": ("Trocou de provedor", True),
-    "26": ("Cancelou serviço adicional", None),
-    "27": ("Problemas de qualidade/suporte", True),
-    "29": ("Contrato sem uso (operacional)", None),
-    "30": ("Mudança de titularidade", None),
-    "31": ("Mudança de cidade", False),
-    "32": ("Saindo do local", False),
+    "3":  ("Desistência da assinatura", None),
+    "4":  ("Acerto sistêmico", None),
+    "5":  ("Endereço não cabeado", False),
+    "6":  ("Inadimplência", True),   # sistema cancela após bloqueio prolongado
+    "8":  ("Falecimento", False),
+    # Era False quando o rótulo dizia "fora da área de cobertura". Por opção não
+    # é incontrolável: a auditoria põe a maioria em "parcialmente atacável".
+    "9":  ("Desconexão por opção", None),
+    "23": ("Teste (Datacake)", None),
+    "24": ("Contrato vindo cancelado do SGP", None),
+    "25": ("Mudou de operadora", True),
+    "26": ("Desistência da assinatura (não informado)", None),
+    "27": ("Problemas técnicos", True),
+    "29": ("Não houve navegação", None),
+    "30": ("Troca de titularidade", None),
+    "31": ("Mudou de cidade", False),
+    "32": ("Mudou de endereço", False),
 }
 
 
