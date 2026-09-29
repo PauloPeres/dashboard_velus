@@ -40,7 +40,7 @@ default da página.
   <label class="flex flex-col gap-1 text-xs text-gray-500">
     Nível de controle
     <select name="nivel" onchange="this.form.submit()"
-      class="w-56 text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+      class="w-48 text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
       <option value="">Todos</option>
       {% for n in niveis %}
       <option value="{{ n.slug }}" {% if n.slug == filtros.nivel %}selected{% endif %}>{{ n.nivel|capfirst }}</option>
@@ -48,9 +48,22 @@ default da página.
     </select>
   </label>
   <label class="flex flex-col gap-1 text-xs text-gray-500">
+    Motivo cadastrado
+    <select name="motivo" onchange="this.form.submit()"
+      class="w-52 text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+      <option value="">Todos</option>
+      {% for m in dados.opcoes.motivos %}
+      <option value="{{ m }}" {% if m == filtros.motivo %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+      {% if dados.opcoes.tem_outros %}
+      <option value="Outros" {% if filtros.motivo == "Outros" %}selected{% endif %}>Outros (motivos sem cor própria)</option>
+      {% endif %}
+    </select>
+  </label>
+  <label class="flex flex-col gap-1 text-xs text-gray-500">
     Causa raiz
     <select name="causa" onchange="this.form.submit()"
-      class="w-72 max-w-full text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+      class="w-60 max-w-full text-sm bg-white border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
       <option value="">Todas</option>
       {% for c in dados.opcoes.causas %}
       <option value="{{ c }}" {% if c == filtros.causa %}selected{% endif %}>{{ c }}</option>
@@ -81,6 +94,12 @@ default da página.
   <span class="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
     Nível: <strong>{{ nivel_label }}</strong>
     <button onclick="setParam('nivel', '')" class="ml-1 text-blue-500 hover:text-blue-800" aria-label="Remover filtro de nível">×</button>
+  </span>
+  {% endif %}
+  {% if filtros.motivo %}
+  <span class="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
+    Motivo cadastrado: <strong>{{ filtros.motivo }}</strong>
+    <button onclick="setParam('motivo', '')" class="ml-1 text-blue-500 hover:text-blue-800" aria-label="Remover filtro de motivo">×</button>
   </span>
   {% endif %}
   {% if filtros.causa %}
@@ -122,22 +141,44 @@ default da página.
 </div>
 
 <!-- Visão mensal por motivo cadastrado -->
+{% comment %}
+Pizza é o padrão (pedido de 29/09/2026); colunas mostram o mesmo recorte com
+os meses lado a lado. A troca é no navegador, sem recarregar, e a escolha fica
+guardada no localStorage de quem viu. A legenda é uma só para as duas formas —
+e é clicável: filtra a página inteira pelo motivo.
+{% endcomment %}
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
-  <h2 class="text-sm font-semibold text-gray-700">Visão mensal — volume e composição percentual</h2>
-  <p class="text-xs text-gray-400 mb-3">
-    Uma pizza por mês de competência{% if not filtros.competencia %} (os últimos {{ visao_mensal.pizzas|length }} do período){% endif %}:
-    o total no centro e, dentro de cada fatia, quantidade e percentual do motivo cadastrado.
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <h2 class="text-sm font-semibold text-gray-700">Visão mensal — volume e composição percentual</h2>
+    <div class="inline-flex rounded-lg border border-gray-200 bg-white p-0.5" role="group" aria-label="Forma do gráfico">
+      <button type="button" data-visao="pizza" aria-pressed="true"
+        class="px-2.5 py-1 text-xs rounded-md bg-blue-600 text-white font-medium">Pizza</button>
+      <button type="button" data-visao="colunas" aria-pressed="false"
+        class="px-2.5 py-1 text-xs rounded-md text-gray-600 hover:bg-gray-50">Colunas</button>
+    </div>
+  </div>
+  <p class="text-xs text-gray-400 mt-1 mb-3">
+    Cada mês de competência com o total e o peso de cada motivo cadastrado — na pizza{% if not filtros.competencia %}, os últimos {{ visao_mensal.pizzas|length }} meses do período{% endif %}, com quantidade e percentual dentro da fatia;
+    nas colunas, todos os meses lado a lado.
     Os meses mais recentes ainda crescem — há cancelamento lançado no IXC com data retroativa, e o inadimplente só entra quando o contrato é baixado.
+    <strong class="font-medium text-gray-500">Clique num motivo — na legenda, na fatia ou na coluna — para filtrar a página inteira</strong>; clique de novo para tirar.
   </p>
   {% if visao_mensal.legenda %}
-  <div class="flex flex-wrap gap-x-4 gap-y-1.5 mb-4 text-xs text-gray-600">
+  <div class="flex flex-wrap gap-x-1.5 gap-y-1.5 mb-4 text-xs text-gray-600">
     {% for item in visao_mensal.legenda %}
-    <span class="inline-flex items-center gap-1.5">
+    <button type="button"
+      onclick="setParam('motivo', '{% if item.nome != filtros.motivo %}{{ item.nome|escapejs }}{% endif %}')"
+      title="{% if item.nome == filtros.motivo %}Tirar o filtro{% else %}Filtrar por {{ item.nome }}{% endif %}"
+      class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full border transition-colors
+             {% if item.nome == filtros.motivo %}border-gray-900 bg-gray-100 text-gray-900 font-medium{% elif filtros.motivo %}border-transparent text-gray-400 hover:border-gray-300{% else %}border-transparent hover:border-gray-300 hover:bg-gray-50{% endif %}">
       <span class="w-2.5 h-2.5 rounded-sm shrink-0" style="background: {{ item.cor }}"></span>{{ item.nome }}
-    </span>
+    </button>
     {% endfor %}
   </div>
   {% endif %}
+  {% comment %}O id fica num invólucro sem classe de display: `.grid` venceria o
+  `[hidden]` do Tailwind e a pizza não sumiria na troca.{% endcomment %}
+  <div id="visao-pizza">
   <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
     {% for p in visao_mensal.pizzas %}
     <div class="border border-gray-100 rounded-lg p-3">
@@ -149,6 +190,23 @@ default da página.
     </div>
     {% endfor %}
   </div>
+  </div>
+  <div id="visao-colunas" hidden>
+    <div id="auditoria-mensal-motivo" class="h-[420px] md:h-[340px] animate-pulse bg-gray-50 rounded-lg"></div>
+  </div>
+</div>
+
+<!-- Churn % sobre a base ativa -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <h2 class="text-sm font-semibold text-gray-700">Churn % sobre a base ativa — mês a mês, por motivo</h2>
+  <p class="text-xs text-gray-400 mt-0.5 mb-3">
+    Churn real do mês de competência (sem "fora do churn") ÷ contratos ativos no último dia do mês anterior — a mesma base da página de Churn.
+    Cada cor é o motivo cadastrado; o número no topo é a taxa do mês. O mês corrente ainda está correndo.
+  </p>
+  {% if filtros.algum %}
+  {% include "dashboards/_nota_periodo.html" with texto="Com filtro, só os cancelamentos são recortados — a base ativa continua inteira. A taxa passa a ser quanto o recorte contribui para o churn do mês, não o churn de um grupo de clientes." %}
+  {% endif %}
+  <div id="auditoria-taxa" class="h-[420px] md:h-[340px] animate-pulse bg-gray-50 rounded-lg"></div>
 </div>
 
 <!-- Como ler os níveis -->
@@ -318,9 +376,57 @@ default da página.
 
 {% block scripts %}
 {% for p in visao_mensal.pizzas %}{{ p.json|json_script:p.data_id }}
-{% endfor %}{{ mensal_nivel_json|json_script:"auditoria-mensal-nivel-data" }}
+{% endfor %}{{ mensal_motivo_json|json_script:"auditoria-mensal-motivo-data" }}
+{{ taxa_json|json_script:"auditoria-taxa-data" }}
+{{ mensal_nivel_json|json_script:"auditoria-mensal-nivel-data" }}
 <script>
-  {% for p in visao_mensal.pizzas %}renderChart("{{ p.div_id }}", "{{ p.data_id }}");
-  {% endfor %}renderChart("auditoria-mensal-nivel", "auditoria-mensal-nivel-data");
+  // Clicar num motivo (fatia de pizza ou segmento de coluna) filtra a página
+  // por ele; clicar no motivo já filtrado tira o filtro — o mesmo que a legenda.
+  var motivoAtual = "{{ filtros.motivo|default_if_none:''|escapejs }}";
+  function graficoQueFiltraPorMotivo(divId) {
+    var pronto = renderChart(divId, divId + "-data");
+    if (!pronto) return;
+    pronto.then(function () {
+      document.getElementById(divId).on("plotly_click", function (ev) {
+        var ponto = ev.points[0];
+        var motivo = ponto.data.type === "pie" ? ponto.label
+                   : ponto.data.type === "bar" ? ponto.data.name : null;
+        if (motivo) setParam("motivo", motivo === motivoAtual ? "" : motivo);
+      });
+    });
+  }
+
+  // Pizza | Colunas. Cada forma só é desenhada na primeira vez que aparece:
+  // o Plotly num container escondido nasce com largura zero.
+  (function () {
+    var CHAVE = "velus.auditoria.visaoMensal";
+    var desenhada = {};
+    var pizzas = [{% for p in visao_mensal.pizzas %}"{{ p.div_id }}"{% if not forloop.last %}, {% endif %}{% endfor %}];
+    function mostrar(visao) {
+      document.getElementById("visao-pizza").hidden = visao !== "pizza";
+      document.getElementById("visao-colunas").hidden = visao !== "colunas";
+      document.querySelectorAll("[data-visao]").forEach(function (botao) {
+        var ativo = botao.dataset.visao === visao;
+        botao.setAttribute("aria-pressed", ativo ? "true" : "false");
+        ["bg-blue-600", "text-white", "font-medium"].forEach(function (c) { botao.classList.toggle(c, ativo); });
+        ["text-gray-600", "hover:bg-gray-50"].forEach(function (c) { botao.classList.toggle(c, !ativo); });
+      });
+      if (!desenhada[visao]) {
+        desenhada[visao] = true;
+        if (visao === "pizza") pizzas.forEach(graficoQueFiltraPorMotivo);
+        else graficoQueFiltraPorMotivo("auditoria-mensal-motivo");
+      }
+      try { localStorage.setItem(CHAVE, visao); } catch (e) {}
+    }
+    document.querySelectorAll("[data-visao]").forEach(function (botao) {
+      botao.addEventListener("click", function () { mostrar(botao.dataset.visao); });
+    });
+    var guardada = null;
+    try { guardada = localStorage.getItem(CHAVE); } catch (e) {}
+    mostrar(guardada === "colunas" ? "colunas" : "pizza");
+  })();
+
+  graficoQueFiltraPorMotivo("auditoria-taxa");
+  renderChart("auditoria-mensal-nivel", "auditoria-mensal-nivel-data");
 </script>
 {% endblock %}

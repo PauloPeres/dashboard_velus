@@ -351,3 +351,138 @@ class TestPizzasMensais:
         dados = compute_churn_audit(organization_a, inicio=date(2026, 4, 1), fim=JUNHO[1])
         visao = churn_audit_pizzas(dados["mensal"], so_mes="2026-06")
         assert [p["label"] for p in visao["pizzas"]] == ["jun/26"]
+
+
+@pytest.mark.django_db
+class TestFiltroPorMotivo:
+    def test_motivo_cadastrado(self, organization_a: Organization, junho: None) -> None:
+        dados = compute_churn_audit(
+            organization_a, inicio=JUNHO[0], fim=JUNHO[1], filtros=Filtros(motivo="Mudou de cidade")
+        )
+        assert dados["kpis"]["auditados"]["n"] == 1
+        assert {r.motivo for r in dados["registros"]} == {"Mudou de cidade"}
+        # O seletor continua com todos os motivos da janela, do mais comum ao mais raro.
+        assert len(dados["opcoes"]["motivos"]) == 6
+
+    def test_outros_junta_os_motivos_sem_cor_propria(
+        self, organization_a: Organization, junho: None
+    ) -> None:
+        _cancelado(organization_a, em=date(2026, 6, 9), motivo="8", obs="morreu")  # Falecimento
+        dados = compute_churn_audit(
+            organization_a, inicio=JUNHO[0], fim=JUNHO[1], filtros=Filtros(motivo="Outros")
+        )
+        assert [r.motivo for r in dados["registros"]] == ["Falecimento"]
+        assert dados["opcoes"]["tem_outros"] is True
+
+    def test_motivo_que_nao_esta_na_janela_cai(
+        self, organization_a: Organization, junho: None
+    ) -> None:
+        dados = compute_churn_audit(
+            organization_a, inicio=JUNHO[0], fim=JUNHO[1], filtros=Filtros(motivo="Inventado")
+        )
+        assert dados["filtros"].motivo is None
+        assert dados["kpis"]["auditados"]["n"] == 6
+
+    def test_legenda_das_pizzas_nao_encolhe_com_o_filtro(
+        self, organization_a: Organization, junho: None
+    ) -> None:
+        """Com um motivo filtrado, os outros seguem na legenda para trocar de um clique."""
+        dados = compute_churn_audit(
+            organization_a, inicio=JUNHO[0], fim=JUNHO[1], filtros=Filtros(motivo="Mudou de cidade")
+        )
+        assert len(dados["legenda_motivos"]) == 6
+
+
+def _base(org: Organization, dia: date, n: int) -> None:
+    """`n` contratos ativos na foto de `dia` — o denominador do churn %."""
+    from apps.analytics.infrastructure.models import FactContractStatusDaily
+
+    set_current_organization(org)
+    for _ in range(n):
+        global _seq
+        _seq += 1
+        contrato = Contract.objects.create(
+            organization=org, source_type="FAKE", external_id=f"base-{_seq}",
+            customer_external_id=f"base-cli-{_seq}", plan_name="Fibra 500",
+            monthly_amount=Decimal("100"), status=Contract.Status.ACTIVE,
+            activated_at=datetime(2025, 1, 10, tzinfo=TZ),
+        )
+        FactContractStatusDaily.objects.create(
+            organization=org, contract=contrato, date=dia, status="ACTIVE",
+            is_active=True, monthly_amount=contrato.monthly_amount,
+        )
+
+
+@pytest.mark.django_db
+class TestTaxaSobreABase:
+    def test_churn_real_sobre_a_base_do_inicio_do_mes(
+        self, organization_a: Organization, junho: None
+    ) -> None:
+        _base(organization_a, date(2026, 5, 31), 50)
+        taxa = compute_churn_audit(organization_a, inicio=JUNHO[0], fim=JUNHO[1])["taxa"]
+
+        assert taxa["base"] == [50]
+        # 6 cancelamentos, mas titularidade é fora do churn: 5 ÷ 50.
+        assert taxa["churn"] == [5]
+        assert taxa["total_pct"] == [10.0]
+        por_motivo = {s["nome"]: s["pct"][0] for s in taxa["por_motivo"]}
+        assert por_motivo["Mudou de cidade"] == 2.0
+        assert "Troca de titularidade" not in por_motivo
+        assert sum(por_motivo.values()) == pytest.approx(10.0)
+
+    def test_filtro_recorta_so_o_numerador(
+        self, organization_a: Organization, junho: None
+    ) -> None:
+        _base(organization_a, date(2026, 5, 31), 50)
+        taxa = compute_churn_audit(
+            organization_a, inicio=JUNHO[0], fim=JUNHO[1], filtros=Filtros(motivo="Mudou de operadora")
+        )["taxa"]
+        assert taxa["base"] == [50]
+        assert taxa["total_pct"] == [2.0]
+
+    def test_mes_sem_foto_da_base_fica_sem_taxa(
+        self, organization_a: Organization, junho: None
+    ) -> None:
+        """Sem denominador não existe taxa — 0% seria mentira."""
+        taxa = compute_churn_audit(organization_a, inicio=JUNHO[0], fim=JUNHO[1])["taxa"]
+        assert taxa["base"] == [None]
+        assert taxa["total_pct"] == [None]
+
+    def test_base_de_outra_organizacao_nao_entra(
+        self, organization_a: Organization, organization_b: Organization, junho: None
+    ) -> None:
+        _base(organization_b, date(2026, 5, 31), 10)
+        taxa = compute_churn_audit(organization_a, inicio=JUNHO[0], fim=JUNHO[1])["taxa"]
+        assert taxa["base"] == [None]
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestPaginaFiltroEVisao:
+    @pytest.fixture
+    def recentes(self, organization_a: Organization) -> None:
+        hoje = timezone.localdate()
+        _cancelado(organization_a, em=hoje - timedelta(days=3), motivo=OPERADORA, obs="trocou de operadora")
+        _cancelado(organization_a, em=hoje - timedelta(days=4), motivo=CIDADE, obs="mudou de cidade")
+
+    def test_filtro_de_motivo_pela_url(self, client: Any, user_a: User, recentes: None) -> None:
+        client.force_login(user_a)
+        resp = client.get(URL, {"motivo": "Mudou de operadora"})
+        assert resp.context["filtros"].motivo == "Mudou de operadora"
+        assert resp.context["kpis"]["auditados"]["n"] == 1
+        body = resp.content.decode()
+        assert "Motivo cadastrado: <strong>Mudou de operadora</strong>" in body
+        # A legenda segue com os dois motivos da janela, clicáveis.
+        assert "setParam('motivo', 'Mudou de cidade')" in body
+        # Clicar de novo no motivo filtrado tira o filtro.
+        assert "setParam('motivo', '')" in body
+
+    def test_pizza_e_o_padrao_com_colunas_a_um_clique(
+        self, client: Any, user_a: User, recentes: None
+    ) -> None:
+        client.force_login(user_a)
+        body = client.get(URL).content.decode()
+        assert 'data-visao="pizza" aria-pressed="true"' in body
+        assert 'data-visao="colunas" aria-pressed="false"' in body
+        assert '<div id="visao-colunas" hidden>' in body
+        assert 'id="auditoria-taxa"' in body

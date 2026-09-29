@@ -1212,11 +1212,15 @@ def _auditoria_filtros(request: HttpRequest) -> AuditoriaFiltros:
     competencia = request.GET.get("competencia", "").strip()
     nivel = request.GET.get("nivel", "").strip()
     causa = request.GET.get("causa", "").strip()
+    # O motivo é o nome cadastrado no IXC — só dá pra validar contra a janela,
+    # e quem faz isso é `compute_churn_audit` (motivo que não está lá cai).
+    motivo = request.GET.get("motivo", "").strip()[:_BUSCA_MAX]
     busca = request.GET.get("q", "").strip()[:_BUSCA_MAX]
     return AuditoriaFiltros(
         competencia=competencia if _COMPETENCIA_RE.match(competencia) else None,
         nivel=nivel if nivel in NIVEL_SLUGS else None,
         causa=causa if causa in CAUSAS_CONHECIDAS else None,
+        motivo=motivo or None,
         busca=busca or None,
     )
 
@@ -1251,6 +1255,7 @@ def churn_auditoria(request: HttpRequest) -> HttpResponse:
             "competencia": filtros.competencia,
             "nivel": filtros.nivel,
             "causa": filtros.causa,
+            "motivo": filtros.motivo,
             "q": filtros.busca,
         },
     )
@@ -1308,8 +1313,12 @@ def churn_auditoria(request: HttpRequest) -> HttpResponse:
             "filtros": filtros,
             "competencia_label": competencia_label,
             "nivel_label": nivel_label,
-            "visao_mensal": charts.churn_audit_pizzas(dados["mensal"], so_mes=filtros.competencia),
+            "visao_mensal": charts.churn_audit_pizzas(
+                dados["mensal"], so_mes=filtros.competencia, legenda=dados["legenda_motivos"]
+            ),
+            "mensal_motivo_json": charts.churn_audit_mensal_motivo(dados["mensal"]),
             "mensal_nivel_json": charts.churn_audit_mensal_nivel(dados["mensal"]),
+            "taxa_json": charts.churn_audit_taxa_mensal(dados["taxa"]),
         },
     )
 

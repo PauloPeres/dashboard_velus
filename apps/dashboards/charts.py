@@ -825,6 +825,7 @@ def _auditoria_pilha(
     totais: list[int],
     *,
     rotulo_total: str,
+    legenda: bool = True,
 ) -> str:
     """Colunas empilhadas por mês + o total escrito no topo de cada coluna.
 
@@ -863,7 +864,79 @@ def _auditoria_pilha(
     teto = max(totais, default=0)
     layout = {
         **_AUDITORIA_LAYOUT,
+        "showlegend": legenda,
         "yaxis": {**_AUDITORIA_LAYOUT["yaxis"], "range": [0, teto * 1.15 + 1]},
+    }
+    return _to_json(go.Figure(data=traces, layout=layout))
+
+
+def churn_audit_mensal_motivo(mensal: dict[str, Any]) -> str:
+    """A visão mensal em colunas: volume por competência, empilhado por motivo.
+
+    Sem legenda do Plotly — a página mostra uma legenda só (clicável) para as
+    pizzas e as colunas, com as mesmas cores.
+    """
+    series = [
+        (s["nome"], AUDITORIA_MOTIVO_CORES.get(s["nome"], AUDITORIA_MOTIVO_CORES["Outros"]), s["valores"])
+        for s in mensal["por_motivo"]
+    ]
+    return _auditoria_pilha(
+        mensal["labels"], series, mensal["totais"], rotulo_total="Total", legenda=False
+    )
+
+
+def _pct_br(valor: float) -> str:
+    return f"{valor:.1f}%".replace(".", ",")
+
+
+def churn_audit_taxa_mensal(taxa: dict[str, Any]) -> str:
+    """% de churn sobre a base ativa, mês a mês, empilhado por motivo cadastrado.
+
+    Cada segmento é o motivo ÷ base do mês; a pilha soma a taxa do mês, escrita
+    no topo. Mês sem foto da base fica sem barra — 0% seria mentira.
+    """
+    labels = taxa["labels"]
+    traces: list[Any] = []
+    for s in taxa["por_motivo"]:
+        cor = AUDITORIA_MOTIVO_CORES.get(s["nome"], AUDITORIA_MOTIVO_CORES["Outros"])
+        traces.append(
+            go.Bar(
+                name=s["nome"],
+                x=labels,
+                y=s["pct"],
+                marker={"color": cor, "line": {"color": "#ffffff", "width": 2}},
+                customdata=[[n, b or 0] for n, b in zip(s["n"], taxa["base"], strict=True)],
+                hovertemplate=(
+                    "<b>%{fullData.name}</b><br>%{x}: %{y:.2f}% da base"
+                    "<br>%{customdata[0]} de %{customdata[1]:,} contratos ativos<extra></extra>"
+                ),
+            )
+        )
+    totais = taxa["total_pct"]
+    traces.append(
+        go.Scatter(
+            x=labels,
+            y=totais,
+            mode="text",
+            text=[_pct_br(t) if t is not None else "" for t in totais],
+            textposition="top center",
+            textfont={"size": 12, "color": "#374151"},
+            showlegend=False,
+            hoverinfo="skip",
+            name="Churn do mês",
+        )
+    )
+    teto = max((t for t in totais if t is not None), default=0)
+    layout = {
+        **_AUDITORIA_LAYOUT,
+        "showlegend": False,
+        "separators": ",.",
+        "yaxis": {
+            **_AUDITORIA_LAYOUT["yaxis"],
+            "title": "% da base ativa",
+            "ticksuffix": "%",
+            "range": [0, teto * 1.18 + 0.1],
+        },
     }
     return _to_json(go.Figure(data=traces, layout=layout))
 
@@ -928,13 +1001,18 @@ def _auditoria_pizza(nomes: list[str], valores: list[int]) -> str:
 
 
 def churn_audit_pizzas(
-    mensal: dict[str, Any], *, ultimos: int = 6, so_mes: str | None = None
+    mensal: dict[str, Any],
+    *,
+    ultimos: int = 6,
+    so_mes: str | None = None,
+    legenda: list[str] | None = None,
 ) -> dict[str, Any]:
     """Pizzas mensais por motivo cadastrado — a "visão executiva" da auditoria.
 
     Uma por mês de competência: os `ultimos` meses da janela, ou só `so_mes`
     quando a página está recortada numa competência. A legenda é uma só para
-    todas (as cores são fixas por motivo), com os motivos que aparecem nelas.
+    todas (as cores são fixas por motivo): os nomes de `legenda`, quando a
+    página passa a lista da janela inteira, ou os motivos que aparecem nelas.
     """
     indices = list(range(len(mensal["labels"])))
     if so_mes is not None:
@@ -957,12 +1035,14 @@ def churn_audit_pizzas(
                 "json": _auditoria_pizza(nomes, valores),
             }
         )
-    legenda = [
-        {"nome": nome, "cor": AUDITORIA_MOTIVO_CORES.get(nome, AUDITORIA_MOTIVO_CORES["Outros"])}
-        for nome in nomes
-        if nome in presentes
-    ]
-    return {"pizzas": pizzas, "legenda": legenda}
+    nomes_legenda = legenda if legenda is not None else [n for n in nomes if n in presentes]
+    return {
+        "pizzas": pizzas,
+        "legenda": [
+            {"nome": nome, "cor": AUDITORIA_MOTIVO_CORES.get(nome, AUDITORIA_MOTIVO_CORES["Outros"])}
+            for nome in nomes_legenda
+        ],
+    }
 
 
 def churn_audit_mensal_nivel(mensal: dict[str, Any]) -> str:

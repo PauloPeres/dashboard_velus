@@ -21,6 +21,7 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from django.db.models import Count
 from django.db.models.fields.json import KeyTextTransform
 
 from apps.analytics.domain import churn_audit as dom
@@ -185,11 +186,14 @@ class Filtros:
     competencia: str | None = None  # "YYYY-MM"
     nivel: str | None = None  # slug de NivelInfo
     causa: str | None = None
+    # Motivo cadastrado no IXC; OUTROS junta os que não têm cor própria nas
+    # pizzas — é o que a fatia/legenda "Outros" representa.
+    motivo: str | None = None
     busca: str | None = None
 
     @property
     def algum(self) -> bool:
-        return any((self.competencia, self.nivel, self.causa, self.busca))
+        return any((self.competencia, self.nivel, self.causa, self.motivo, self.busca))
 
 
 _NIVEL_POR_SLUG: dict[str, dom.Nivel] = {info.slug: info.nivel for info in dom.NIVEIS}
@@ -205,6 +209,11 @@ def filtrar(registros: Iterable[RegistroAuditado], filtros: Filtros) -> list[Reg
         if nivel is not None and r.nivel is not nivel:
             continue
         if filtros.causa and r.veredito.causa_raiz != filtros.causa:
+            continue
+        if filtros.motivo == OUTROS:
+            if r.motivo_grafico != OUTROS:
+                continue
+        elif filtros.motivo and r.motivo != filtros.motivo:
             continue
         if termo:
             alvo = dom.normalizar(
@@ -292,6 +301,64 @@ def _series_mensais(
     }
 
 
+def _base_ativa(organization: Organization, meses: list[date]) -> dict[str, int]:
+    """Contratos ativos no início de cada mês — o denominador da taxa de churn.
+
+    Mesma base da página de Churn (`compute_contract_kpi_trend`): a foto do
+    último dia do mês anterior em `FactContractStatusDaily`. Uma query só.
+    """
+    from apps.analytics.infrastructure.models import FactContractStatusDaily
+
+    vespera_do_mes = {m - timedelta(days=1): m.strftime("%Y-%m") for m in meses}
+    linhas = (
+        FactContractStatusDaily.objects.filter(
+            organization=organization, date__in=list(vespera_do_mes), is_active=True
+        )
+        .values("date")
+        .annotate(n=Count("id"))
+    )
+    return {vespera_do_mes[linha["date"]]: linha["n"] for linha in linhas}
+
+
+def _taxa_mensal(
+    registros: list[RegistroAuditado], meses: list[date], base: dict[str, int]
+) -> dict[str, Any]:
+    """% de churn sobre a base ativa, mês a mês, empilhado por motivo cadastrado.
+
+    Numerador: churn real do mês de competência ("fora do churn" não é perda).
+    Com filtro, só o numerador é recortado — a base segue inteira, e a taxa
+    passa a ser a contribuição do recorte (mesma ressalva da #117).
+    """
+    chaves = [m.strftime("%Y-%m") for m in meses]
+    churn = [r for r in registros if r.nivel is not dom.Nivel.FORA]
+    por_motivo: dict[str, Counter[str]] = {m: Counter() for m in (*MOTIVOS_EM_DESTAQUE, OUTROS)}
+    for r in churn:
+        por_motivo[r.motivo_grafico][r.competencia_chave] += 1
+    totais = Counter(r.competencia_chave for r in churn)
+
+    def pct(n: int, chave: str) -> float | None:
+        # Mês sem foto da base (antes do histórico de fatos): sem taxa, não 0%.
+        denominador = base.get(chave)
+        return round(n / denominador * 100, 2) if denominador else None
+
+    return {
+        "labels": [mes_label(m) for m in meses],
+        "chaves": chaves,
+        "base": [base.get(k) for k in chaves],
+        "churn": [totais[k] for k in chaves],
+        "total_pct": [pct(totais[k], k) for k in chaves],
+        "por_motivo": [
+            {
+                "nome": motivo,
+                "n": [por_motivo[motivo][k] for k in chaves],
+                "pct": [pct(por_motivo[motivo][k], k) for k in chaves],
+            }
+            for motivo in (*MOTIVOS_EM_DESTAQUE, OUTROS)
+            if any(por_motivo[motivo].values())
+        ],
+    }
+
+
 def _mudanca_rotulo(causa: str) -> str:
     """No card de mudança, o prefixo "Mudança — " é redundante."""
     if causa == dom.MUD_SEM_COBERTURA:
@@ -315,7 +382,12 @@ def compute_churn_audit(
     # nova janela esvaziaria a página em silêncio. Ela simplesmente cai.
     if filtros.competencia and filtros.competencia not in {r.competencia_chave for r in todos}:
         filtros = replace(filtros, competencia=None)
+    # O mesmo vale para o motivo — que, além disso, chega de texto livre na URL.
+    motivos = Counter(r.motivo for r in todos)
+    if filtros.motivo and filtros.motivo not in {*motivos, OUTROS}:
+        filtros = replace(filtros, motivo=None)
     registros = filtrar(todos, filtros)
+    meses = _meses_da_janela(inicio, fim)
 
     por_nivel: dict[dom.Nivel, list[RegistroAuditado]] = {info.nivel: [] for info in dom.NIVEIS}
     for r in registros:
@@ -356,7 +428,8 @@ def compute_churn_audit(
         "total_na_janela": len(todos),
         "kpis": kpis,
         "niveis": niveis,
-        "mensal": _series_mensais(registros, _meses_da_janela(inicio, fim)),
+        "mensal": _series_mensais(registros, meses),
+        "taxa": _taxa_mensal(registros, meses, _base_ativa(organization, meses)),
         "pareto": _barras(
             Counter(r.veredito.causa_raiz for r in registros if r.nivel in dom.RETENCAO_DIRETA)
         ),
@@ -385,5 +458,15 @@ def compute_churn_audit(
                 {(r.competencia_chave, r.competencia_mes) for r in todos}, reverse=True
             ),
             "causas": sorted({r.veredito.causa_raiz for r in todos}),
+            # Do mais frequente ao mais raro — é a ordem em que se procura.
+            "motivos": [m for m, _ in motivos.most_common()],
+            "tem_outros": any(r.motivo_grafico == OUTROS for r in todos),
         },
+        # A legenda das pizzas sai da janela inteira: com um motivo filtrado,
+        # os outros continuam lá para trocar de um clique.
+        "legenda_motivos": [
+            nome
+            for nome in (*MOTIVOS_EM_DESTAQUE, OUTROS)
+            if any(r.motivo_grafico == nome for r in todos)
+        ],
     }
