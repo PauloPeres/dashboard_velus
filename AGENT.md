@@ -79,6 +79,10 @@ Código em **inglês**, UI/templates em **português**. Glossário:
 | Elemento de rede (CTO/POP/PON/OLT/cabo) | NetworkElement |
 | Queda (de conexão)         | ConnectionDropEvent    |
 | Massiva (queda coletiva)   | Outage                 |
+| Local do rompimento (gabarito da rota do técnico) | `OutageEvent.break_latitude/break_longitude` |
+| Aferição (erro de cada resposta contra o rompimento) | `OutageEvent.break_evaluation` |
+| Hipótese de rompimento     | `HipoteseDeRompimento` (`network/domain/repair_route.py`) |
+| Padrão por PON (corte de tronco, OLT/PON inteira) | `PadraoPon` (`network/domain/pon_pattern.py`) |
 | Auditoria de churn (motivo cadastrado × observação) | churn_audit (`classificar`, `Veredito`) |
 | Nível de controle (deveria/poderia reter…) | `Nivel`         |
 | Competência real (mês em que o churn pesa) | `Competencia`   |
