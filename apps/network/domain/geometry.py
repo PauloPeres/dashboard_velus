@@ -170,7 +170,14 @@ def candidate_cables(
         classe = cable_class(path.name, path.type_name)
         if classe == CLASSE_DROP and not incluir_drop:
             continue
-        distancias = [distance_to_path(p, path.points) for p in cto_points]
+        # Só as caixas dentro da caixa envolvente do cabo são medidas. As de
+        # fora estão a mais que o raio — não tocam, e a menor distância que
+        # importa é a de uma que toca. Mesmo resultado, sem a conta cara.
+        caixa = _caixa_envolvente(path.points, radius_meters)
+        perto = [p for p in cto_points if _dentro(p, caixa)]
+        if not perto:
+            continue
+        distancias = [distance_to_path(p, path.points) for p in perto]
         tocadas = sum(1 for d in distancias if d <= radius_meters)
         if not tocadas:
             continue
@@ -204,11 +211,48 @@ def ctos_sem_cabo(
         return 0
     if not paths:
         return len(cto_points)
+    caixas = [(_caixa_envolvente(path.points, radius_meters), path.points) for path in paths]
     return sum(
         1
         for p in cto_points
-        if min(distance_to_path(p, path.points) for path in paths) > radius_meters
+        if not any(
+            _dentro(p, caixa) and distance_to_path(p, pontos) <= radius_meters
+            for caixa, pontos in caixas
+        )
     )
+
+
+def _caixa_envolvente(
+    points: Sequence[tuple[float, float]], margem_metros: float
+) -> tuple[float, float, float, float]:
+    """(lat_min, lat_max, lon_min, lon_max) do traçado, alargada pela margem.
+
+    É o filtro que tira a medida ponto-segmento do caminho quente: numa massiva
+    de OLT (220 caixas × 1.191 cabos) eram 260 mil medidas e 12 s por página
+    (30/09/2026, massiva 359). O que está fora da caixa está a mais que a margem
+    do cabo e não precisa ser medido.
+
+    A margem vai 50% maior que o raio: a longitude encolhe com o cosseno da
+    latitude, e a medida exata usa o cosseno do ponto, não o do cabo. A folga
+    garante que o filtro nunca descarta o que a medida aceitaria.
+    """
+    if not points:
+        return (0.0, -1.0, 0.0, -1.0)
+    lats = [p[0] for p in points]
+    lons = [p[1] for p in points]
+    folga = margem_metros * 1.5
+    graus_lat = folga / 111_132.0
+    graus_lon = folga / (111_320.0 * max(cos(radians((min(lats) + max(lats)) / 2)), 0.1))
+    return (
+        min(lats) - graus_lat,
+        max(lats) + graus_lat,
+        min(lons) - graus_lon,
+        max(lons) + graus_lon,
+    )
+
+
+def _dentro(p: tuple[float, float], caixa: tuple[float, float, float, float]) -> bool:
+    return caixa[0] <= p[0] <= caixa[1] and caixa[2] <= p[1] <= caixa[3]
 
 
 def sub_path_between(

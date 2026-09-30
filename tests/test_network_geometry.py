@@ -210,3 +210,65 @@ class TestPedacoDoCaboEntreDuasCaixas:
 
         cabo = [_ponto(), _ponto(metros_norte=100)]
         assert sub_path_between(cabo, _ponto(metros_leste=1), _ponto(metros_leste=2)) == []
+
+
+class TestFiltroPorCaixaEnvolvente:
+    """O filtro que tirou 12 s da página da massiva 359 (30/09/2026).
+
+    Ele só pode acelerar — nunca mudar a resposta. Este teste compara com a
+    conta por força bruta numa planta sorteada: se um dia o filtro descartar um
+    cabo que a medida exata aceitaria, a lista de candidatos muda e ele quebra.
+    """
+
+    def test_mesma_resposta_que_a_forca_bruta(self) -> None:
+        import random
+
+        from apps.network.domain.geometry import (
+            PathInput,
+            candidate_cables,
+            ctos_sem_cabo,
+            distance_to_path,
+        )
+
+        sorteio = random.Random(359)  # noqa: S311 — sorteio de planta de teste, não criptografia
+        base = (-23.4960, -47.5107)
+
+        def ponto() -> tuple[float, float]:
+            return (
+                base[0] + sorteio.uniform(-0.01, 0.01),
+                base[1] + sorteio.uniform(-0.01, 0.01),
+            )
+
+        caminhos = []
+        for i in range(150):
+            inicio = ponto()
+            pontos = [inicio]
+            for _ in range(sorteio.randint(1, 6)):
+                ultimo = pontos[-1]
+                pontos.append((
+                    ultimo[0] + sorteio.uniform(-0.001, 0.001),
+                    ultimo[1] + sorteio.uniform(-0.001, 0.001),
+                ))
+            caminhos.append(PathInput(f"c{i}", f"cabo {i}", pontos, type_name="FIBRA AS80 12FO"))
+        caixas = [ponto() for _ in range(300)]
+        # Caixas em cima de vértices, para garantir candidatos de verdade.
+        caixas += [c.points[0] for c in caminhos[:40]]
+
+        raio = 30.0
+        esperado = {}
+        for c in caminhos:
+            distancias = [distance_to_path(p, c.points) for p in caixas]
+            tocadas = sum(1 for d in distancias if d <= raio)
+            if tocadas:
+                esperado[c.external_id] = (tocadas, round(min(distancias), 1))
+        obtido = {
+            c.external_id: (c.ctos_tocadas, c.distance_meters)
+            for c in candidate_cables(caixas, caminhos, radius_meters=raio)
+        }
+        assert obtido == esperado
+        assert esperado, "o sorteio não produziu candidato nenhum"
+
+        sem_cabo = sum(
+            1 for p in caixas if min(distance_to_path(p, c.points) for c in caminhos) > raio
+        )
+        assert ctos_sem_cabo(caixas, caminhos, radius_meters=raio) == sem_cabo
