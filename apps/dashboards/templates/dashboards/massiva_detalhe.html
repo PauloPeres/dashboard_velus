@@ -47,6 +47,7 @@
       O veredito fica na faixa, e só ele: é a conclusão, não o raciocínio.
       {% endcomment %}
       {% include "dashboards/_massivas_veredito.html" with v=outage.veredito %}
+      {% include "dashboards/_massivas_padrao_pon.html" with p=outage.padrao_pon %}
     </div>
     <div class="shrink-0 lg:text-right">
       <p class="text-3xl font-bold text-red-600 tabular-nums">{{ outage.ainda_fora|intcomma }}</p>
@@ -107,6 +108,8 @@ mandar o carro.
 {% include "dashboards/_massivas_rota.html" %}
 
 {% include "dashboards/_massivas_mapa.html" %}
+
+{% include "dashboards/_massivas_rompimento.html" %}
 
 <details class="bg-white rounded-xl shadow-sm border border-gray-200 mb-6">
   <summary class="cursor-pointer select-none px-5 py-3 text-sm font-semibold text-gray-700">

@@ -157,6 +157,10 @@ class Hop:
     cabo_nome: str
     cabo_tipo: str
     metros_do_pop: float
+    # O id do cabo por onde se chegou. O nome não basta para desenhar: há cabos
+    # com o mesmo nome em projetos diferentes ("FIBRA AS80 72FO 5" existe duas
+    # vezes, a 3 km uma da outra), e o mapa pegava o primeiro que servisse.
+    cabo_id: str = ""
 
 
 def _celula(ponto: tuple[float, float], lado_graus: float) -> tuple[int, int]:
@@ -352,7 +356,9 @@ def route_to(
     while atual in anterior:
         pai, aresta = anterior[atual]
         node = grafo.nodes[atual]
-        passos.append(Hop(node, aresta.cabo_nome, aresta.cabo_tipo, dist[atual]))
+        passos.append(
+            Hop(node, aresta.cabo_nome, aresta.cabo_tipo, dist[atual], aresta.cabo_id)
+        )
         atual = pai
     passos.append(Hop(grafo.nodes[atual], "", "", dist.get(atual, 0.0)))
     passos.reverse()

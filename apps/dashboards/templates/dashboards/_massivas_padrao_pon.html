@@ -1,0 +1,21 @@
+{% comment %}
+O padrão por PON (30/09/2026, massiva 359): "corte de tronco: 42 PONs inteiras".
+
+Vem colado no veredito porque responde a mesma pergunta — que tipo de problema é
+este — com outro dado: não a causa que a ONU reportou, mas a forma como as PONs
+caíram. PON é fibra: quando várias caem inteiras e as vizinhas nem sentem, foi
+um cabo que leva várias fibras de PON, rompido antes dos splitters.
+
+Só aparece quando há padrão. A forma que não se sabe classificar (quedas
+parciais espalhadas) fica sem rótulo — rótulo errado aqui manda procurar cabo
+quando o problema é a OLT, ou o contrário.
+
+Espera a variável `p` (dict de compute_padrao_pon).
+{% endcomment %}
+{% if p.tipo %}
+<div class="rounded-lg border px-3 py-2 mt-3 bg-violet-50 border-violet-200">
+  <p class="text-[10px] uppercase tracking-wider font-semibold text-violet-700">Padrão por PON</p>
+  <p class="text-sm font-bold text-violet-900">{{ p.rotulo }}</p>
+  <p class="text-xs mt-1 leading-relaxed text-violet-800">{{ p.detalhe }}</p>
+</div>
+{% endif %}

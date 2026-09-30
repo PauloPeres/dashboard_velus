@@ -3,9 +3,10 @@
 Estes testes existem porque a resposta errada aqui **manda um carro**. Três
 afirmações que não podem escorregar:
 
-1. a caixa de partida é a primeira, descendo do POP, cujos clientes **todos**
-   caíram. Se ainda há alguém no ar abaixo dela, o problema está mais para
-   baixo, e mandar o técnico subir nela é uma subida perdida;
+1. a caixa de partida é a que melhor separa quem caiu de quem continua no ar.
+   Se ainda há alguém no ar abaixo dela, o problema está mais para baixo, e
+   mandar o técnico subir nela é uma subida perdida — mas **uma** caixa fora de
+   lugar não pode jogar a resposta para o POP (massiva 359, 30/09/2026);
 2. o rompimento fica **entre** a última caixa no ar e a primeira afetada. Sem
    caixa no ar antes, não há "entre" — e aí o sistema não marca X nenhum;
 3. quando a rota não chega a um POP, o sistema não chama de "primeira" o que
@@ -23,7 +24,12 @@ from apps.network.domain.plant_graph import (
     build_graph,
     distances_from,
 )
-from apps.network.domain.repair_route import calcular, ceos_da_rota
+from apps.network.domain.repair_route import (
+    calcular,
+    ceos_da_rota,
+    hipoteses_distintas,
+    ranquear_hipoteses,
+)
 
 _LON = -47.4500
 _LAT0 = -23.5000
@@ -233,3 +239,154 @@ class TestConfianca:
         assert rota.trecho_rompido is None
         # A rota continua servindo para orientar — o que some é a afirmação.
         assert rota.partida is not None
+
+
+# ~30 m de longitude nesta latitude: mais que a tolerância de 15 m do grafo, então
+# cada caixa vira um nó próprio sobre o cabo.
+_P = 0.0003
+
+
+def _planta_ramos(*, vazias_no_leste: int = 0):
+    """Um tronco com três emendas, um ramo a oeste e um ramo longo a leste.
+
+                    pop
+                     |
+        o3 - o2 - o1-ceo1
+                     |
+                   ceo2-l1-l2-...-l9[-v1-...-vN]
+                     |
+                   ceo3
+                     |
+                     s1
+
+    As `v` são caixas **sem cliente** no fim do ramo leste.
+    """
+    nodes = [
+        _no(POP, "pop", 0),
+        _no(CEO, "ceo1", 2),
+        _no(CEO, "ceo2", 4),
+        _no(CEO, "ceo3", 6),
+        _no(CTO, "s1", 8),
+    ]
+    nodes += [NodeInput(CTO, f"o{i}", f"CTO o{i}", _lat(2), _LON - _P * i) for i in range(1, 4)]
+    nodes += [NodeInput(CTO, f"l{i}", f"CTO l{i}", _lat(4), _LON + _P * i) for i in range(1, 10)]
+    nodes += [
+        NodeInput(CTO, f"v{j}", f"CTO v{j}", _lat(4), _LON + _P * (9 + j))
+        for j in range(1, vazias_no_leste + 1)
+    ]
+    cabos = [
+        _cabo("tronco", (0, 1, 2, 3, 4, 5, 6, 7, 8)),
+        CableInput("oeste", "cabo oeste", "FIBRA AS80 06FO",
+                   tuple((_lat(2), _LON - _P * i) for i in range(4))),
+        CableInput("leste", "cabo leste", "FIBRA AS80 12FO",
+                   tuple((_lat(4), _LON + _P * i) for i in range(10 + vazias_no_leste))),
+    ]
+    grafo = build_graph(nodes, cabos)
+    dist, anterior = distances_from(grafo, [(POP, "pop")])
+    return grafo, dist, anterior
+
+
+LESTE = [(CTO, f"l{i}") for i in range(1, 10)]
+OESTE = [(CTO, f"o{i}") for i in range(1, 4)]
+
+
+class TestMassiva359:
+    """Os dois erros que a massiva 359 expôs (30/09/2026), em miniatura.
+
+    Na 359 o "comece por aqui" foi parar no POP, a 1.155 m do rompimento: 13
+    das 220 caixas fora não pendiam do cabo rompido, e 109 caixas SEM cliente
+    abaixo dele contavam como "no ar".
+    """
+
+    def test_uma_caixa_fora_de_lugar_nao_joga_a_resposta_para_o_pop(self) -> None:
+        """Nove caixas do ramo leste caem, e uma do oeste cai junto.
+
+        A regra antiga exigia um ponto comum a TODAS: a do oeste puxava a
+        resposta para a CEO1, acima dos dois ramos. A certa é o começo do ramo
+        leste, que explica 9 das 10.
+        """
+        grafo, dist, anterior = _planta_ramos()
+        fora = [*LESTE, (CTO, "o1")]
+        no_ar = [(CTO, "o2"), (CTO, "o3"), (CTO, "s1")]
+        rota = calcular(
+            grafo, dist, anterior, ctos_afetadas=fora, ctos_conhecidas=fora + no_ar
+        )
+        assert rota.partida is not None
+        assert rota.partida.external_id == "l1"
+        assert rota.partida_confirmada is True
+        assert rota.caixa_anterior is not None
+        assert rota.caixa_anterior.external_id == "ceo2"
+        assert rota.cabo_rompido is not None
+        assert rota.cabo_rompido.cabo_id == "leste"
+
+    def test_caixa_sem_cliente_nao_e_prova_de_que_a_fibra_esta_boa(self) -> None:
+        """O ramo leste cai inteiro, e depois dele há 12 caixas vazias.
+
+        Quem chama passa como conhecidas só quem tem cliente online — e aí o
+        ramo se confirma. Se as vazias entrassem como "no ar", nenhuma caixa
+        passaria na pureza e a resposta se perderia, como na 359.
+        """
+        grafo, dist, anterior = _planta_ramos(vazias_no_leste=12)
+        no_ar = [*OESTE, (CTO, "s1")]
+        rota = calcular(
+            grafo, dist, anterior, ctos_afetadas=LESTE, ctos_conhecidas=LESTE + no_ar
+        )
+        assert rota.partida is not None
+        assert rota.partida.external_id == "l1"
+        assert rota.partida_confirmada is True
+
+        vazias = [(CTO, f"v{j}") for j in range(1, 13)]
+        com_vazias = calcular(
+            grafo, dist, anterior,
+            ctos_afetadas=LESTE, ctos_conhecidas=LESTE + no_ar + vazias,
+        )
+        assert com_vazias.partida_confirmada is False
+
+    def test_as_hipoteses_vem_com_as_contas_e_uma_por_cabo(self) -> None:
+        grafo, dist, anterior = _planta_ramos()
+        fora = [*LESTE, (CTO, "o1")]
+        no_ar = [(CTO, "o2"), (CTO, "o3"), (CTO, "s1")]
+        rota = calcular(
+            grafo, dist, anterior, ctos_afetadas=fora, ctos_conhecidas=fora + no_ar
+        )
+        primeira = rota.hipoteses[0]
+        assert primeira.no.external_id == "l1"
+        assert (primeira.fora_abaixo, primeira.fora_total, primeira.no_ar_abaixo) == (9, 10, 0)
+        assert primeira.explica == 0.9
+        assert primeira.pureza == 1.0
+        assert primeira.forte is True
+        cabos = [h.cabo_id or h.no.external_id for h in rota.hipoteses]
+        assert len(cabos) == len(set(cabos)), "duas hipóteses no mesmo cabo"
+
+
+class TestHipotesesFracas:
+    def test_dois_lugares_ao_mesmo_tempo_nao_viram_um_trecho(self) -> None:
+        """O ramo oeste inteiro e a caixa do fim do tronco, com o leste no ar.
+
+        Nenhum ponto explica os dois lugares sem levar junto o ramo leste, que
+        está no ar. A tela recebe as hipóteses, mas nenhuma é afirmada.
+        """
+        grafo, dist, anterior = _planta_ramos()
+        fora = [*OESTE, (CTO, "s1")]
+        rota = calcular(
+            grafo, dist, anterior, ctos_afetadas=fora, ctos_conhecidas=fora + LESTE
+        )
+        assert rota.partida_confirmada is False
+        assert rota.trecho_rompido is None
+        assert rota.partida is not None
+        assert rota.partida.external_id == "ceo1"
+        assert rota.hipoteses
+        assert not any(h.forte for h in rota.hipoteses)
+
+    def test_empate_vai_para_o_mais_perto_do_pop(self) -> None:
+        """Pedaços seguidos sem nada pendurado no meio têm a mesma nota.
+
+        O técnico começa por cima — logo abaixo da última caixa no ar.
+        """
+        grafo, dist, anterior = _planta()
+        ranking = ranquear_hipoteses(
+            grafo, dist, anterior,
+            fora=[(CTO, "cto_a"), (CTO, "cto_b")], no_ar=[(CTO, "cto_alta")],
+        )
+        assert ranking[0].no.external_id == "ceo2"
+        assert hipoteses_distintas(ranking, 1) == [ranking[0]]

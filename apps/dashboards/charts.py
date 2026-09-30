@@ -2968,6 +2968,9 @@ def outage_map(mapa: dict[str, Any]) -> str:
         ("rota_anterior", "Última caixa no ar", "#0f766e", 24, _ICONE_ANTERIOR, "rota"),
         ("rota_partida", "Comece por aqui", "#be123c", 28, _ICONE_PARTIDA, "rota"),
         ("rota_x", "Provável rompimento", "#111827", 30, _ICONE_X, "rota"),
+        # O rompimento registrado por quem esteve no reparo: o gabarito. Em
+        # ciano e não em preto, para não se confundir com o X, que é palpite.
+        ("rompimento_registrado", "Rompimento registrado", "#0891b2", 30, _ICONE_X, "rompimento"),
     ]
     # As ligações entram ANTES dos pontos para ficarem por baixo deles.
     traces = [
@@ -3013,6 +3016,23 @@ def outage_map(mapa: dict[str, Any]) -> str:
             cor="#ea580c",
             largura=4,
             grupo="cabo",
+        ),
+        # As hipóteses de rompimento sobre o cabo (30/09/2026). A 1ª, grossa e
+        # na cor da rota, é o trecho de maior nota; a 2ª e a 3ª, mais finas e em
+        # outra cor, são para onde olhar se a 1ª não for.
+        *_map_solid_path_trace(
+            [h for h in mapa.get("hipoteses") or [] if h["ordem"] > 1],
+            nome="2ª e 3ª hipóteses de rompimento",
+            cor="#0ea5e9",
+            largura=4,
+            grupo="rota",
+        ),
+        *_map_solid_path_trace(
+            [h for h in mapa.get("hipoteses") or [] if h["ordem"] == 1],
+            nome="1ª hipótese de rompimento (maior nota)",
+            cor="#e11d48",
+            largura=7,
+            grupo="rota",
         ),
         # O caminho da rota e as setas de sentido (pedido 6 do técnico). Linha
         # cheia porque, onde há cabo, é o traçado do cabo — e as setas dizem

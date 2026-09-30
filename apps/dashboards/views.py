@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
+import structlog
 from dateutil.relativedelta import relativedelta
 from django.contrib.auth.decorators import login_required
 from django.db.models import Avg, Count, F
@@ -105,6 +106,7 @@ from apps.analytics.application.churn_audit import Filtros as AuditoriaFiltros
 from apps.analytics.application.churn_audit import compute_churn_audit
 from apps.analytics.application.cto_snapshots import compute_cto_history
 from apps.analytics.application.network_snapshots import compute_network_history
+from apps.network.domain.geometry import coordenadas_do_texto
 from apps.shared.context import get_current_organization
 
 from . import charts
@@ -115,6 +117,7 @@ from .massivas import (
     BUCKET_MINUTES,
     SIGNAL_DEGRADATION_DB,
     TIMELINE_HOURS,
+    PontoLongeDaMassivaError,
     compute_historico,
     compute_massiva_detalhe,
     compute_massivas_agora,
@@ -122,8 +125,12 @@ from .massivas import (
     compute_sem_causa,
     normalize_tags,
     poll_snapshot,
+    registrar_rompimento,
 )
 from .period import TZ, Period, get_period, set_period_extra_params
+
+
+_logger = structlog.get_logger(__name__)
 
 
 def _require_org(request: HttpRequest) -> Any:  # noqa: ARG001 — assinatura uniforme para uso futuro
@@ -3591,6 +3598,14 @@ def massiva_causa(request: HttpRequest, outage_id: int) -> HttpResponse:
         # campo é rótulo de treino, e um valor inventado contamina a série.
         return HttpResponseRedirect(f"{destino}&erro=1" if "?" in destino else f"{destino}?erro=1")
 
+    # O local do rompimento é opcional aqui, e é conferido ANTES de gravar a
+    # causa: se o ponto colado não serve, nada é gravado e a pessoa corrige os
+    # dois de uma vez, em vez de a massiva sair da fila sem o ponto.
+    local = (request.POST.get("local") or "").strip()
+    ponto = coordenadas_do_texto(local) if local else None
+    if local and ponto is None:
+        return HttpResponseRedirect(f"{reverse('dashboards:massivas')}?erro=local#causa")
+
     outage.confirmed_cause = causa
     outage.cause_tags = normalize_tags(request.POST.getlist("cause_tags"))
     outage.cause_note = request.POST.get("cause_note", "").strip()[:2000]
@@ -3606,7 +3621,62 @@ def massiva_causa(request: HttpRequest, outage_id: int) -> HttpResponse:
             "updated_at",
         ]
     )
+    if ponto is not None:
+        try:
+            registrar_rompimento(org, outage, ponto, request.user)
+        except PontoLongeDaMassivaError:
+            # A causa já ficou gravada; o ponto não. O detalhe da massiva diz
+            # por quê e deixa registrar de novo.
+            return HttpResponseRedirect(
+                reverse("dashboards:massiva_detalhe", args=[outage.pk])
+                + "?rompimento=longe#rompimento"
+            )
     return HttpResponseRedirect(destino)
+
+
+@login_required
+@never_cache
+@require_POST
+def massiva_rompimento(request: HttpRequest, outage_id: int) -> HttpResponse:
+    """Grava onde a fibra rompeu de verdade — e mede a tela contra isso.
+
+    Pedido de 30/09/2026, durante a massiva 359: o ponto do rompimento chegou
+    por mensagem, e só com ele deu para saber que o "comece por aqui" estava a
+    1.155 m do lugar certo. Com o campo, cada massiva fechada vira um backtest:
+    a aferição guarda o erro de cada resposta e a evidência que o algoritmo viu.
+
+    Aceita o que a pessoa tem na mão: link do Google Maps ou "lat, long".
+    Aberta ou encerrada — na 359 o ponto era sabido com a massiva aberta.
+    """
+    from apps.network.infrastructure.models import OutageEvent
+
+    org_or_redirect = _require_org(request)
+    if not hasattr(org_or_redirect, "slug"):
+        return org_or_redirect
+    org = org_or_redirect
+
+    outage = get_object_or_404(
+        OutageEvent.objects.filter(organization=org), pk=outage_id
+    )
+    destino = reverse("dashboards:massiva_detalhe", args=[outage.pk])
+
+    ponto = coordenadas_do_texto(request.POST.get("local") or "")
+    if ponto is None:
+        return HttpResponseRedirect(f"{destino}?rompimento=invalido#rompimento")
+    try:
+        afericao = registrar_rompimento(org, outage, ponto, request.user)
+    except PontoLongeDaMassivaError as exc:
+        return HttpResponseRedirect(
+            f"{destino}?rompimento=longe&km={exc.km:.0f}#rompimento"
+        )
+    _logger.info(
+        "outage_break_recorded",
+        outage=outage.pk,
+        algoritmo=afericao.get("algoritmo"),
+        erro_hipotese_1_m=afericao.get("erros_m", {}).get("hipotese_1"),
+        posicao=afericao.get("posicao_do_trecho_certo"),
+    )
+    return HttpResponseRedirect(f"{destino}#rompimento")
 
 
 @login_required

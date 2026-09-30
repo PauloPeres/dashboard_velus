@@ -6,9 +6,10 @@ Este bloco é o único da tela que **manda** em vez de descrever, e por isso ele
 fica antes do mapa e diz, na mesma frase, o quanto se sabe. As três formas de
 dizer são diferentes de propósito:
 
-- "comece por" — a caixa foi confirmada: tudo abaixo dela caiu;
-- "caixa comum a todas as afetadas" — ainda há cliente no ar abaixo dela, então
-  não é o ponto de partida, é o ponto de encontro das rotas;
+- "comece por" — a caixa foi confirmada pela nota: é o ponto da planta que melhor
+  separa quem caiu de quem tem cliente online (30/09/2026, massiva 359);
+- "caixa comum a todas as afetadas" — nenhum ponto explica sozinho a massiva,
+  então não é o ponto de partida, é o ponto de encontro das rotas;
 - nada — as caixas da massiva não estão no desenho do projeto, e a tela diz isso
   em vez de sumir com o bloco (bloco ausente se lê como "não há o que dizer").
 {% endcomment %}
@@ -30,11 +31,19 @@ dizer são diferentes de propósito:
     {% endif %}
   </p>
   <p class="text-xs text-gray-500 mt-0.5">
-    {% if rota_tecnico.partida_confirmada %}
-      Todos os clientes abaixo dela caíram — acima ainda há gente no ar.
+    {% if rota_tecnico.partida_confirmada and rota_tecnico.partida_e_origem %}
+      É a origem da rota: tudo o que pende dela caiu. Antes de procurar cabo, olhe o
+      equipamento e a saída do POP.
+    {% elif rota_tecnico.partida_confirmada %}
+      {% with h=rota_tecnico.hipoteses.0 %}
+      Abaixo dela estão {{ h.fora_abaixo|intcomma }} das {{ h.fora_total|intcomma }} caixas fora
+      e {{ h.no_ar_abaixo|intcomma }} com cliente online — é o ponto da planta que melhor separa
+      quem caiu de quem está no ar.
+      {% endwith %}
     {% else %}
       É a caixa comum a todas as afetadas, e <strong>não</strong> o ponto de partida:
-      abaixo dela ainda há cliente no ar, então o problema pode estar mais adiante.
+      nenhum ponto da planta explica sozinho a massiva — pode ser mais de um evento, ou
+      caixas fora do desenho. Veja as hipóteses abaixo.
     {% endif %}
     {% if not rota_tecnico.tem_origem_no_pop %}
       A rota desta caixa não chega a nenhum POP no desenho, então "primeira da rota"
@@ -60,7 +69,7 @@ dizer são diferentes de propósito:
       <p class="text-[10px] uppercase tracking-wider text-gray-400">Abaixo da caixa</p>
       <p class="text-gray-800">
         <span class="text-red-600 font-semibold">{{ rota_tecnico.abaixo_da_partida.fora }}</span> fora ·
-        <span class="text-emerald-700">{{ rota_tecnico.abaixo_da_partida.no_ar }}</span> no ar
+        <span class="text-emerald-700">{{ rota_tecnico.abaixo_da_partida.no_ar }}</span> com cliente online
       </p>
     </div>
     {% endif %}
@@ -81,6 +90,55 @@ dizer são diferentes de propósito:
     {{ rota_tecnico.ctos_afetadas }} caixas afetadas estão no desenho, e com o resto fora
     "ainda no ar" pode ser gente que caiu e não foi mapeada.
   </p>
+  {% endif %}
+
+  {% if rota_tecnico.hipoteses %}
+  {% comment %}
+  As hipóteses (30/09/2026). A primeira é a resposta; as outras duas, uma por
+  cabo, são para onde o técnico olha se a primeira não for. As contas vão junto
+  porque são elas que dizem o quanto confiar: "explica 207 de 220 caixas fora,
+  com 2 com cliente online abaixo" é outra conversa que "explica 12 de 40".
+  {% endcomment %}
+  <div class="mt-4">
+    <p class="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Hipóteses de rompimento, pela nota</p>
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-left text-[10px] uppercase tracking-wider text-gray-400 border-b border-gray-200">
+          <th class="py-2 pr-3">#</th>
+          <th class="py-2 pr-3">Onde</th>
+          <th class="py-2 pr-3">Cabo</th>
+          <th class="py-2 pr-3">Caixas fora abaixo</th>
+          <th class="py-2">Com cliente online abaixo</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for h in rota_tecnico.hipoteses %}
+        <tr class="{% if forloop.first and rota_tecnico.partida_confirmada %}bg-rose-50{% endif %}">
+          <td class="py-2 pr-3 text-gray-500 tabular-nums">{{ h.ordem }}ª</td>
+          <td class="py-2 pr-3 text-gray-800">
+            {% if h.acima %}
+            entre <strong>{{ h.acima.label }}</strong> e <strong>{{ h.no.label }}</strong>{% if h.metros %}
+            <span class="text-gray-400">(~{{ h.metros|intcomma }} m)</span>{% endif %}
+            {% else %}
+            no próprio <strong>{{ h.no.label }}</strong> ou na saída dele
+            {% endif %}
+          </td>
+          <td class="py-2 pr-3 text-gray-600">{{ h.cabo|default:"—" }}</td>
+          <td class="py-2 pr-3 tabular-nums">
+            <span class="text-red-600 font-semibold">{{ h.fora_abaixo|intcomma }}</span>
+            <span class="text-gray-400">de {{ h.fora_total|intcomma }} ({{ h.explica_pct }}%)</span>
+          </td>
+          <td class="py-2 text-emerald-700 tabular-nums">{{ h.no_ar_abaixo|intcomma }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="text-xs text-gray-400 mt-1 leading-relaxed">
+      A nota compara, para cada ponto da planta, as caixas fora que ficam abaixo dele com as
+      caixas com cliente online que também ficam — e que, se o rompimento fosse ali, teriam
+      caído. Caixa sem cliente não conta. É o desenho do projeto, não leitura da fibra.
+    </p>
+  </div>
   {% endif %}
 
   {% if rota_tecnico.ceos %}

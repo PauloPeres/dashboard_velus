@@ -650,6 +650,30 @@ class OutageEvent(TenantModel):
     cause_waived_at = models.DateTimeField(null=True, blank=True)
     cause_waived_reason = models.CharField(max_length=255, blank=True, default="")
 
+    # -- Onde rompeu (30/09/2026, massiva 359) --------------------------------
+    # O ponto do rompimento, registrado por quem esteve no reparo. É o gabarito
+    # da rota do técnico: sem ele o sistema aponta trechos e nunca fica sabendo
+    # se acertou. Na 359 o ponto chegou por mensagem, e o backtest que ele
+    # permitiu mostrou o "comece por aqui" a 1.155 m do lugar certo — e o
+    # algoritmo que o substituiu, a 13 m.
+    break_latitude = models.FloatField(null=True, blank=True)
+    break_longitude = models.FloatField(null=True, blank=True)
+    break_recorded_at = models.DateTimeField(null=True, blank=True)
+    break_recorded_by = models.ForeignKey(
+        "tenancy.User",
+        on_delete=models.SET_NULL,
+        related_name="outage_breaks_recorded",
+        null=True,
+        blank=True,
+        help_text=_("Quem registrou. Gabarito sem autor não se audita."),
+    )
+    # A aferição feita no registro: o erro, em metros, de cada resposta que a
+    # tela deu, e a evidência que o algoritmo viu (quem caiu, quem estava
+    # online). Guardar a evidência é o que permite refazer a conta com um
+    # algoritmo novo sobre as mesmas massivas (`manage.py aferir_rompimentos`)
+    # — quem está online hoje não é quem estava online no dia.
+    break_evaluation = models.JSONField(default=dict, blank=True)
+
     # -- Reconhecimento (P8 do painel de TV) ----------------------------------
     # "Ciente, o Fulano está tratando". Converte o painel de gritador em
     # coordenador: quem chega na sala vê que alguém já pegou o evento, em vez de
@@ -755,6 +779,10 @@ class OutageEvent(TenantModel):
     @property
     def cause_waived(self) -> bool:
         return self.cause_waived_at is not None
+
+    @property
+    def has_break_location(self) -> bool:
+        return self.break_latitude is not None and self.break_longitude is not None
 
     @property
     def closed_manually(self) -> bool:

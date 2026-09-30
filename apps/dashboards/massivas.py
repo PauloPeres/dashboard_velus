@@ -186,6 +186,8 @@ def outage_row(
     reincidencia: dict[str, Any] | None = None,
     cabos: dict[str, Any] | None = None,
     rota_tecnico: dict[str, Any] | None = None,
+    padrao_pon: dict[str, Any] | None = None,
+    rompimento: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Uma massiva pronta pro template, com escopo e fração já costurados.
 
@@ -286,6 +288,11 @@ def outage_row(
         # o grafo da planta custa ~2 s, e quem chama decide se paga esse preço —
         # a lista de massivas abertas não paga, o detalhe paga.
         "rota_tecnico": rota_tecnico,
+        # O padrão por PON (30/09/2026): "corte de tronco: 42 PONs inteiras".
+        # Diz o tipo do problema antes de a rota dizer o lugar.
+        "padrao_pon": padrao_pon or {"tipo": ""},
+        # O rompimento registrado e a aferição das respostas contra ele.
+        "rompimento": rompimento,
         # Causa confirmada (R9) e manutenção programada (R10). A causa NÃO
         # substitui o veredito na tela: é a divergência entre os dois que mede
         # o quanto o palpite automático acerta.
@@ -336,6 +343,8 @@ def _duracao_min(outage: OutageEvent) -> int | None:
 _CAMPOS_DE_QUEDA_NO_MAPA = (
     "id", "login", "dropped_at", "restored_at", "reason", "cto_external_id",
     "latitude", "longitude", "monthly_amount",
+    # A PON e a OLT de cada queda: insumo do padrão por PON (corte de tronco).
+    "pon_external_id", "transmitter_external_id",
 )
 
 
@@ -428,6 +437,8 @@ def compute_massivas_agora(
             vizinhanca=vizinhancas.get(o.pk),
             reincidencia=reincidencias.get(o.pk),
             cabos=cabos_por_massiva.get(o.pk),
+            # Uma consulta agregada por massiva aberta — e abertas são poucas.
+            padrao_pon=compute_padrao_pon(org, quedas_por_massiva.get(o.pk, [])),
         )
         for o in abertas
     ]
@@ -1080,6 +1091,11 @@ def compute_mensagem_tecnico(
 
     minutos = int((now - linha["started_at"]).total_seconds() // 60)
     partes.append(f"*MASSIVA* · {linha['ainda_fora']} clientes fora agora")
+    # O tipo do problema vem logo na segunda linha: "corte de tronco" manda
+    # procurar cabo, "OLT inteira" manda olhar o POP — antes de qualquer mapa.
+    padrao = linha.get("padrao_pon") or {}
+    if padrao.get("tipo"):
+        partes.append(f"*{padrao['rotulo']}*")
 
     # "Comece por aqui" vem ANTES de tudo (C7). O técnico lê a primeira linha no
     # celular, dentro do carro — se o ponto de partida estiver no meio do texto,
@@ -1097,8 +1113,9 @@ def compute_mensagem_tecnico(
         if abaixo:
             partes.append(
                 f"Abaixo dela: {abaixo['fora']} caixa(s) fora e "
-                f"{abaixo['no_ar']} no ar"
+                f"{abaixo['no_ar']} com cliente online"
             )
+        hipoteses = rota.get("hipoteses") or []
         if rota.get("trecho"):
             t = rota["trecho"]
             metros = f" (~{t['metros']} m de cabo)" if t.get("metros") else ""
@@ -1108,8 +1125,31 @@ def compute_mensagem_tecnico(
             )
             if t.get("cabo"):
                 partes.append(f"pelo cabo {t['cabo']}")
+            # As outras hipóteses são para onde o técnico olha se a primeira
+            # não for — melhor na mensagem do que ele voltar a ligar.
+            outras = [h for h in hipoteses[1:] if h.get("acima")]
+            if outras:
+                partes.append(
+                    "Se não for aí: "
+                    + "; ".join(
+                        f"{h['cabo']} entre {h['acima']['label']} e {h['no']['label']}"
+                        for h in outras
+                    )
+                )
+        elif rota.get("partida_confirmada") and rota.get("partida_e_origem"):
+            partes.append("(tudo o que pende dele caiu — olhe o equipamento e a saída do POP)")
         elif rota.get("partida_confirmada") is False:
             partes.append("(ainda há cliente no ar abaixo dela — não dá para fechar o trecho)")
+            fracas = [h for h in hipoteses if h.get("acima")]
+            if fracas:
+                partes.append(
+                    "Hipóteses, nenhuma explica a massiva sozinha: "
+                    + "; ".join(
+                        f"{h['ordem']}) {h['cabo']} entre {h['acima']['label']} e "
+                        f"{h['no']['label']} ({h['fora_abaixo']} de {h['fora_total']} caixas)"
+                        for h in fracas
+                    )
+                )
         if rota.get("ctos_no_grafo", 0) < rota.get("ctos_afetadas", 0):
             partes.append(
                 f"(rota montada com {rota['ctos_no_grafo']} de "
@@ -1315,8 +1355,91 @@ def grafo_da_planta(org: Any) -> Any:
     return pacote
 
 
+def ctos_com_cliente_no_ar(org: Any, quedas: list[ConnectionDropEvent]) -> set[str]:
+    """As caixas com pelo menos um cliente online agora — fora os desta massiva.
+
+    É a evidência de "no ar" da rota do técnico. Caixa sem cliente online não
+    entra: na massiva 359, 109 das 114 caixas "no ar" abaixo do cabo rompido não
+    tinham cliente nenhum, e contá-las como prova de fibra boa jogou o "comece
+    por aqui" para o POP.
+
+    Os clientes da própria massiva saem da conta: depois do reparo eles voltam a
+    ficar online, e a caixa deles seria "fora" para a massiva e "no ar" para a
+    evidência ao mesmo tempo.
+    """
+    conexoes = {q.connection_id for q in quedas if q.connection_id}
+    online = Connection.objects.filter(
+        organization=org, status=Connection.Status.ONLINE
+    ).exclude(cto_external_id="")
+    if conexoes:
+        online = online.exclude(pk__in=conexoes)
+    return set(online.values_list("cto_external_id", flat=True).distinct())
+
+
+def quedas_da_massiva(org: Any, outage: OutageEvent) -> list[ConnectionDropEvent]:
+    """As quedas de uma massiva, com a conexão junto (a causa da ONU e a PON)."""
+    return [
+        a.drop_event
+        for a in OutageAffectedLogin.objects.filter(organization=org, outage=outage)
+        .select_related("drop_event", "drop_event__connection")
+        .order_by("dropped_at")
+        if a.drop_event
+    ]
+
+
+def _tracados_por_id(org: Any, ids: set[str]) -> dict[str, list[tuple[float, float]]]:
+    """Os traçados pedidos, numa consulta só, indexados pelo id do cabo."""
+    ids = {i for i in ids if i}
+    if not ids:
+        return {}
+    return {
+        g.external_id: [(float(lat), float(lon)) for lat, lon in g.points]
+        for g in NetworkElementGeometry.objects.filter(
+            organization=org, kind=NetworkElement.Kind.CABLE, external_id__in=ids
+        ).only("external_id", "points")
+        if len(g.points) >= 2
+    }
+
+
+def _pedaco_da_aresta(
+    pontos: list[tuple[float, float]] | None,
+    de: tuple[float, float],
+    para: tuple[float, float],
+) -> list[list[float]]:
+    """O pedaço do cabo entre as duas pontas de uma aresta do grafo.
+
+    O raio é o do POP (300 m), e não o de caixa: a aresta nasceu do grafo, então
+    as duas pontas já estão sobre este cabo — o raio só precisa cobrir o POP,
+    cuja coordenada é a do prédio. Sem pedaço, devolve vazio: linha cheia no
+    mapa é promessa de traçado, e a reta entre as pontas não é.
+    """
+    from apps.network.domain.geometry import sub_path_between
+    from apps.network.domain.plant_graph import TOLERANCIA_POP_METROS
+
+    if not pontos:
+        return []
+    pedaco = sub_path_between(pontos, de, para, radius_meters=TOLERANCIA_POP_METROS)
+    return [[lat, lon] for lat, lon in pedaco]
+
+
+def _no_da_rota(node: Any) -> dict[str, Any] | None:
+    if node is None:
+        return None
+    return {
+        "id": node.external_id,
+        "kind": node.kind,
+        "label": node.label,
+        "lat": node.lat,
+        "lon": node.lon,
+    }
+
+
 def compute_rota_do_tecnico(
-    org: Any, quedas: list[ConnectionDropEvent]
+    org: Any,
+    quedas: list[ConnectionDropEvent],
+    *,
+    ctos_no_ar: set[str] | None = None,
+    ctos_fora: set[str] | None = None,
 ) -> dict[str, Any]:
     """Por onde o técnico começa, em forma de dicionário para a tela.
 
@@ -1324,52 +1447,90 @@ def compute_rota_do_tecnico(
     o que permite à tela dizer "as 4 caixas desta massiva não estão no desenho
     do projeto" em vez de simplesmente não mostrar o bloco, que quem lê
     interpretaria como "não há nada a dizer".
+
+    `ctos_no_ar` e `ctos_fora` vêm de fora quando a evidência já foi
+    fotografada — é o caso da aferição, que refaz a conta com o que a massiva
+    viu, e não com quem está online hoje.
     """
     from apps.network.domain.plant_graph import CTO
-    from apps.network.domain.repair_route import calcular, ceos_da_rota
+    from apps.network.domain.repair_route import ALGORITMO, calcular, ceos_da_rota
 
-    ctos = {q.cto_external_id for q in quedas if q.cto_external_id}
+    ctos = (
+        set(ctos_fora)
+        if ctos_fora is not None
+        else {q.cto_external_id for q in quedas if q.cto_external_id}
+    )
     if not ctos:
         return {"tem": False, "ctos_afetadas": 0, "ctos_no_grafo": 0}
+    if ctos_no_ar is None:
+        ctos_no_ar = ctos_com_cliente_no_ar(org, quedas)
 
-    grafo, dist, anterior, conhecidas = grafo_da_planta(org)
+    grafo, dist, anterior, _todas = grafo_da_planta(org)
     rota = calcular(
         grafo,
         dist,
         anterior,
         ctos_afetadas=[(CTO, c) for c in ctos],
-        ctos_conhecidas=conhecidas,
+        ctos_conhecidas=[(CTO, c) for c in ctos | ctos_no_ar],
     )
-
-    def _no(node: Any) -> dict[str, Any] | None:
-        if node is None:
-            return None
-        return {
-            "id": node.external_id,
-            "kind": node.kind,
-            "label": node.label,
-            "lat": node.lat,
-            "lon": node.lon,
-        }
+    tracados = _tracados_por_id(org, {h.cabo_id for h in rota.hipoteses})
 
     trecho = None
     if rota.trecho_rompido:
         de, para = rota.trecho_rompido
+        cabo = rota.cabo_rompido
         trecho = {
-            "de": _no(de),
-            "para": _no(para),
-            "cabo": rota.cabo_rompido.cabo_nome if rota.cabo_rompido else "",
-            "metros": round(rota.cabo_rompido.metros) if rota.cabo_rompido else None,
+            "de": _no_da_rota(de),
+            "para": _no_da_rota(para),
+            "cabo": cabo.cabo_nome if cabo else "",
+            "cabo_id": cabo.cabo_id if cabo else "",
+            "metros": round(cabo.metros) if cabo else None,
+            # O pedaço do cabo entre as duas caixas: é nele que o X cai, e não
+            # no meio da reta, que atravessa quarteirão.
+            "pontos": _pedaco_da_aresta(
+                tracados.get(cabo.cabo_id) if cabo else None,
+                (de.lat, de.lon),
+                (para.lat, para.lon),
+            ),
         }
+
+    hipoteses = []
+    for ordem, h in enumerate(rota.hipoteses, start=1):
+        hipoteses.append({
+            "ordem": ordem,
+            "no": _no_da_rota(h.no),
+            "acima": _no_da_rota(h.acima),
+            "cabo": h.aresta.cabo_nome if h.aresta else "",
+            "cabo_id": h.cabo_id,
+            "metros": round(h.aresta.metros) if h.aresta else None,
+            "fora_abaixo": h.fora_abaixo,
+            "fora_total": h.fora_total,
+            "no_ar_abaixo": h.no_ar_abaixo,
+            "explica_pct": round(100 * h.explica),
+            "pureza_pct": round(100 * h.pureza),
+            "forte": h.forte,
+            "pontos": (
+                _pedaco_da_aresta(
+                    tracados.get(h.cabo_id), (h.acima.lat, h.acima.lon), (h.no.lat, h.no.lon)
+                )
+                if h.acima
+                else []
+            ),
+        })
 
     return {
         "tem": rota.completa,
-        "partida": _no(rota.partida),
+        "algoritmo": ALGORITMO,
+        "partida": _no_da_rota(rota.partida),
         "partida_confirmada": rota.partida_confirmada,
+        # A partida é a própria origem (o POP): tudo o que pende dele caiu, e
+        # não existe "entre" para marcar. A tela manda olhar o POP.
+        "partida_e_origem": rota.partida is not None and rota.partida.key not in anterior,
         "tem_origem_no_pop": rota.tem_origem_no_pop,
-        "primeira_cto": _no(rota.primeira_cto),
-        "caixa_anterior": _no(rota.caixa_anterior),
+        "primeira_cto": _no_da_rota(rota.primeira_cto),
+        "caixa_anterior": _no_da_rota(rota.caixa_anterior),
         "trecho": trecho,
+        "hipoteses": hipoteses,
         "cobertura_suficiente": rota.cobertura_suficiente,
         "ctos_afetadas": rota.ctos_afetadas,
         "ctos_no_grafo": rota.ctos_no_grafo,
@@ -1395,6 +1556,9 @@ def compute_rota_do_tecnico(
         ],
         "rota": [
             {"label": h.node.label, "kind": h.node.kind, "cabo": h.cabo_nome,
+             # O cabo exato por onde se chega: é por ele que o mapa desenha o
+             # caminho, e não pelo primeiro cabo candidato que servir.
+             "cabo_id": h.cabo_id,
              "metros": round(h.metros_do_pop),
              # As coordenadas viajam junto porque é com elas que o mapa desenha
              # o caminho e as setas — sem isso, a rota seria só uma lista de
@@ -1661,6 +1825,7 @@ def compute_mapa(
     vizinhas_intactas: list[dict[str, Any]] | None = None,
     cabos_candidatos: list[str] | None = None,
     rota_tecnico: dict[str, Any] | None = None,
+    rompimento: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Pontos e ligações do mapa: quem está fora, quem voltou, CTOs, POPs.
 
@@ -1758,6 +1923,34 @@ def compute_mapa(
         # Camadas próprias porque são as únicas que dizem "vá aqui" — o resto do
         # mapa descreve, estas mandam.
         **_camadas_da_rota(org, rota_tecnico, cabos_candidatos or []),
+        # As hipóteses de rompimento sobre o cabo (30/09/2026): a 1ª é o trecho
+        # de maior nota, as outras são para onde olhar se ela não for.
+        "hipoteses": [
+            {
+                "ordem": h["ordem"],
+                "nome": (
+                    f"{h['ordem']}ª hipótese · {h['cabo']} · explica {h['fora_abaixo']} "
+                    f"de {h['fora_total']} caixas fora"
+                ),
+                "pontos": h["pontos"],
+            }
+            for h in (rota_tecnico or {}).get("hipoteses") or []
+            if h.get("pontos")
+        ],
+        # O rompimento registrado por quem esteve lá: o gabarito, no mesmo mapa
+        # das respostas que ele afere.
+        "rompimento_registrado": (
+            [{
+                "lat": rompimento["lat"],
+                "lon": rompimento["lon"],
+                "label": (
+                    f"rompimento registrado · {rompimento['lat']:.6f}, "
+                    f"{rompimento['lon']:.6f}"
+                ),
+            }]
+            if rompimento
+            else []
+        ),
     }
 
 
@@ -1811,9 +2004,14 @@ def _camadas_da_rota(
 
     trecho = rota.get("trecho")
     if trecho and trecho.get("de") and trecho.get("para"):
+        from apps.network.domain.geometry import ponto_no_meio
+
         de = (trecho["de"]["lat"], trecho["de"]["lon"])
         para = (trecho["para"]["lat"], trecho["para"]["lon"])
-        ponto = _meio_do_cabo(org, de, para, cabos_candidatos)
+        # O pedaço do cabo exato do trecho, quando a rota o trouxe; os
+        # candidatos por proximidade ficam como reserva.
+        pedaco = [(lat, lon) for lat, lon in trecho.get("pontos") or []]
+        ponto = ponto_no_meio(pedaco) or _meio_do_cabo(org, de, para, cabos_candidatos)
         saida["rota_x"] = [{
             "lat": ponto[0], "lon": ponto[1],
             "label": (
@@ -1836,25 +2034,29 @@ def _caminho_da_rota(
 ) -> list[list[float]]:
     """A polilinha da rota, seguindo o cabo sempre que houver cabo.
 
-    Entre dois elementos vizinhos usa o pedaço real do traçado; onde o cabo não
-    liga os dois (ou não é candidato), usa a reta — e a reta aqui é honesta,
-    porque a legenda diz que a linha mostra **sentido**, não caminho de fibra.
+    Entre dois elementos vizinhos usa o pedaço real do traçado — primeiro o cabo
+    por onde o grafo chegou ao elemento, depois os candidatos; onde nenhum liga
+    os dois, usa a reta — e a reta aqui é honesta, porque a legenda diz que a
+    linha mostra **sentido**, não caminho de fibra.
     """
-    passos = rota.get("rota") or []
+    passos = [
+        p for p in rota.get("rota") or []
+        if p.get("lat") is not None and p.get("lon") is not None
+    ]
     if len(passos) < 2:
         return []
 
-    coordenadas = [
-        (p["lat"], p["lon"])
-        for p in passos
-        if p.get("lat") is not None and p.get("lon") is not None
-    ]
-    if len(coordenadas) < 2:
-        return []
-
+    tracados = _tracados_por_id(
+        org, {p.get("cabo_id") or "" for p in passos} | set(cabos_candidatos)
+    )
     caminho: list[list[float]] = []
-    for a, b in pairwise(coordenadas):
-        pedaco = _pedaco_de_cabo(org, a, b, cabos_candidatos)
+    for a, b in pairwise(passos):
+        pedaco = _pedaco_de_cabo(
+            tracados,
+            (a["lat"], a["lon"]),
+            (b["lat"], b["lon"]),
+            [b.get("cabo_id") or "", *cabos_candidatos],
+        )
         if not caminho:
             caminho.append([pedaco[0][0], pedaco[0][1]])
         caminho += [[lat, lon] for lat, lon in pedaco[1:]]
@@ -1862,25 +2064,21 @@ def _caminho_da_rota(
 
 
 def _pedaco_de_cabo(
-    org: Any,
+    tracados: dict[str, list[tuple[float, float]]],
     de: tuple[float, float],
     para: tuple[float, float],
-    cabos_candidatos: list[str],
+    ordem: list[str],
 ) -> list[tuple[float, float]]:
+    """O pedaço do primeiro cabo de `ordem` que serve às duas pontas; senão, a reta."""
     from apps.network.domain.geometry import sub_path_between
 
-    if cabos_candidatos:
-        for g in NetworkElementGeometry.objects.filter(
-            organization=org,
-            kind=NetworkElement.Kind.CABLE,
-            external_id__in=cabos_candidatos,
-        ).only("external_id", "points"):
-            pontos = [(float(lat), float(lon)) for lat, lon in g.points]
-            if len(pontos) < 2:
-                continue
-            pedaco = sub_path_between(pontos, de, para)
-            if pedaco:
-                return list(pedaco)
+    for cabo_id in ordem:
+        pontos = tracados.get(cabo_id)
+        if not pontos:
+            continue
+        pedaco = sub_path_between(pontos, de, para)
+        if pedaco:
+            return list(pedaco)
     return [de, para]
 
 
@@ -2444,6 +2642,16 @@ def compute_massiva_detalhe(
     quedas = [a.drop_event for a in afetados if a.drop_event]
     cabos = compute_cabos_candidatos(org, quedas)
     rota = compute_rota_do_tecnico(org, quedas)
+    rompimento = rompimento_registrado(outage)
+    # Os cabos das hipóteses entram no desenho como candidatos, na frente dos
+    # de proximidade: na 359 o 72FO rompido não estava entre os seis por
+    # proximidade e só aparecia como linha cinza de contexto.
+    cabos_no_mapa = list(
+        dict.fromkeys(
+            [h["cabo_id"] for h in rota.get("hipoteses") or [] if h.get("cabo_id")]
+            + list(cabos.get("ids_no_mapa", []))
+        )
+    )
     return {
         "causas_onu": compute_causas_onu(quedas),
         "motivos": compute_motivos(quedas),
@@ -2461,6 +2669,8 @@ def compute_massiva_detalhe(
             ).get(outage.pk),
             cabos=cabos,
             rota_tecnico=rota,
+            padrao_pon=compute_padrao_pon(org, quedas),
+            rompimento=rompimento,
         ),
         "rota_tecnico": rota,
         "linhas": linhas,
@@ -2488,8 +2698,9 @@ def compute_massiva_detalhe(
             org,
             quedas,
             vizinhas_intactas=compute_vizinhanca(org, quedas).get("intactas", []),
-            cabos_candidatos=cabos.get("ids_no_mapa", []),
+            cabos_candidatos=cabos_no_mapa,
             rota_tecnico=rota,
+            rompimento=rompimento,
         ),
     }
 
@@ -2694,3 +2905,275 @@ def compute_historico(
         )
         for o in encerradas
     ]
+
+
+# =============================================================================
+# Padrão por PON (30/09/2026) — a assinatura do corte de tronco
+# =============================================================================
+# Na massiva 359, 42 PONs da OLT 1 caíram inteiras e todas as outras ficaram
+# em 0%. O padrão diz o TIPO do problema antes de a rota dizer o lugar, e com
+# dado que não depende do desenho do projeto — ver `network/domain/pon_pattern`.
+
+
+def compute_padrao_pon(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str, Any]:
+    """Como as PONs caíram, com o rótulo pronto para a tela e para a mensagem.
+
+    "No ar" é quem está online agora nas PONs das mesmas OLTs, sem os clientes
+    da massiva: quem já voltou continua "fora" para ela, e contá-lo dos dois
+    lados diluiria a PON pela metade depois do reparo.
+    """
+    from django.db.models import Count
+
+    from apps.network.domain.pon_pattern import OLT_INTEIRA, PON_INTEIRA, TRONCO, classificar
+
+    fora: dict[str, int] = {}
+    for q in quedas:
+        if q.pon_external_id:
+            fora[q.pon_external_id] = fora.get(q.pon_external_id, 0) + 1
+    olts = {q.transmitter_external_id for q in quedas if q.transmitter_external_id}
+    if not fora or not olts:
+        return {"tipo": ""}
+
+    conexoes = {q.connection_id for q in quedas if q.connection_id}
+    online = Connection.objects.filter(
+        organization=org,
+        status=Connection.Status.ONLINE,
+        transmitter_external_id__in=olts,
+    ).exclude(pon_external_id="")
+    if conexoes:
+        online = online.exclude(pk__in=conexoes)
+    no_ar = dict(
+        online.order_by().values_list("pon_external_id").annotate(n=Count("id"))
+    )
+
+    padrao = classificar(fora, no_ar)
+    inteiras, parciais = len(padrao.pons_inteiras), len(padrao.pons_parciais)
+    if padrao.tipo == TRONCO:
+        sufixo = f" ({parciais} parcia{'is' if parciais != 1 else 'l'})" if parciais else ""
+        rotulo = f"Corte de tronco: {inteiras} PONs inteiras fora{sufixo}"
+        detalhe = (
+            f"{inteiras} PONs caíram inteiras e {padrao.pons_intactas} PONs das mesmas "
+            "OLTs seguem no ar. É a assinatura de um cabo com várias fibras de PON "
+            "rompido antes dos splitters: procure cabo, não equipamento."
+        )
+    elif padrao.tipo == OLT_INTEIRA:
+        rotulo = f"OLT inteira fora: {inteiras} PONs"
+        detalhe = (
+            "Todas as PONs com cliente das OLTs envolvidas caíram. Antes de procurar "
+            "cabo, olhe o equipamento e a energia do POP."
+        )
+    elif padrao.tipo == PON_INTEIRA:
+        rotulo = f"PON inteira fora (PON {padrao.pons_inteiras[0]})"
+        detalhe = (
+            "Uma PON caiu inteira e as vizinhas seguem no ar: a fibra dessa PON "
+            "antes do primeiro splitter, ou a porta da OLT."
+        )
+    else:
+        return {"tipo": ""}
+    return {
+        "tipo": padrao.tipo,
+        "rotulo": rotulo,
+        "detalhe": detalhe,
+        "pons_inteiras": list(padrao.pons_inteiras),
+        "pons_parciais": list(padrao.pons_parciais),
+        "pons_intactas": padrao.pons_intactas,
+    }
+
+
+# =============================================================================
+# Onde rompeu (30/09/2026) — o gabarito da rota do técnico
+# =============================================================================
+# Pedido do Paulo durante a massiva 359: "um campo de lat/long do rompimento,
+# preenchido pós massiva, para podermos ir melhorando o algoritmo". O ponto é o
+# gabarito; a aferição mede, contra ele, cada resposta que a tela deu.
+
+# Um trecho "acertou" quando passa a até 50 m do rompimento registrado: é a
+# precisão do próprio ponto (GPS de celular, alfinete no mapa) somada à do
+# desenho do projeto, que não é a fibra enterrada.
+RAIO_ACERTO_METROS = 50.0
+
+# Até onde a aferição procura o trecho certo no ranking. Abaixo disto "não
+# estava entre as 100 primeiras" já diz tudo o que importa.
+_HIPOTESES_AFERIDAS = 100
+
+# Um ponto a mais de 20 km de todo cliente da massiva não é o rompimento dela:
+# é latitude e longitude trocadas, ou o link de outra coisa.
+DISTANCIA_MAXIMA_DA_MASSIVA_KM = 20.0
+
+
+class PontoLongeDaMassivaError(ValueError):
+    """O ponto colado está longe demais de todo cliente da massiva."""
+
+    def __init__(self, km: float) -> None:
+        super().__init__(f"ponto a {km:.0f} km da massiva")
+        self.km = km
+
+
+def rompimento_registrado(outage: OutageEvent) -> dict[str, Any] | None:
+    """O rompimento registrado, pronto para a tela — None quando não há."""
+    lat, lon = outage.break_latitude, outage.break_longitude
+    if lat is None or lon is None:
+        return None
+    return {
+        "lat": lat,
+        "lon": lon,
+        "link": _ponto_no_mapa(lat, lon),
+        "registrado_em": outage.break_recorded_at,
+        "registrado_por": getattr(outage.break_recorded_by, "email", ""),
+        "afericao": outage.break_evaluation or {},
+    }
+
+
+def _distancia_da_hipotese(ponto: tuple[float, float], h: dict[str, Any]) -> float:
+    """Do ponto ao trecho da hipótese: pelo cabo quando há, pela reta quando não."""
+    from apps.network.domain.geometry import distance_to_path
+    from apps.network.domain.outage import haversine_meters
+
+    no = (h["no"]["lat"], h["no"]["lon"])
+    if h.get("pontos"):
+        return distance_to_path(ponto, [(lat, lon) for lat, lon in h["pontos"]])
+    if h.get("acima"):
+        return distance_to_path(ponto, [(h["acima"]["lat"], h["acima"]["lon"]), no])
+    return haversine_meters(ponto, no)
+
+
+def aferir_rompimento(
+    org: Any,
+    quedas: list[ConnectionDropEvent],
+    ponto: tuple[float, float],
+    *,
+    ctos_fora: set[str] | None = None,
+    ctos_no_ar: set[str] | None = None,
+) -> dict[str, Any]:
+    """Mede cada resposta da tela contra o rompimento registrado.
+
+    Três respostas, porque a tela dá três: o trecho da 1ª hipótese (onde
+    procurar), a caixa "comece por aqui" (onde parar o carro) e o cabo candidato
+    por proximidade (o que a tela mostrava antes da rota). E uma quarta medida,
+    a que diz se o algoritmo está perto de acertar quando erra: em que lugar do
+    ranking estava o trecho certo.
+
+    A evidência vai junto no resultado. É ela que permite refazer a conta com um
+    algoritmo novo sobre as mesmas massivas — quem está online hoje não é quem
+    estava online no dia.
+    """
+    from apps.network.domain.geometry import distance_to_path, ponto_no_meio
+    from apps.network.domain.outage import haversine_meters
+    from apps.network.domain.plant_graph import CTO
+    from apps.network.domain.repair_route import ALGORITMO, ranquear_hipoteses
+
+    fora = (
+        set(ctos_fora)
+        if ctos_fora is not None
+        else {q.cto_external_id for q in quedas if q.cto_external_id}
+    )
+    no_ar = set(ctos_no_ar) if ctos_no_ar is not None else ctos_com_cliente_no_ar(org, quedas)
+    rota = compute_rota_do_tecnico(org, quedas, ctos_no_ar=no_ar, ctos_fora=fora)
+
+    erros: dict[str, int] = {}
+    hipoteses = rota.get("hipoteses") or []
+    if hipoteses:
+        erros["hipotese_1"] = round(_distancia_da_hipotese(ponto, hipoteses[0]))
+    trecho = rota.get("trecho")
+    if trecho and trecho.get("pontos"):
+        pedaco = [(lat, lon) for lat, lon in trecho["pontos"]]
+        erros["trecho"] = round(distance_to_path(ponto, pedaco))
+        meio = ponto_no_meio(pedaco)
+        if meio:
+            erros["x"] = round(haversine_meters(ponto, meio))
+    partida = rota.get("partida")
+    if partida:
+        erros["partida"] = round(haversine_meters(ponto, (partida["lat"], partida["lon"])))
+    principal = next(iter(compute_cabos_candidatos(org, quedas).get("cabos") or []), None)
+    if principal:
+        pontos = _tracados_por_id(org, {principal["external_id"]}).get(principal["external_id"])
+        if pontos:
+            erros["cabo_candidato"] = round(distance_to_path(ponto, pontos))
+
+    posicao = None
+    avaliadas = 0
+    if fora:
+        grafo, dist, anterior, _todas = grafo_da_planta(org)
+        ranking = ranquear_hipoteses(
+            grafo, dist, anterior,
+            fora={(CTO, c) for c in fora},
+            no_ar={(CTO, c) for c in no_ar},
+        )[:_HIPOTESES_AFERIDAS]
+        avaliadas = len(ranking)
+        tracados = _tracados_por_id(org, {h.cabo_id for h in ranking})
+        for i, h in enumerate(ranking, start=1):
+            if h.acima is None:
+                distancia = haversine_meters(ponto, (h.no.lat, h.no.lon))
+            else:
+                de, para = (h.acima.lat, h.acima.lon), (h.no.lat, h.no.lon)
+                pedaco_h = _pedaco_da_aresta(tracados.get(h.cabo_id), de, para)
+                distancia = distance_to_path(
+                    ponto, [(lat, lon) for lat, lon in pedaco_h] if pedaco_h else [de, para]
+                )
+            if distancia <= RAIO_ACERTO_METROS:
+                posicao = i
+                break
+
+    return {
+        "algoritmo": ALGORITMO,
+        "avaliado_em": timezone.now().isoformat(),
+        "ponto": [ponto[0], ponto[1]],
+        "erros_m": erros,
+        "raio_acerto_m": int(RAIO_ACERTO_METROS),
+        "acertou": "hipotese_1" in erros and erros["hipotese_1"] <= RAIO_ACERTO_METROS,
+        "posicao_do_trecho_certo": posicao,
+        "hipoteses_avaliadas": avaliadas,
+        "hipoteses": [
+            {
+                "ordem": h["ordem"],
+                "cabo": h["cabo"],
+                "de": (h["acima"] or {}).get("label", ""),
+                "para": h["no"]["label"],
+                "erro_m": round(_distancia_da_hipotese(ponto, h)),
+            }
+            for h in hipoteses
+        ],
+        "evidencia": {"fora": sorted(fora), "no_ar": sorted(no_ar)},
+    }
+
+
+def registrar_rompimento(
+    org: Any, outage: OutageEvent, ponto: tuple[float, float], usuario: Any
+) -> dict[str, Any]:
+    """Grava o rompimento e a aferição dele.
+
+    Registrar de novo sobrescreve: quem corrige o ponto sabe mais do que quem
+    registrou primeiro, e o autor e a hora passam a ser os da correção.
+
+    Levanta `PontoLongeDaMassivaError` quando o ponto está a mais de
+    `DISTANCIA_MAXIMA_DA_MASSIVA_KM` de todo cliente da massiva.
+    """
+    from apps.network.domain.outage import haversine_meters
+
+    quedas = quedas_da_massiva(org, outage)
+    posicoes = [
+        (float(q.latitude), float(q.longitude))
+        for q in quedas
+        if q.latitude is not None and q.longitude is not None
+    ]
+    if posicoes:
+        km = min(haversine_meters(ponto, p) for p in posicoes) / 1000
+        if km > DISTANCIA_MAXIMA_DA_MASSIVA_KM:
+            raise PontoLongeDaMassivaError(km)
+
+    afericao = aferir_rompimento(org, quedas, ponto)
+    outage.break_latitude, outage.break_longitude = ponto
+    outage.break_recorded_by = usuario
+    outage.break_recorded_at = timezone.now()
+    outage.break_evaluation = afericao
+    outage.save(
+        update_fields=[
+            "break_latitude",
+            "break_longitude",
+            "break_recorded_by",
+            "break_recorded_at",
+            "break_evaluation",
+            "updated_at",
+        ]
+    )
+    return afericao

@@ -17,10 +17,12 @@ cadastrado por perto, e para elas a resposta certa é dizer que não há candida
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from math import cos, radians
+from urllib.parse import unquote
 
 from .outage import haversine_meters
 
@@ -297,3 +299,61 @@ def sub_path_between(
         return []
     inicio, fim = (i, j) if i < j else (j, i)
     return list(path[inicio : fim + 1])
+
+
+def ponto_no_meio(path: Sequence[tuple[float, float]]) -> tuple[float, float] | None:
+    """O ponto a meio caminho do traçado, medido pelo comprimento.
+
+    Não é o vértice do meio: num pedaço de cabo com vértices amontoados de um
+    lado (uma esquina desenhada com cinco pontos), o vértice do meio cai na
+    esquina, longe da metade do caminho que o técnico vai andar.
+    """
+    if not path:
+        return None
+    if len(path) == 1:
+        return path[0]
+    trechos = [haversine_meters(a, b) for a, b in pairwise(path)]
+    falta = sum(trechos) / 2
+    for (a, b), comprimento in zip(pairwise(path), trechos, strict=True):
+        if comprimento > 0 and falta <= comprimento:
+            t = falta / comprimento
+            return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+        falta -= comprimento
+    return path[-1]
+
+
+# Formas em que uma coordenada chega colada: do mais preciso para o mais solto.
+# O `!3d…!4d…` é o alfinete de um lugar no Google Maps; o `@lat,lon` é o centro
+# da tela (menos preciso: é onde a pessoa estava olhando); `q=`/`query=` é o
+# link de busca; e por fim "lat, long" solto, digitado ou copiado do app.
+_PADROES_DE_COORDENADA = (
+    re.compile(r"!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)"),
+    re.compile(
+        r"[?&](?:q|query|ll|destination|center)=(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)"
+    ),
+    re.compile(r"@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)"),
+    re.compile(r"(-?\d{1,2}\.\d+)\s*[,;\s]\s*(-?\d{1,3}\.\d+)"),
+)
+
+
+def coordenadas_do_texto(texto: str) -> tuple[float, float] | None:
+    """Lat/long de um link do Google Maps ou de "lat, long" colado.
+
+    Pedido de 30/09/2026: o local do rompimento da massiva 359 chegou como link
+    do Google Maps numa mensagem. Quem registra o rompimento cola o que tem na
+    mão — obrigar a separar latitude e longitude em dois campos é o tipo de
+    atrito que faz o campo ficar vazio.
+
+    Link encurtado (`maps.app.goo.gl/...`) não traz a coordenada no texto e
+    devolve None: resolvê-lo exigiria chamar o Google, e a tela pede o link
+    completo ou o par de números.
+    """
+    bruto = unquote((texto or "").strip())
+    for padrao in _PADROES_DE_COORDENADA:
+        achado = padrao.search(bruto)
+        if not achado:
+            continue
+        lat, lon = float(achado.group(1)), float(achado.group(2))
+        if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat, lon) != (0.0, 0.0):
+            return (lat, lon)
+    return None

@@ -89,6 +89,13 @@ urlpatterns = [
         views.massiva_causa,
         name="massiva_causa",
     ),
+    # Onde rompeu (30/09/2026): o gabarito da rota do técnico. Mesma permissão
+    # da aba — quem esteve no reparo é quem sabe o ponto.
+    path(
+        "operations/massivas/<int:outage_id>/rompimento/",
+        views.massiva_rompimento,
+        name="massiva_rompimento",
+    ),
     # "Ciente, estou tratando" (P8 do painel de TV) — chega do celular de quem
     # está na rua tanto quanto da aba.
     path(

@@ -30,7 +30,12 @@ Espera `sem_causa` (dict de compute_sem_causa).
     palpite automático vale — e o histórico que um modelo pode aprender.
   </p>
 
-  {% if request.GET.erro %}
+  {% if request.GET.erro == "local" %}
+  <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3">
+    Não achei latitude e longitude no local do rompimento. Cole o link completo do Google
+    Maps ou os dois números (-23.496056, -47.510700) — ou deixe o campo vazio. Nada foi gravado.
+  </p>
+  {% elif request.GET.erro %}
   <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3">
     Escolha uma causa da lista. O campo é rótulo de treino: valor fora do vocabulário
     contamina a série e por isso não é aceito.
@@ -72,6 +77,14 @@ Espera `sem_causa` (dict de compute_sem_causa).
 
         <input type="text" name="cause_note" maxlength="2000" placeholder="observação (opcional)"
                class="text-xs border border-gray-300 rounded px-2 py-1 flex-1 min-w-[12rem]">
+
+        {% comment %}
+        Onde rompeu (30/09/2026): opcional, e aceita o que a pessoa tem na mão —
+        link do Google Maps ou "lat, long". É o gabarito da rota do técnico.
+        {% endcomment %}
+        <input type="text" name="local" maxlength="2000"
+               placeholder="onde rompeu: link do Maps ou lat, long (opcional)"
+               class="text-xs border border-gray-300 rounded px-2 py-1 flex-1 min-w-[14rem]">
 
         <button type="submit"
                 class="text-xs bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700">

@@ -1,0 +1,118 @@
+{% load humanize %}
+{% comment %}
+Onde rompeu (30/09/2026) — o gabarito da rota do técnico.
+
+Pedido do Paulo durante a massiva 359: o ponto do rompimento chegou por
+mensagem, e só com ele deu para saber que o "comece por aqui" estava a 1.155 m
+do lugar certo. Aqui ele vira campo: quem esteve no reparo cola o link do mapa,
+e o sistema mede a distância de cada resposta que deu. Com o tempo, é essa
+série que diz se o algoritmo melhora ou piora.
+
+Fica aberto também com a massiva em curso — na 359 o ponto era sabido antes de
+ela encerrar.
+
+Espera `outage` (linha de outage_row, com `rompimento`) e `request`.
+{% endcomment %}
+<div id="rompimento" class="bg-white rounded-xl shadow-sm border {% if outage.rompimento %}border-cyan-200{% else %}border-gray-200{% endif %} p-5 mb-4">
+  <div class="flex flex-wrap items-baseline gap-2 mb-2">
+    <h2 class="text-sm font-semibold text-gray-700">Onde rompeu</h2>
+    <span class="text-[10px] uppercase tracking-wider text-gray-400">
+      o gabarito — é com ele que o sistema fica sabendo se acertou
+    </span>
+  </div>
+
+  {% if request.GET.rompimento == "invalido" %}
+  <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3 leading-relaxed">
+    Não achei latitude e longitude no que foi colado. Cole o link completo do Google Maps
+    (o encurtado, maps.app.goo.gl, não traz a coordenada) ou os dois números, por exemplo
+    -23.496056, -47.510700. Nada foi gravado.
+  </p>
+  {% elif request.GET.rompimento == "longe" %}
+  <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3 leading-relaxed">
+    O ponto está a {{ request.GET.km|default:"mais de 20" }} km de todos os clientes desta massiva —
+    confira se latitude e longitude não estão trocadas. O ponto não foi gravado.
+  </p>
+  {% endif %}
+
+  {% with r=outage.rompimento %}
+  {% if r %}
+  <p class="text-sm text-gray-800">
+    <span class="text-cyan-600 font-semibold">&#10005;</span>
+    <a href="{{ r.link }}" target="_blank" rel="noopener"
+       class="text-blue-600 hover:underline tabular-nums">{{ r.lat|floatformat:6 }}, {{ r.lon|floatformat:6 }}</a>
+    <span class="text-xs text-gray-400">
+      · registrado{% if r.registrado_por %} por {{ r.registrado_por }}{% endif %}{% if r.registrado_em %} às {{ r.registrado_em|date:"d/m H:i" }}{% endif %}
+    </span>
+  </p>
+
+  {% with a=r.afericao %}
+  {% if a.erros_m %}
+  {% comment %}
+  Uma caixa por resposta da tela, com a distância até o rompimento. A 1ª
+  hipótese ganha cor porque é ela que o algoritmo afirma; as outras são
+  medidas de contexto.
+  {% endcomment %}
+  <div class="grid sm:grid-cols-4 gap-3 mt-3 text-sm">
+    {% if "hipotese_1" in a.erros_m %}
+    <div class="rounded-lg px-3 py-2 {% if a.acertou %}bg-emerald-50{% else %}bg-rose-50{% endif %}">
+      <p class="text-[10px] uppercase tracking-wider text-gray-400">Trecho da 1ª hipótese</p>
+      <p class="font-semibold text-gray-900 tabular-nums">{{ a.erros_m.hipotese_1|intcomma }} m</p>
+      <p class="text-xs {% if a.acertou %}text-emerald-700{% else %}text-rose-700{% endif %}">
+        {% if a.acertou %}acertou (até {{ a.raio_acerto_m }} m){% else %}errou o trecho{% endif %}
+      </p>
+    </div>
+    {% endif %}
+    {% if "partida" in a.erros_m %}
+    <div class="rounded-lg px-3 py-2 bg-gray-50">
+      <p class="text-[10px] uppercase tracking-wider text-gray-400">"Comece por aqui"</p>
+      <p class="font-semibold text-gray-900 tabular-nums">{{ a.erros_m.partida|intcomma }} m</p>
+      <p class="text-xs text-gray-500">da caixa até o rompimento</p>
+    </div>
+    {% endif %}
+    {% if "x" in a.erros_m %}
+    <div class="rounded-lg px-3 py-2 bg-gray-50">
+      <p class="text-[10px] uppercase tracking-wider text-gray-400">X do mapa</p>
+      <p class="font-semibold text-gray-900 tabular-nums">{{ a.erros_m.x|intcomma }} m</p>
+      <p class="text-xs text-gray-500">o meio do trecho</p>
+    </div>
+    {% endif %}
+    {% if "cabo_candidato" in a.erros_m %}
+    <div class="rounded-lg px-3 py-2 bg-gray-50">
+      <p class="text-[10px] uppercase tracking-wider text-gray-400">Cabo candidato (proximidade)</p>
+      <p class="font-semibold text-gray-900 tabular-nums">{{ a.erros_m.cabo_candidato|intcomma }} m</p>
+      <p class="text-xs text-gray-500">o 1º da lista de cabos</p>
+    </div>
+    {% endif %}
+  </div>
+  <p class="text-xs text-gray-500 mt-2 leading-relaxed">
+    {% if a.posicao_do_trecho_certo %}
+      O trecho certo era a <strong>{{ a.posicao_do_trecho_certo }}ª</strong> hipótese do ranking completo.
+    {% elif a.hipoteses_avaliadas %}
+      O trecho certo não estava entre as {{ a.hipoteses_avaliadas }} primeiras hipóteses do ranking.
+    {% endif %}
+    <span class="text-gray-400">Regra {{ a.algoritmo }}.</span>
+  </p>
+  {% endif %}
+  {% endwith %}
+  {% endif %}
+  {% endwith %}
+
+  <form method="post" action="{% url 'dashboards:massiva_rompimento' outage.id %}"
+        class="mt-3 flex flex-wrap items-center gap-2">
+    {% csrf_token %}
+    <input type="text" name="local" required maxlength="2000"
+           placeholder="Cole o link do Google Maps ou -23.496056, -47.510700"
+           class="text-xs border border-gray-300 rounded px-2 py-1.5 flex-1 min-w-[16rem]">
+    <button type="submit"
+            class="text-xs bg-cyan-600 text-white px-3 py-1.5 rounded hover:bg-cyan-700">
+      {% if outage.rompimento %}Corrigir o ponto{% else %}Registrar{% endif %}
+    </button>
+  </form>
+  {% if not outage.rompimento %}
+  <p class="text-xs text-gray-400 mt-2 leading-relaxed">
+    Quem esteve no reparo sabe o ponto. Registrado, o sistema mede a distância de cada
+    resposta que deu — trecho, "comece por aqui", cabo candidato — e guarda a medida para
+    calibrar o algoritmo.
+  </p>
+  {% endif %}
+</div>
