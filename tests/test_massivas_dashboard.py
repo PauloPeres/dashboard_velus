@@ -432,7 +432,7 @@ class TestRegra1EscopoNuncaSozinho:
         assert "continuam no ar" in html
 
     @pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
-    def test_trecho_suspeito_ganha_o_destaque_visual(
+    def test_sem_rota_o_trecho_do_detector_aparece_com_o_nome_dele(
         self, client: Any, user_a: User, organization_a: Organization
     ) -> None:
         _outage(
@@ -443,12 +443,14 @@ class TestRegra1EscopoNuncaSozinho:
         )
         client.force_login(user_a)
         html = client.get(URL).content.decode()
-        destaque = html.index("trecho B47 - SP11")
-        elemento = html.index("OLT 1 — 2% dos logins da OLT")
-        # O trecho vem antes e no bloco de destaque; o elemento fica de contexto.
-        assert destaque < elemento
-        assert "Trecho suspeito" in html
-        assert 'text-lg font-bold text-gray-900 leading-snug">trecho B47' in html
+        # Regra refeita a pedido do NOC (01/10/2026): o título do card é o
+        # elemento com a fração, e o "onde" é a rota. Na massiva 359 o trecho do
+        # detector como título dava um "onde" diferente do da rota. Sem rota —
+        # é o caso aqui, sem planta —, o trecho do detector é o único "onde" que
+        # existe, e aparece com o nome do que é, em destaque.
+        assert "OLT 1 — 2% dos logins da OLT" in html
+        assert "Trecho suspeito (detector)" in html
+        assert 'text-base font-bold text-gray-900 leading-snug">trecho B47' in html
 
 
 # =============================================================================
@@ -1300,7 +1302,10 @@ class TestVizinhanca:
                 login=drop.login, dropped_at=drop.dropped_at,
             )
         client.force_login(user_a)
-        html = client.get(URL).content.decode()
+        # Desde 01/10/2026 (pedido do NOC) a vizinhança mora no detalhe, em
+        # "Como o sistema chegou aqui" — o card da lista ficou só com o que
+        # decide para onde mandar o técnico.
+        html = client.get(f"{URL}{outage.pk}/").content.decode()
         assert "Quem não caiu no mesmo caminho" in html
         assert "B31-SP01" in html
         assert "0/3 fora" in html
@@ -1554,9 +1559,10 @@ class TestReincidencia:
             organization_a, element_id="1", ended=True,
             inicio_min_atras=60 * 24 * 2,
         )
-        _outage(organization_a, element_id="1", affected=5)
+        aberta = _outage(organization_a, element_id="1", affected=5)
         client.force_login(user_a)
-        html = client.get(URL).content.decode()
+        # No detalhe desde 01/10/2026 (ver test_card_mostra_a_vizinhanca).
+        html = client.get(f"{URL}{aberta.pk}/").content.decode()
         assert "Reincidência do trecho" in html
         assert "2ª massiva deste elemento" in html
 
@@ -1685,7 +1691,8 @@ class TestCabosCandidatos:
                 login=drop.login, dropped_at=drop.dropped_at,
             )
         client.force_login(user_a)
-        html = client.get(URL).content.decode()
+        # No detalhe desde 01/10/2026 (ver test_card_mostra_a_vizinhanca).
+        html = client.get(f"{URL}{outage.pk}/").content.decode()
         assert "Cabos candidatos" in html
         assert "FIBRA AS80 12FO BACKBONE 18" in html
         # A promessa que a tela nunca faz.

@@ -115,6 +115,7 @@ from apps.shared.context import set_current_organization
 from .exports.atendimento_xlsx import MENSAGEM_PADRAO
 from .massivas import (
     BUCKET_MINUTES,
+    CAUSE_TAGS,
     SIGNAL_DEGRADATION_DB,
     TIMELINE_HOURS,
     PontoLongeDaMassivaError,
@@ -3403,6 +3404,19 @@ def _massivas_contexto_agora(
     }
 
 
+def _resumo_da_linha_do_tempo(timeline: list[dict[str, Any]]) -> str:
+    """Uma linha para o bloco recolhido: quantas quedas e quando foi o pico."""
+    total = sum(b["fora"] + b["voltou"] for b in timeline)
+    if not total:
+        return "nenhuma queda na janela"
+    pico = max(timeline, key=lambda b: b["fora"] + b["voltou"])
+    fora = sum(b["fora"] for b in timeline)
+    return (
+        f"{total} queda(s) na janela · pico de {pico['fora'] + pico['voltou']} às "
+        f"{pico['label']} · {fora} ainda fora"
+    )
+
+
 def _massivas_mapa_nota(dados: dict[str, Any]) -> str:
     """Legenda do mapa da tela geral — o que está nele e o que ficou de fora."""
     partes = [
@@ -3448,6 +3462,9 @@ def massivas(request: HttpRequest) -> HttpResponse:
             "mapa_titulo": "Onde estão as massivas abertas — e quem já voltou",
             "mapa_nota": _massivas_mapa_nota(dados),
             "timeline_chart_json": charts.outage_timeline(dados["timeline"]),
+            # A linha do tempo virou bloco recolhido (pedido do NOC, 01/10/2026);
+            # o resumo é o que se lê sem abrir.
+            "timeline_resumo": _resumo_da_linha_do_tempo(dados["timeline"]),
             "timeline_horas": TIMELINE_HOURS,
             "bucket_minutos": BUCKET_MINUTES,
             # Carimbo próprio do que NÃO acompanha o auto-refresh: mapa e linha
@@ -3590,13 +3607,26 @@ def massiva_causa(request: HttpRequest, outage_id: int) -> HttpResponse:
     outage = get_object_or_404(
         OutageEvent.objects.filter(organization=org), pk=outage_id
     )
-    destino = f"{reverse('dashboards:massivas')}#causa"
+    # De onde veio o formulário: a fila da lista (default) ou o bloco "Depois
+    # do reparo" do detalhe, que manda `next`. A fila mora num bloco recolhido
+    # (pedido do NOC, 01/10/2026) — `fila=1` reabre ela para o próximo registro.
+    proximo = request.POST.get("next") or ""
+    if proximo.startswith("/") and not proximo.startswith("//"):
+        base, ancora = proximo.split("#", 1)[0], "#rompimento"
+    else:
+        base, ancora = f"{reverse('dashboards:massivas')}?fila=1", "#causa"
+
+    def _destino(erro: str = "") -> str:
+        if not erro:
+            return f"{base}{ancora}"
+        juncao = "&" if "?" in base else "?"
+        return f"{base}{juncao}erro={erro}{ancora}"
 
     causa = request.POST.get("confirmed_cause", "")
     if causa not in OutageEvent.Cause.values:
         # Causa fora do vocabulário não vira "outro" nem vazio silencioso: o
         # campo é rótulo de treino, e um valor inventado contamina a série.
-        return HttpResponseRedirect(f"{destino}&erro=1" if "?" in destino else f"{destino}?erro=1")
+        return HttpResponseRedirect(_destino("1"))
 
     # O local do rompimento é opcional aqui, e é conferido ANTES de gravar a
     # causa: se o ponto colado não serve, nada é gravado e a pessoa corrige os
@@ -3604,7 +3634,7 @@ def massiva_causa(request: HttpRequest, outage_id: int) -> HttpResponse:
     local = (request.POST.get("local") or "").strip()
     ponto = coordenadas_do_texto(local) if local else None
     if local and ponto is None:
-        return HttpResponseRedirect(f"{reverse('dashboards:massivas')}?erro=local#causa")
+        return HttpResponseRedirect(_destino("local"))
 
     outage.confirmed_cause = causa
     outage.cause_tags = normalize_tags(request.POST.getlist("cause_tags"))
@@ -3631,7 +3661,7 @@ def massiva_causa(request: HttpRequest, outage_id: int) -> HttpResponse:
                 reverse("dashboards:massiva_detalhe", args=[outage.pk])
                 + "?rompimento=longe#rompimento"
             )
-    return HttpResponseRedirect(destino)
+    return HttpResponseRedirect(_destino())
 
 
 @login_required
@@ -3797,5 +3827,9 @@ def massiva_detalhe(request: HttpRequest, outage_id: int) -> HttpResponse:
             # "mando viatura ou é falta de luz no bairro?".
             "causas_onu": detalhe["causas_onu"],
             "motivos": detalhe["motivos"],
+            # O formulário de causa do bloco "Depois do reparo" — o mesmo
+            # vocabulário fechado da fila da lista.
+            "causas_opcoes": OutageEvent.Cause.choices,
+            "tags_opcoes": CAUSE_TAGS,
         },
     )

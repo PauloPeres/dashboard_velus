@@ -1,0 +1,143 @@
+{% load humanize %}
+{% comment %}
+O card de uma massiva — o mesmo na lista e no topo do detalhe.
+
+Refeito a pedido do NOC (01/10/2026, "tem muita informação"). A ordem é a das
+perguntas de quem está no meio do evento: que tipo de problema é, para onde
+mandar o técnico, quanto já voltou, quem está tratando. Vizinhança,
+reincidência, cabos por proximidade, causa da ONU e motivo do RADIUS continuam
+existindo — no detalhe, em blocos recolhidos.
+
+O título deixou de ser o trecho do detector: na massiva 359 ele dizia
+"A24 → A49 (+205 caixas)" enquanto a rota dizia 72FO 5 / A16-SP01, e a tela
+dava dois "onde" diferentes. Quando há rota, ela é a resposta; o trecho do
+detector só aparece quando não há rota nenhuma.
+
+Espera `l` (linha de outage_row) e, no detalhe, `detalhe=True`.
+{% endcomment %}
+<div class="bg-white rounded-xl shadow-sm border {% if l.is_open %}border-2 border-red-300{% else %}border-gray-200{% endif %} p-5 mb-4">
+  <div class="flex flex-col lg:flex-row gap-6">
+    <div class="flex-1 min-w-0">
+      <p class="text-[11px] uppercase tracking-wider text-gray-400 font-semibold">
+        {{ l.elemento_frase }}{% if l.ressalva_escopo %} {% include "dashboards/_ajuda.html" with texto=l.ressalva_escopo %}{% endif %}{% if l.referencia %} · {{ l.referencia }}{% endif %} ·
+        {% if l.is_open %}
+        <span class="text-red-600">aberta há {{ l.started_at|timesince }}</span> ({{ l.started_at|date:"H:i" }})
+        {% else %}
+        {{ l.started_at|date:"d/m H:i" }} → {{ l.ended_at|date:"H:i" }} ({{ l.duracao_min|intcomma }} min)
+        {% endif %}
+      </p>
+
+      {% if l.padrao_pon.tipo %}
+      <h2 class="mt-1 text-xl font-bold text-violet-900 leading-snug">{{ l.padrao_pon.rotulo }}</h2>
+      <p class="text-sm text-violet-700">
+        {{ l.padrao_pon.resumo }} {% include "dashboards/_ajuda.html" with texto=l.padrao_pon.detalhe %}
+      </p>
+      {% elif l.veredito.veredito == "energia" or l.veredito.veredito == "fibra" or l.veredito.veredito == "misto" %}
+      <h2 class="mt-1 text-xl font-bold leading-snug
+                 {% if l.veredito.veredito == 'energia' %}text-amber-900{% elif l.veredito.veredito == 'fibra' %}text-red-900{% else %}text-gray-900{% endif %}">
+        Causa provável: {{ l.veredito.rotulo }}
+      </h2>
+      {% comment %}A base anda junto com o veredito — nunca o rótulo sozinho (R7).{% endcomment %}
+      <p class="text-sm text-gray-600">
+        {{ l.veredito.base }}. Causa conhecida em {{ l.veredito.conhecidos }} de {{ l.veredito.total }} quedas ({{ l.veredito.cobertura_pct }}%).
+      </p>
+      {% endif %}
+
+      {% if l.is_expected %}
+      <p class="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded px-2 py-1 mt-2">
+        Esperada: dentro de manutenção programada{% if l.maintenance_label %} — {{ l.maintenance_label }}{% endif %}.
+      </p>
+      {% endif %}
+
+      {% if l.rota_tecnico.partida %}
+      {% include "dashboards/_massivas_rota_resumo.html" with r=l.rota_tecnico %}
+      {% elif l.tem_trecho %}
+      {% comment %}
+      Sem rota (as caixas não estão no desenho do projeto), o trecho do detector
+      é o único "onde" que existe — e aparece com o nome do que é.
+      {% endcomment %}
+      <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+        <p class="text-[10px] uppercase tracking-wider text-amber-700 font-semibold">Trecho suspeito (detector)</p>
+        <p class="text-base font-bold text-gray-900 leading-snug">{{ l.trecho_suspeito }}</p>
+      </div>
+      {% elif l.rota_tecnico.ctos_afetadas %}
+      <p class="text-xs text-gray-500 mt-3">
+        Sem rota: as caixas desta massiva não estão ligadas ao desenho do projeto.
+      </p>
+      {% endif %}
+    </div>
+
+    <div class="lg:w-60 shrink-0 lg:text-right">
+      <p class="text-4xl font-bold text-red-600 tabular-nums leading-none">{{ l.ainda_fora|intcomma }}</p>
+      <p class="text-sm text-gray-500 mt-1">ainda fora de {{ l.affected_count|intcomma }}</p>
+      <div class="w-full h-1.5 bg-gray-100 rounded-full mt-2 overflow-hidden">
+        <div class="h-full bg-emerald-500" style="width: {{ l.restored_pct }}%"></div>
+      </div>
+      <p class="text-xs text-emerald-700 mt-1">{{ l.restored_pct }}% já voltou</p>
+      <p class="text-[11px] text-gray-400 mt-0.5">mensalidade dos afetados R$ {{ l.mrr_at_risk|floatformat:2|intcomma }}</p>
+
+      <div class="flex flex-col items-stretch gap-2 mt-3">
+        {% comment %}
+        A mensagem é montada no servidor porque repete afirmações que a tela
+        leva a sério: trecho provável é inferência, cabo é candidato.
+        {% endcomment %}
+        {% if l.mensagem_tecnico %}
+        <button type="button"
+                class="btn-copiar inline-flex items-center justify-center gap-1.5 text-sm px-3 py-2 rounded-lg
+                       bg-emerald-600 text-white font-medium hover:bg-emerald-700"
+                data-mensagem="{{ l.mensagem_tecnico }}">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/>
+          </svg>
+          <span class="btn-copiar-texto">Copiar para o técnico</span>
+        </button>
+        {% endif %}
+
+        {% comment %}
+        Reconhecimento (P8 do painel de TV): o primeiro a assumir fica — e a
+        linha diz quem é, para ninguém ligar para o mesmo técnico de novo.
+        {% endcomment %}
+        {% if l.is_open %}
+        {% if l.is_acknowledged %}
+        <p class="text-xs text-indigo-700">
+          em tratamento com <strong>{{ l.acknowledged_by_display|default:l.acknowledged_by }}</strong> desde {{ l.acknowledged_at|date:"H:i" }}
+        </p>
+        {% else %}
+        <form method="post" action="{% url 'dashboards:massiva_ciente' l.id %}">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+          <button type="submit"
+                  class="w-full text-sm px-3 py-2 rounded-lg border border-indigo-300 text-indigo-700 hover:bg-indigo-50">
+            Ciente — estou tratando
+          </button>
+        </form>
+        <p class="text-[11px] text-amber-700">● ninguém assumiu ainda</p>
+        {% endif %}
+        {% endif %}
+
+        {% if not detalhe %}
+        <a href="{% url 'dashboards:massiva_detalhe' l.id %}"
+           class="inline-flex items-center justify-center text-sm px-3 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">
+          Abrir massiva &rarr;
+        </a>
+        {% endif %}
+
+        {% comment %}
+        Concluir (21/09/2026): para quando a operação SABE que o reparo acabou.
+        Pede confirmação com o número de quem ainda consta fora na frente.
+        {% endcomment %}
+        {% if l.is_open %}
+        <form method="post" action="{% url 'dashboards:massiva_concluir' l.id %}"
+              onsubmit="return confirm('Concluir esta massiva? {{ l.ainda_fora }} cliente(s) ainda constam fora — eles seguem contados como fora, o que encerra é o evento.');">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+          <button type="submit" class="w-full text-xs text-gray-500 hover:text-gray-800 hover:underline py-1">
+            Concluir massiva
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>

@@ -429,6 +429,13 @@ def compute_massivas_agora(
         )
         for o in abertas
     }
+    # A rota do técnico também na lista (pedido do NOC, 01/10/2026): é a
+    # resposta que a sala procura primeiro, e sem ela a mensagem copiada daqui
+    # saía sem o "COMECE POR". O grafo fica em cache (`grafo_da_planta`); com
+    # ele quente, a rota de uma massiva custa ~60 ms.
+    rotas_por_massiva = {
+        o.pk: compute_rota_do_tecnico(org, quedas_por_massiva.get(o.pk, [])) for o in abertas
+    }
     linhas = [
         outage_row(
             o,
@@ -437,6 +444,7 @@ def compute_massivas_agora(
             vizinhanca=vizinhancas.get(o.pk),
             reincidencia=reincidencias.get(o.pk),
             cabos=cabos_por_massiva.get(o.pk),
+            rota_tecnico=rotas_por_massiva.get(o.pk),
             # Uma consulta agregada por massiva aberta — e abertas são poucas.
             padrao_pon=compute_padrao_pon(org, quedas_por_massiva.get(o.pk, [])),
         )
@@ -457,6 +465,7 @@ def compute_massivas_agora(
 
     mensalidade_afetada = sum((o.mrr_at_risk or Decimal("0")) for o in abertas)
     maior = linhas[0] if linhas else None
+    rota_principal = rotas_por_massiva.get(abertas[0].pk) if abertas else None
 
     return {
         "clientes_fora": len(quedas_abertas),
@@ -472,14 +481,24 @@ def compute_massivas_agora(
             quedas_no_mapa,
             vizinhas_intactas=list(intactas_no_mapa.values()),
             # O mapa da tela geral desenha os candidatos de todas as massivas
-            # abertas, sem repetir cabo: é o mesmo critério dos pontos.
-            cabos_candidatos=sorted(
-                {
-                    cabo_id
-                    for c in cabos_por_massiva.values()
-                    for cabo_id in c.get("ids_no_mapa", [])
-                }
+            # abertas, sem repetir cabo: é o mesmo critério dos pontos. Os cabos
+            # das hipóteses da maior massiva vêm na frente.
+            cabos_candidatos=list(
+                dict.fromkeys(
+                    [h["cabo_id"] for h in (rota_principal or {}).get("hipoteses") or []
+                     if h.get("cabo_id")]
+                    + sorted(
+                        {
+                            cabo_id
+                            for c in cabos_por_massiva.values()
+                            for cabo_id in c.get("ids_no_mapa", [])
+                        }
+                    )
+                )
             ),
+            # A rota da maior massiva vai para o mapa da lista: é ela que o
+            # mapa enquadra ao abrir ("onde mandar o técnico").
+            rota_tecnico=rota_principal,
         ),
         "mapa_quedas_avulsas": quedas_avulsas,
         "mapa_voltaram": sum(1 for q in quedas_no_mapa if q.restored_at is not None),
@@ -1422,6 +1441,33 @@ def _pedaco_da_aresta(
     return [[lat, lon] for lat, lon in pedaco]
 
 
+def _pontos_da_cadeia(
+    tracados: dict[str, list[tuple[float, float]]], passos: Any
+) -> list[list[float]]:
+    """O trecho desenhado pedaço a pedaço, cada um sobre o seu cabo.
+
+    Um pedaço sem traçado que sirva às duas pontas sai como reta entre elas —
+    é curto (entre dois elementos vizinhos do grafo) e é a exceção.
+    """
+    from apps.network.domain.outage import haversine_meters
+
+    pontos: list[list[float]] = []
+    for de, para, aresta in passos:
+        pedaco = _pedaco_da_aresta(
+            tracados.get(aresta.cabo_id), (de.lat, de.lon), (para.lat, para.lon)
+        ) or [[de.lat, de.lon], [para.lat, para.lon]]
+        # O recorte sai na ordem dos vértices do cabo, que não é o sentido da
+        # fibra: vira para começar do lado de `de`, senão os pedaços não emendam.
+        if haversine_meters(tuple(pedaco[0]), (de.lat, de.lon)) > haversine_meters(
+            tuple(pedaco[-1]), (de.lat, de.lon)
+        ):
+            pedaco = pedaco[::-1]
+        if pontos and pontos[-1] == pedaco[0]:
+            pedaco = pedaco[1:]
+        pontos += pedaco
+    return pontos
+
+
 def _no_da_rota(node: Any) -> dict[str, Any] | None:
     if node is None:
         return None
@@ -1473,55 +1519,64 @@ def compute_rota_do_tecnico(
         ctos_afetadas=[(CTO, c) for c in ctos],
         ctos_conhecidas=[(CTO, c) for c in ctos | ctos_no_ar],
     )
-    tracados = _tracados_por_id(org, {h.cabo_id for h in rota.hipoteses})
+    tracados = _tracados_por_id(
+        org,
+        {h.cabo_id for h in rota.hipoteses}
+        | {aresta.cabo_id for h in rota.hipoteses for _, _, aresta in h.cadeia},
+    )
+
+    def _cabos_da_cadeia(cadeia: Any) -> str:
+        # Os nomes na ordem em que o técnico os encontra, sem repetir.
+        return " → ".join(dict.fromkeys(aresta.cabo_nome for _, _, aresta in cadeia))
 
     trecho = None
     if rota.trecho_rompido:
         de, para = rota.trecho_rompido
         cabo = rota.cabo_rompido
+        passos = rota.trecho_passos
         trecho = {
             "de": _no_da_rota(de),
             "para": _no_da_rota(para),
-            "cabo": cabo.cabo_nome if cabo else "",
+            "cabo": _cabos_da_cadeia(passos) if passos else (cabo.cabo_nome if cabo else ""),
             "cabo_id": cabo.cabo_id if cabo else "",
-            "metros": round(cabo.metros) if cabo else None,
-            # O pedaço do cabo entre as duas caixas: é nele que o X cai, e não
-            # no meio da reta, que atravessa quarteirão.
-            "pontos": _pedaco_da_aresta(
-                tracados.get(cabo.cabo_id) if cabo else None,
-                (de.lat, de.lon),
-                (para.lat, para.lon),
+            "metros": round(sum(a.metros for _, _, a in passos)) if passos else (
+                round(cabo.metros) if cabo else None
             ),
+            # O trecho sobre o cabo, pedaço a pedaço: é nele que o X cai, e não
+            # no meio da reta, que atravessa quarteirão.
+            "pontos": _pontos_da_cadeia(tracados, passos),
         }
 
     hipoteses = []
     for ordem, h in enumerate(rota.hipoteses, start=1):
         hipoteses.append({
             "ordem": ordem,
-            "no": _no_da_rota(h.no),
+            # `no` é onde o trecho termina (o fim da cadeia): o primeiro elemento
+            # com cliente abaixo da última caixa boa.
+            "no": _no_da_rota(h.fim),
             "acima": _no_da_rota(h.acima),
-            "cabo": h.aresta.cabo_nome if h.aresta else "",
+            "cabo": _cabos_da_cadeia(h.cadeia) if h.cadeia else (
+                h.aresta.cabo_nome if h.aresta else ""
+            ),
             "cabo_id": h.cabo_id,
-            "metros": round(h.aresta.metros) if h.aresta else None,
+            "metros": round(h.metros) if h.aresta else None,
             "fora_abaixo": h.fora_abaixo,
             "fora_total": h.fora_total,
             "no_ar_abaixo": h.no_ar_abaixo,
             "explica_pct": round(100 * h.explica),
             "pureza_pct": round(100 * h.pureza),
             "forte": h.forte,
-            "pontos": (
-                _pedaco_da_aresta(
-                    tracados.get(h.cabo_id), (h.acima.lat, h.acima.lon), (h.no.lat, h.no.lon)
-                )
-                if h.acima
-                else []
-            ),
+            "pontos": _pontos_da_cadeia(tracados, h.cadeia) if h.acima else [],
         })
 
     return {
         "tem": rota.completa,
         "algoritmo": ALGORITMO,
         "partida": _no_da_rota(rota.partida),
+        # O link que o técnico abre no celular, já pronto para o card e a TV.
+        "partida_link": (
+            _ponto_no_mapa(rota.partida.lat, rota.partida.lon) if rota.partida else ""
+        ),
         "partida_confirmada": rota.partida_confirmada,
         # A partida é a própria origem (o POP): tudo o que pende dele caiu, e
         # não existe "entre" para marcar. A tela manda olhar o POP.
@@ -2330,7 +2385,10 @@ def compute_timeline(org: Any, *, now: datetime) -> list[dict[str, Any]]:
     return [
         {
             "inicio": momento,
-            "label": momento.strftime("%H:%M"),
+            # Hora local: o resto da tela (início da massiva, "caiu às") é em
+            # hora local, e o rótulo em UTC punha o pico da massiva 359 às
+            # 15:20 numa tela que dizia que ela começou às 12:24.
+            "label": timezone.localtime(momento).strftime("%H:%M"),
             "fora": v["fora"],
             "voltou": v["voltou"],
         }
@@ -2951,6 +3009,10 @@ def compute_padrao_pon(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str,
     if padrao.tipo == TRONCO:
         sufixo = f" ({parciais} parcia{'is' if parciais != 1 else 'l'})" if parciais else ""
         rotulo = f"Corte de tronco: {inteiras} PONs inteiras fora{sufixo}"
+        resumo = (
+            f"procure cabo, não equipamento · {padrao.pons_intactas} PONs das mesmas "
+            "OLTs seguem no ar"
+        )
         detalhe = (
             f"{inteiras} PONs caíram inteiras e {padrao.pons_intactas} PONs das mesmas "
             "OLTs seguem no ar. É a assinatura de um cabo com várias fibras de PON "
@@ -2958,12 +3020,14 @@ def compute_padrao_pon(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str,
         )
     elif padrao.tipo == OLT_INTEIRA:
         rotulo = f"OLT inteira fora: {inteiras} PONs"
+        resumo = "olhe equipamento e energia do POP antes de procurar cabo"
         detalhe = (
             "Todas as PONs com cliente das OLTs envolvidas caíram. Antes de procurar "
             "cabo, olhe o equipamento e a energia do POP."
         )
     elif padrao.tipo == PON_INTEIRA:
         rotulo = f"PON inteira fora (PON {padrao.pons_inteiras[0]})"
+        resumo = "a fibra dessa PON antes do primeiro splitter, ou a porta da OLT"
         detalhe = (
             "Uma PON caiu inteira e as vizinhas seguem no ar: a fibra dessa PON "
             "antes do primeiro splitter, ou a porta da OLT."
@@ -2973,6 +3037,8 @@ def compute_padrao_pon(org: Any, quedas: list[ConnectionDropEvent]) -> dict[str,
     return {
         "tipo": padrao.tipo,
         "rotulo": rotulo,
+        # Uma linha, para o card: o `detalhe` explica, o `resumo` orienta.
+        "resumo": resumo,
         "detalhe": detalhe,
         "pons_inteiras": list(padrao.pons_inteiras),
         "pons_parciais": list(padrao.pons_parciais),

@@ -4,12 +4,11 @@
 {% block title %}Quedas & Massivas · Velus{% endblock %}
 
 {% block content %}
-<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-6">
+<div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 mb-4">
   <div>
     <h1 class="text-2xl font-bold text-gray-900">Quedas &amp; Massivas</h1>
     <p class="text-xs text-gray-400 mt-0.5">
-      Quem está fora agora, onde provavelmente rompeu e quem já voltou ·
-      atualiza sozinha a cada minuto
+      Quem está fora agora e para onde mandar o técnico · atualiza sozinha
     </p>
   </div>
   {% comment %}
@@ -29,35 +28,62 @@ tempo real e não responde pergunta sobre o passado (§1 do plano).
 {% endcomment %}
 
 {% comment %}
-A fila de causa vem ANTES do tempo real, e de propósito: é a única parte da tela
-que pede algo de quem está lendo. Depois do mapa, ninguém rola de volta.
-{% endcomment %}
-{% include "dashboards/_massivas_sem_causa.html" %}
+Ordem da página refeita a pedido do NOC (01/10/2026, "tem muita informação"):
+primeiro o que está acontecendo e para onde mandar o técnico — status, cards das
+massivas abertas e o mapa. Todo o resto virou bloco recolhido, uma linha cada,
+com o número que importa no próprio título: linha do tempo, diagnóstico da ONU
+e do RADIUS, encerradas e o placar, e a fila de causa.
 
+A fila de causa vinha no topo ("depois do mapa ninguém rola de volta"). Na
+massiva 359 ela ocupava 1.240 px antes da massiva aberta aparecer — formulário
+de pós-evento empurrando o evento para fora da tela. Ela continua existindo, no
+fim, e reabre sozinha depois de cada registro (`?fila=1`).
+{% endcomment %}
 {% include "dashboards/_massivas_abertas.html" %}
 
 {% include "dashboards/_massivas_mapa.html" %}
 
-<!-- Linha do tempo -->
-<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
-  <div class="flex flex-wrap items-center gap-2 mb-1">
-    <h2 class="text-sm font-semibold text-gray-700">Quedas por bucket de {{ bucket_minutos }} minutos</h2>
-    {% include "dashboards/_badge_agora.html" with rotulo="janela fixa" titulo="Últimas horas, sempre — este bloco não responde a filtro de período." %}
-    <span class="text-[10px] font-medium bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
-      desenhado às {{ desenhado_as|date:"H:i" }} · não acompanha o auto-refresh
-    </span>
-  </div>
-  <p class="text-xs text-gray-400 mb-3 leading-relaxed">
-    Últimas {{ timeline_horas }} horas, no mesmo bucket que o detector usa pra agrupar. Barra alta é
-    simultaneidade — o sinal que separa massiva de queda avulsa. A parte verde já voltou ao ar.
-  </p>
-  <div id="massivas-timeline-chart" style="height:300px;" class="animate-pulse bg-gray-50 rounded-lg"></div>
-</div>
+<div class="space-y-3 mb-6">
+  <details id="bloco-linha-do-tempo" class="bg-white rounded-xl shadow-sm border border-gray-200">
+    <summary class="cursor-pointer select-none px-5 py-3 text-sm text-gray-700">
+      <span class="font-semibold">Linha do tempo ({{ timeline_horas }} h)</span>
+      <span class="text-gray-400">· {{ timeline_resumo }}</span>
+    </summary>
+    <div class="px-5 pb-5">
+      <div class="flex flex-wrap items-center gap-2 mb-1">
+        <h2 class="text-sm font-semibold text-gray-700">Quedas por bucket de {{ bucket_minutos }} minutos</h2>
+        {% include "dashboards/_badge_agora.html" with rotulo="janela fixa" titulo="Últimas horas, sempre — este bloco não responde a filtro de período." %}
+        <span class="text-[10px] font-medium bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+          desenhado às {{ desenhado_as|date:"H:i" }} · não acompanha o auto-refresh
+        </span>
+        {% include "dashboards/_ajuda.html" with texto="No mesmo bucket que o detector usa pra agrupar. Barra alta é simultaneidade — o sinal que separa massiva de queda avulsa. A parte verde já voltou ao ar." %}
+      </div>
+      <div id="massivas-timeline-chart" style="height:300px;" class="bg-gray-50 rounded-lg"></div>
+    </div>
+  </details>
 
-{% include "dashboards/_massivas_placar.html" %}
+  <details class="bg-white rounded-xl shadow-sm border border-gray-200">
+    <summary class="cursor-pointer select-none px-5 py-3 text-sm text-gray-700">
+      <span class="font-semibold">Diagnóstico da ONU e do RADIUS</span>
+      <span class="text-gray-400">
+        · causa da ONU em {{ causas_onu.cobertura_pct|default:0 }}% das quedas
+        · motivo do RADIUS em {{ motivos.cobertura_pct|default:0 }}%
+      </span>
+    </summary>
+    <div class="px-5 pb-5">
+      {% include "dashboards/_massivas_causas.html" %}
+    </div>
+  </details>
 
+  <details class="bg-white rounded-xl shadow-sm border border-gray-200">
+    <summary class="cursor-pointer select-none px-5 py-3 text-sm text-gray-700">
+      <span class="font-semibold">Massivas encerradas e o placar do palpite</span>
+      <span class="text-gray-400">· últimas {{ historico|length }}</span>
+    </summary>
+    <div class="pb-2">
+      <div class="px-5">{% include "dashboards/_massivas_placar.html" %}</div>
 <!-- Histórico: o agregado das massivas encerradas, e só ele -->
-<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+<div class="overflow-hidden">
   <div class="p-5 pb-3">
     <h2 class="text-sm font-semibold text-gray-700">Massivas encerradas</h2>
     <p class="text-xs text-gray-400 mt-0.5 leading-relaxed">
@@ -142,11 +168,28 @@ que pede algo de quem está lendo. Depois do mapa, ninguém rola de volta.
     </table>
   </div>
 </div>
+    </div>
+  </details>
+
+  {% include "dashboards/_massivas_sem_causa.html" %}
+</div>
 {% endblock %}
 
 {% block scripts %}
 {{ timeline_chart_json|json_script:"massivas-timeline-data" }}
 <script>
-  renderChart("massivas-timeline-chart", "massivas-timeline-data");
+  // A linha do tempo mora num bloco recolhido: desenhada fechada, o Plotly
+  // mede uma caixa de largura zero. Desenha na primeira vez que abre.
+  (function () {
+    var bloco = document.getElementById("bloco-linha-do-tempo");
+    var feito = false;
+    function desenhar() {
+      if (feito || !bloco || !bloco.open) return;
+      feito = true;
+      renderChart("massivas-timeline-chart", "massivas-timeline-data");
+    }
+    if (bloco) bloco.addEventListener("toggle", desenhar);
+    desenhar();
+  })();
 </script>
 {% endblock %}

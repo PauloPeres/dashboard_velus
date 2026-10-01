@@ -9,117 +9,65 @@
 </div>
 
 <!-- ===================================================================
-     Ordem da página (pedido do operador, 21/09/2026): o MAPA primeiro.
-     Quem abre o detalhe durante um evento quer ver ONDE é; a análise de como
-     o sistema chegou naquele escopo é leitura de depois, e ocupava a tela
-     inteira antes do mapa aparecer.
+     Ordem da página — refeita a pedido do NOC (01/10/2026, "tem muita
+     informação"). Na massiva 359 o detalhe tinha 24.900 px, 88% deles a tabela
+     de clientes, e o título dizia um "onde" (o trecho do detector) diferente
+     do que a rota dizia.
 
-     O cabeçalho encolheu para uma faixa — título, horário e quantos ainda
-     estão fora. Vizinhança, reincidência, cabos candidatos, ressalvas e
-     metadados desceram para um bloco que abre sob demanda, abaixo do mapa:
-     continuam inteiros, deixaram de ser barulho.
+     Agora: o card (o mesmo da lista) com tipo, por onde começar e as ações;
+     o mapa aberto no trecho; e o resto em blocos recolhidos — a rota inteira
+     com as contas, os clientes, como o sistema chegou aqui, e o "depois do
+     reparo" (onde rompeu e a causa), que abre sozinho quando a massiva encerra.
      =================================================================== -->
-<div class="bg-white rounded-xl shadow-sm border {% if outage.is_open %}border-red-300{% else %}border-gray-200{% endif %} px-5 py-4 mb-4">
-  <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-    <div class="min-w-0">
-      {% if outage.tem_trecho %}
-      <p class="text-[10px] uppercase tracking-wider text-amber-700 font-semibold mb-0.5">Trecho suspeito</p>
-      <h1 class="text-xl font-bold text-gray-900 leading-snug">{{ outage.trecho_suspeito }}</h1>
-      {% else %}
-      <p class="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-0.5">Escopo {{ outage.scope_label }}</p>
-      <h1 class="text-xl font-bold text-gray-900 leading-snug">{{ outage.elemento_frase }}</h1>
-      {% endif %}
-      <p class="text-xs text-gray-500 mt-1">
-        Começou às {{ outage.started_at|date:"d/m H:i" }}{% if outage.ended_at %} · encerrada às {{ outage.ended_at|date:"d/m H:i" }} ({{ outage.duracao_min|intcomma }} min){% else %} · <span class="text-red-600 font-medium">aberta</span>{% endif %}
-      </p>
-      {% if outage.closed_manually %}
-      {% comment %}
-      Dito em voz alta: esta duração foi DECLARADA, não medida pelo retorno dos
-      clientes. Quem lê "42 min" depois precisa saber a diferença.
-      {% endcomment %}
-      <p class="text-xs text-gray-500 mt-1">
-        Concluída manualmente por <strong>{{ outage.closed_manually_by }}</strong>
-        às {{ outage.closed_manually_at|date:"d/m H:i" }} — o encerramento é decisão da
-        operação, não contagem de retorno.{% if outage.closed_manual_reason %} “{{ outage.closed_manual_reason }}”{% endif %}
-      </p>
-      {% endif %}
-      {% comment %}
-      O veredito fica na faixa, e só ele: é a conclusão, não o raciocínio.
-      {% endcomment %}
-      {% include "dashboards/_massivas_veredito.html" with v=outage.veredito %}
-      {% include "dashboards/_massivas_padrao_pon.html" with p=outage.padrao_pon %}
-    </div>
-    <div class="shrink-0 lg:text-right">
-      <p class="text-3xl font-bold text-red-600 tabular-nums">{{ outage.ainda_fora|intcomma }}</p>
-      <p class="text-xs text-gray-500">ainda fora de {{ outage.affected_count|intcomma }}</p>
-      <div class="w-40 h-1.5 bg-gray-100 rounded-full mt-2 overflow-hidden lg:ml-auto">
-        <div class="h-full bg-emerald-500" style="width: {{ outage.restored_pct }}%"></div>
-      </div>
-      <p class="text-xs text-emerald-700 mt-1">{{ outage.restored_pct }}% já voltou</p>
+{% include "dashboards/_massiva_card.html" with l=outage detalhe=True %}
 
-      {% comment %}
-      Copiar a mensagem do técnico também aqui (21/09/2026). Ela já existia na
-      lista, mas quem abre o detalhe para entender o evento é justamente quem
-      vai mandar alguém para a rua — e voltar à lista só para copiar é o tipo de
-      ida e volta que faz a pessoa desistir e escrever o texto na mão.
-
-      A mensagem é montada no servidor, a mesma da lista: repete afirmações que
-      a tela leva a sério (trecho suspeito é inferência, cabo é candidato), e
-      montá-la em JavaScript separaria o texto das regras que o justificam.
-      {% endcomment %}
-      {% if outage.mensagem_tecnico %}
-      <button type="button"
-              class="btn-copiar mt-3 inline-flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg
-                     bg-emerald-600 text-white font-medium hover:bg-emerald-700"
-              data-mensagem="{{ outage.mensagem_tecnico }}">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round"
-                d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/>
-        </svg>
-        <span class="btn-copiar-texto">Copiar para o técnico</span>
-      </button>
-      {% endif %}
-
-      {% comment %}
-      Concluir a massiva (21/09/2026): para quando a operação sabe que o reparo
-      acabou e o que sobra na lista é ONU queimada. Só aparece com o evento
-      aberto — reencerrar mudaria a data de uma massiva que já tem duração.
-      {% endcomment %}
-      {% if not outage.ended_at %}
-      <form method="post" action="{% url 'dashboards:massiva_concluir' outage.id %}" class="mt-3 lg:flex lg:justify-end"
-            onsubmit="return confirm('Concluir esta massiva? {{ outage.ainda_fora }} cliente(s) ainda constam fora — eles seguem contados como fora, o que encerra é o evento.');">
-        {% csrf_token %}
-        <input type="hidden" name="next" value="{{ request.get_full_path }}">
-        <button type="submit"
-                class="text-xs px-3 py-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50">
-          Concluir massiva
-        </button>
-      </form>
-      {% endif %}
-    </div>
-  </div>
-</div>
-
+{% if outage.closed_manually %}
 {% comment %}
-"Por onde começar" vem ANTES do mapa: é a única coisa da tela que manda em vez
-de descrever, e quem abre a página durante um evento está decidindo para onde
-mandar o carro.
+Dito em voz alta: esta duração foi DECLARADA, não medida pelo retorno dos
+clientes. Quem lê "42 min" depois precisa saber a diferença.
 {% endcomment %}
-{% include "dashboards/_massivas_rota.html" %}
+<p class="text-xs text-gray-500 -mt-2 mb-4 px-1">
+  Concluída manualmente por <strong>{{ outage.closed_manually_by }}</strong>
+  às {{ outage.closed_manually_at|date:"d/m H:i" }} — o encerramento é decisão da
+  operação, não contagem de retorno.{% if outage.closed_manual_reason %} “{{ outage.closed_manual_reason }}”{% endif %}
+</p>
+{% endif %}
 
 {% include "dashboards/_massivas_mapa.html" %}
 
-{% include "dashboards/_massivas_rompimento.html" %}
+<div class="space-y-3 mb-6">
+{% comment %}
+"Por onde começar" inteiro — hipóteses com as contas, emendas da rota, a
+cobertura. A resposta já está no card; aqui é para quem quer conferir.
+{% endcomment %}
+<details id="rota" class="bg-white rounded-xl shadow-sm border border-gray-200 scroll-mt-4">
+  <summary class="cursor-pointer select-none px-5 py-3 text-sm text-gray-700">
+    <span class="font-semibold">Por onde começar — a rota inteira e as contas</span>
+    <span class="text-gray-400">· hipóteses, emendas da rota, cobertura do desenho</span>
+  </summary>
+  <div class="px-5 pb-5">
+    {% include "dashboards/_massivas_rota.html" %}
+  </div>
+</details>
 
-<details class="bg-white rounded-xl shadow-sm border border-gray-200 mb-6">
-  <summary class="cursor-pointer select-none px-5 py-3 text-sm font-semibold text-gray-700">
-    Como o sistema chegou nesse escopo
-    <span class="font-normal text-gray-400">— vizinhança, reincidência, cabos candidatos e ressalvas</span>
+<details class="bg-white rounded-xl shadow-sm border border-gray-200">
+  <summary class="cursor-pointer select-none px-5 py-3 text-sm text-gray-700">
+    <span class="font-semibold">Como o sistema chegou aqui</span>
+    <span class="text-gray-400">· trecho do detector, vizinhança, reincidência, cabos por proximidade, ONU e RADIUS</span>
   </summary>
   <div class="px-5 pb-5 pt-1 border-t border-gray-100">
     <p class="text-sm text-gray-500 mb-1">
       Escopo {{ outage.scope_label }} · {{ outage.elemento_frase }}{% if outage.referencia %} · {{ outage.referencia }}{% endif %}
     </p>
+    {% if outage.tem_trecho %}
+    <p class="text-sm text-gray-700 mt-2">
+      <span class="text-[10px] uppercase tracking-wider text-amber-700 font-semibold">Trecho suspeito (detector)</span><br>
+      {{ outage.trecho_suspeito }}
+      {% include "dashboards/_ajuda.html" with texto="O detector agrupa as quedas por topologia e aponta o trecho entre as caixas afetadas. A rota do técnico (no topo) segue o cabo do projeto e é a resposta que a tela usa quando existe." %}
+    </p>
+    {% endif %}
+
+    {% include "dashboards/_massivas_veredito.html" with v=outage.veredito %}
 
     {% include "dashboards/_massivas_vizinhanca.html" with z=outage.vizinhanca %}
 
@@ -144,15 +92,24 @@ mandar o carro.
                 {% if poll.ok %}bg-gray-50 border-gray-200 text-gray-500{% else %}bg-amber-50 border-amber-300 text-amber-800{% endif %}">
       {{ poll.mensagem }}
     </div>
+
+    <div class="mt-4">
+      {% include "dashboards/_massivas_causas.html" %}
+    </div>
   </div>
 </details>
 
-{% include "dashboards/_massivas_causas.html" %}
-
-<!-- Clientes afetados -->
-<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-  <div class="p-5 pb-3">
-    <h2 class="text-sm font-semibold text-gray-700">Clientes afetados</h2>
+{% comment %}
+Clientes afetados: recolhido (pedido do NOC, 01/10/2026). Numa massiva de OLT
+são centenas de linhas — na 359, 22.000 px de tabela entre o mapa e o fim da
+página. A contagem fica no título; a busca acha o cliente que ligou.
+{% endcomment %}
+<details id="clientes" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden scroll-mt-4">
+  <summary class="cursor-pointer select-none px-5 py-3 text-sm text-gray-700">
+    <span class="font-semibold">Clientes afetados</span>
+    <span class="text-gray-400">· {{ filtros_clientes.fora|intcomma }} ainda fora · {{ filtros_clientes.voltaram|intcomma }} já voltaram</span>
+  </summary>
+  <div class="px-5 pb-3">
     <p class="text-xs text-gray-400 mt-0.5 leading-relaxed">
       Topologia congelada no instante da queda — se o cliente mudar de caixa depois, esta linha
       continua dizendo onde ele estava quando caiu.
@@ -213,6 +170,8 @@ mandar o carro.
           </span>
         </span>
       </label>
+      <input type="search" id="clientes-busca" placeholder="buscar cliente, contrato ou CTO"
+             class="text-xs border border-gray-300 rounded px-2 py-1 w-56">
       <span id="clientes-contagem" class="text-gray-400"></span>
       {% if filtros_clientes.sem_leitura %}
       <span class="text-gray-400">
@@ -240,6 +199,7 @@ mandar o carro.
       <tbody class="divide-y divide-gray-100">
         {% for l in linhas %}
         <tr class="linha-cliente hover:bg-gray-50 {% if l.sinal.degradado %}bg-amber-50{% endif %}"
+            data-busca="{{ l.nome|lower }} {{ l.contrato|lower }} {{ l.cto|lower }} {{ l.telefone }}"
             data-voltou="{% if l.voltou %}1{% else %}0{% endif %}"
             data-sinal-ruim="{% if l.sinal.ruim %}1{% else %}0{% endif %}">
           <td class="px-4 py-3 font-medium text-gray-900">{{ l.nome }}</td>
@@ -298,6 +258,70 @@ mandar o carro.
       </tbody>
     </table>
   </div>
+</details>
+
+{% comment %}
+Depois do reparo: onde rompeu e a causa (pedido do NOC, 01/10/2026). São
+perguntas do fim do evento — durante a massiva o bloco fica recolhido, e abre
+sozinho quando ela encerra ou quando acabou de receber um registro.
+{% endcomment %}
+<details id="depois" class="bg-white rounded-xl shadow-sm border border-gray-200 scroll-mt-4"
+         {% if not outage.is_open or request.GET.rompimento or request.GET.erro or outage.rompimento %}open{% endif %}>
+  <summary class="cursor-pointer select-none px-5 py-3 text-sm text-gray-700">
+    <span class="font-semibold">Depois do reparo</span>
+    <span class="text-gray-400">
+      · onde rompeu{% if outage.rompimento %} (registrado){% endif %}
+      · causa{% if outage.confirmed_cause %}: {{ outage.confirmed_cause_label }}{% endif %}
+    </span>
+  </summary>
+  <div class="px-5 pb-5">
+    {% include "dashboards/_massivas_rompimento.html" with embutido=True %}
+
+    <div class="border-t border-gray-100 pt-4">
+      <h3 class="text-sm font-semibold text-gray-700 mb-1">Causa</h3>
+      {% if outage.confirmed_cause %}
+      <p class="text-sm text-gray-800">
+        <strong>{{ outage.confirmed_cause_label }}</strong>{% for t in outage.cause_tags %} · {{ t }}{% endfor %}
+        {% if outage.cause_note %}<span class="text-gray-500">— {{ outage.cause_note }}</span>{% endif %}
+      </p>
+      <p class="text-xs text-gray-400 mt-0.5">
+        registrada{% if outage.cause_confirmed_by %} por {{ outage.cause_confirmed_by }}{% endif %}
+        {% if outage.cause_confirmed_at %} em {{ outage.cause_confirmed_at|date:"d/m H:i" }}{% endif %}
+      </p>
+      {% elif outage.is_open %}
+      <p class="text-xs text-gray-500">A causa é registrada quando a massiva encerra.</p>
+      {% else %}
+      {% if request.GET.erro %}
+      <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2">
+        {% if request.GET.erro == "local" %}Não achei latitude e longitude no local do rompimento — cole o link completo do Google Maps ou os dois números.{% else %}Escolha uma causa da lista.{% endif %}
+        Nada foi gravado.
+      </p>
+      {% endif %}
+      <form method="post" action="{% url 'dashboards:massiva_causa' outage.id %}" class="flex flex-wrap items-center gap-2">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{% url 'dashboards:massiva_detalhe' outage.id %}">
+        <select name="confirmed_cause" required class="text-xs border border-gray-300 rounded px-2 py-1 bg-white">
+          <option value="">O que era…</option>
+          {% for valor, rotulo in causas_opcoes %}
+          <option value="{{ valor }}" {% if outage.is_expected and valor == "MANUTENCAO" %}selected{% endif %}>{{ rotulo }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" name="cause_note" maxlength="2000" placeholder="observação (opcional)"
+               class="text-xs border border-gray-300 rounded px-2 py-1 flex-1 min-w-[12rem]">
+        <button type="submit" class="text-xs bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700">Registrar</button>
+        <div class="w-full flex flex-wrap gap-x-3 gap-y-1">
+          {% for chave, rotulo in tags_opcoes %}
+          <label class="text-[11px] text-gray-500 flex items-center gap-1">
+            <input type="checkbox" name="cause_tags" value="{{ chave }}" class="rounded border-gray-300">
+            {{ rotulo }}
+          </label>
+          {% endfor %}
+        </div>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</details>
 </div>
 
 <script>
@@ -311,6 +335,7 @@ mandar o carro.
     var vazio = document.getElementById("clientes-vazio");
     var contagem = document.getElementById("clientes-contagem");
     var soCritico = document.getElementById("filtro-sinal-critico");
+    var busca = document.getElementById("clientes-busca");
     var botoes = caixa.querySelectorAll("button[data-status]");
     var status = "todos";
 
@@ -322,14 +347,16 @@ mandar o carro.
           || (status === "fora" && !voltou)
           || (status === "voltaram" && voltou);
         var okSinal = !soCritico.checked || tr.dataset.sinalRuim === "1";
-        var mostra = okStatus && okSinal;
+        var termo = (busca && busca.value || "").trim().toLowerCase();
+        var okBusca = !termo || (tr.dataset.busca || "").indexOf(termo) !== -1;
+        var mostra = okStatus && okSinal && okBusca;
         tr.classList.toggle("hidden", !mostra);
         if (mostra) visiveis++;
       });
       if (vazio) vazio.classList.toggle("hidden", visiveis > 0);
       // O total fica escrito ao lado: sem ele, uma tabela filtrada parece uma
       // massiva menor do que é.
-      contagem.textContent = (status === "todos" && !soCritico.checked)
+      contagem.textContent = (status === "todos" && !soCritico.checked && !(busca && busca.value))
         ? ""
         : "· mostrando " + visiveis + " de " + linhas.length;
     }
@@ -348,6 +375,7 @@ mandar o carro.
       });
     });
     soCritico.addEventListener("change", aplicar);
+    if (busca) busca.addEventListener("input", aplicar);
   })();
 </script>
 {% include "dashboards/_massivas_copiar_js.html" %}

@@ -1,0 +1,56 @@
+{% load humanize %}
+{% comment %}
+A resposta da rota em uma caixa só (pedido do NOC, 01/10/2026): por onde
+começar, onde procurar e para onde olhar se não for ali. É o que vai para o card
+da lista e para o topo do detalhe; a rota inteira, com as contas, fica no
+detalhe, num bloco recolhido.
+
+Espera `r` (dict de compute_rota_do_tecnico).
+{% endcomment %}
+{% if r.partida %}
+<div class="mt-3 rounded-lg border px-4 py-3 {% if r.partida_confirmada %}bg-rose-50 border-rose-200{% else %}bg-gray-50 border-gray-200{% endif %}">
+  <p class="text-base font-bold text-gray-900 leading-snug">
+    {% if r.partida_confirmada %}
+    <span class="text-rose-700">&#9650;</span> Comece por {{ r.partida.label }}
+    {% else %}
+    Caixa comum às afetadas: {{ r.partida.label }}
+    {% endif %}
+    {% if r.partida_link %}
+    <a href="{{ r.partida_link }}" target="_blank" rel="noopener"
+       class="ml-2 text-xs font-medium text-blue-600 hover:underline">abrir no Maps</a>
+    {% endif %}
+  </p>
+  {% if r.trecho %}
+  <p class="text-sm text-gray-800 mt-1">
+    <span class="font-semibold">&times; Provável rompimento</span> entre {{ r.trecho.de.label }} e
+    {{ r.trecho.para.label }}{% if r.trecho.cabo %} · {{ r.trecho.cabo }}{% endif %}{% if r.trecho.metros %} · ~{{ r.trecho.metros|intcomma }} m de cabo{% endif %}
+  </p>
+  {% elif r.partida_confirmada and r.partida_e_origem %}
+  <p class="text-sm text-gray-800 mt-1">Tudo o que pende dele caiu: olhe o equipamento e a saída do POP.</p>
+  {% elif not r.partida_confirmada %}
+  {% comment %}
+  Sem folga para afirmar o X — mas a hipótese mais provável vai junto, com as
+  contas: no teste cego de 01/10/2026, mesmo sem afirmar, a 1ª hipótese passava
+  a até 50 m do rompimento em 81–97% dos casos.
+  {% endcomment %}
+  <p class="text-sm text-gray-600 mt-1">Sem folga para afirmar o trecho — a hipótese mais provável vai abaixo, com as contas.</p>
+  {% endif %}
+  {% with h=r.hipoteses.0 %}{% if h %}
+  <p class="text-xs text-gray-500 mt-1">
+    {% if r.partida_confirmada %}
+    explica {{ h.fora_abaixo|intcomma }} de {{ h.fora_total|intcomma }} caixas fora
+    {% else %}
+    mais provável: {{ h.cabo|default:h.no.label }}{% if h.acima %} entre {{ h.acima.label }} e {{ h.no.label }}{% if h.metros %} (~{{ h.metros|intcomma }} m){% endif %}{% endif %}
+    — {{ h.fora_abaixo|intcomma }} de {{ h.fora_total|intcomma }} caixas fora, {{ h.no_ar_abaixo|intcomma }} com cliente online abaixo
+    {% endif %}
+    {% for o in r.hipoteses|slice:"1:" %}{% if o.acima %}{% if forloop.first %} · se não for aí: {% else %} · {% endif %}{{ o.cabo }} ({{ o.acima.label }} &rarr; {{ o.no.label }}){% endif %}{% endfor %}
+    {% include "dashboards/_ajuda.html" with texto="Cada ponto da planta ganha nota: quantas caixas fora ficam abaixo dele contra quantas caixas com cliente online também ficam. É o desenho do projeto, não leitura da fibra — o X marca onde procurar." %}
+  </p>
+  {% endif %}{% endwith %}
+  {% if r.ctos_no_grafo < r.ctos_afetadas %}
+  <p class="text-[11px] text-gray-400 mt-1">
+    rota montada com {{ r.ctos_no_grafo }} de {{ r.ctos_afetadas }} caixas afetadas — o resto não está no desenho do projeto
+  </p>
+  {% endif %}
+</div>
+{% endif %}

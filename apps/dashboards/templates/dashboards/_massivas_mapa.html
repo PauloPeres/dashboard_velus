@@ -23,7 +23,7 @@ virou caixa de marcar, que além de nomear a camada liga e desliga ela.
     diferentes: na geral o mapa é das massivas abertas, no detalhe é de uma
     massiva só. O default cobre o detalhe.
     {% endcomment %}
-    <h2 class="text-sm font-semibold text-gray-700">{{ mapa_titulo|default:"Onde estão os clientes fora — e quem já voltou" }}</h2>
+    <h2 class="text-sm font-semibold text-gray-700">{% if mapa.rota_x %}Onde mandar o técnico{% else %}{{ mapa_titulo|default:"Onde estão os clientes fora — e quem já voltou" }}{% endif %}</h2>
     {% comment %}
     Carimbo próprio: este bloco é desenhado uma vez, no load, e NÃO acompanha o
     auto-refresh da lista. Sem a hora aqui, um mapa velho colado numa lista viva
@@ -32,6 +32,18 @@ virou caixa de marcar, que além de nomear a camada liga e desliga ela.
     <span class="text-[10px] font-medium bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
       desenhado às {{ desenhado_as|date:"H:i" }} · não acompanha o auto-refresh
     </span>
+    {% comment %}
+    Trecho × área toda (pedido do NOC, 01/10/2026). Com a rota afirmando um
+    trecho, o mapa abre nele — na área toda de uma massiva de OLT são ~730
+    marcadores e o trecho some. Os dois enquadramentos vêm prontos do servidor
+    (`layout.meta.enquadramentos`, em `charts.outage_map`).
+    {% endcomment %}
+    {% if mapa.rota_x %}
+    <div id="mapa-enquadramento" class="inline-flex text-xs border border-gray-300 rounded-lg overflow-hidden lg:ml-auto">
+      <button type="button" data-enquadramento="trecho" class="px-3 py-1 bg-gray-900 text-white">Trecho</button>
+      <button type="button" data-enquadramento="area" class="px-3 py-1 text-gray-600 hover:bg-gray-50">Área toda</button>
+    </div>
+    {% endif %}
   </div>
 
   {% comment %}
@@ -43,7 +55,14 @@ virou caixa de marcar, que além de nomear a camada liga e desliga ela.
   O botão "foco no técnico" é o pedido dito por inteiro: deixa na tela as caixas
   e o cabo, que é para onde o carro vai, e tira o resto.
   {% endcomment %}
-  <div id="mapa-filtros" class="flex flex-wrap items-center gap-x-4 gap-y-2 mb-3 text-xs">
+  {% comment %}
+  As camadas ficaram atrás de um "Camadas" (pedido do NOC, 01/10/2026): a fileira
+  de oito caixas de marcar ficava entre o título e o mapa o tempo todo, para
+  quem quase nunca mexe nela.
+  {% endcomment %}
+  <details class="mb-3 text-xs">
+  <summary class="cursor-pointer select-none text-gray-500 hover:text-gray-700 inline-block">Camadas do mapa</summary>
+  <div id="mapa-filtros" class="flex flex-wrap items-center gap-x-4 gap-y-2 mt-2 text-xs">
     <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
       <input type="checkbox" data-grupo="fora" checked class="rounded border-gray-300">
       <span class="text-red-600 font-semibold">&#8962;</span><span class="text-gray-600">Clientes fora</span>
@@ -96,6 +115,7 @@ virou caixa de marcar, que além de nomear a camada liga e desliga ela.
       Mostrar tudo
     </button>
   </div>
+  </details>
 
   {% if mapa.sem_coordenada %}
   <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3 leading-relaxed">
@@ -197,6 +217,23 @@ virou caixa de marcar, que além de nomear a camada liga e desliga ela.
         var dados = parsed.data || [];
         Plotly.newPlot(el, dados, parsed.layout || {},
                        { responsive: true, displayModeBar: false });
+
+        // Trecho × área toda: os enquadramentos vêm prontos do servidor.
+        var enquadramentos = ((parsed.layout || {}).meta || {}).enquadramentos || {};
+        var botoesEnq = document.querySelectorAll('#mapa-enquadramento button[data-enquadramento]');
+        botoesEnq.forEach(function (botao) {
+          botao.addEventListener("click", function () {
+            var alvo = enquadramentos[botao.dataset.enquadramento];
+            if (!alvo) return;
+            Plotly.relayout(el, { "map.center": alvo.center, "map.zoom": alvo.zoom });
+            botoesEnq.forEach(function (b) {
+              var ativo = b === botao;
+              b.classList.toggle("bg-gray-900", ativo);
+              b.classList.toggle("text-white", ativo);
+              b.classList.toggle("text-gray-600", !ativo);
+            });
+          });
+        });
 
         // Filtros: cada traço carrega seu grupo em meta.grupo (charts.py). O
         // restyle manda um array com um valor por traço — é assim que o Plotly

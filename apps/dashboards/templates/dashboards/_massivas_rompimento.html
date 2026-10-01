@@ -11,9 +11,11 @@ série que diz se o algoritmo melhora ou piora.
 Fica aberto também com a massiva em curso — na 359 o ponto era sabido antes de
 ela encerrar.
 
-Espera `outage` (linha de outage_row, com `rompimento`) e `request`.
+Espera `outage` (linha de outage_row, com `rompimento`) e `request`. Com
+`embutido`, sai sem o cartão próprio — é como mora no bloco "Depois do reparo"
+do detalhe.
 {% endcomment %}
-<div id="rompimento" class="bg-white rounded-xl shadow-sm border {% if outage.rompimento %}border-cyan-200{% else %}border-gray-200{% endif %} p-5 mb-4">
+<div id="rompimento" class="{% if embutido %}mb-4 scroll-mt-4{% else %}bg-white rounded-xl shadow-sm border {% if outage.rompimento %}border-cyan-200{% else %}border-gray-200{% endif %} p-5 mb-4{% endif %}">
   <div class="flex flex-wrap items-baseline gap-2 mb-2">
     <h2 class="text-sm font-semibold text-gray-700">Onde rompeu</h2>
     <span class="text-[10px] uppercase tracking-wider text-gray-400">
@@ -25,7 +27,7 @@ Espera `outage` (linha de outage_row, com `rompimento`) e `request`.
   <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3 leading-relaxed">
     Não achei latitude e longitude no que foi colado. Cole o link completo do Google Maps
     (o encurtado, maps.app.goo.gl, não traz a coordenada) ou os dois números, por exemplo
-    -23.496056, -47.510700. Nada foi gravado.
+    -23.500000, -47.450000. Nada foi gravado.
   </p>
   {% elif request.GET.rompimento == "longe" %}
   <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3 leading-relaxed">
@@ -101,7 +103,7 @@ Espera `outage` (linha de outage_row, com `rompimento`) e `request`.
         class="mt-3 flex flex-wrap items-center gap-2">
     {% csrf_token %}
     <input type="text" name="local" required maxlength="2000"
-           placeholder="Cole o link do Google Maps ou -23.496056, -47.510700"
+           placeholder="Cole o link do Google Maps ou -23.500000, -47.450000"
            class="text-xs border border-gray-300 rounded px-2 py-1.5 flex-1 min-w-[16rem]">
     <button type="submit"
             class="text-xs bg-cyan-600 text-white px-3 py-1.5 rounded hover:bg-cyan-700">

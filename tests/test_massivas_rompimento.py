@@ -400,3 +400,95 @@ class TestPadraoPorPon:
         client.force_login(user_a)
         html = client.get(URL).content.decode()
         assert "Corte de tronco: 2 PONs inteiras fora" in html
+
+
+# =============================================================================
+# 4. A tela do NOC (01/10/2026): o que está acontecendo primeiro, o resto recolhido
+# =============================================================================
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestTelaDoNoc:
+    """O NOC reclamou de "muita informação" na aba Quedas & Massivas.
+
+    Na massiva 359, a massiva aberta só aparecia a 1.404 px (a fila de causa
+    vinha antes), o card não trazia o "comece por" e a mensagem copiada da lista
+    ia sem ele, e o detalhe tinha 24.900 px — 88% de tabela de clientes.
+    """
+
+    def test_a_lista_traz_a_rota_e_a_mensagem_sai_com_o_comece_por(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        _massiva_na_planta(organization_a)
+        client.force_login(user_a)
+        resp = client.get(URL)
+        html = resp.content.decode()
+        assert "Comece por CTO-1" in html
+        linha = resp.context["linhas"][0]
+        assert "COMECE POR" in linha["mensagem_tecnico"]
+
+    def test_a_fila_de_causa_vem_recolhida_e_reabre_depois_do_registro(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        encerrada = _massiva(organization_a, [_queda(organization_a, login="e1", cto="X")])
+        encerrada.ended_at = timezone.now()
+        encerrada.save(update_fields=["ended_at"])
+        client.force_login(user_a)
+
+        html = client.get(URL).content.decode()
+        assert '<details id="causa"' in html
+        assert "Massivas esperando causa" in html
+        abertura = html[html.index('<details id="causa"'):]
+        assert "open" not in abertura[: abertura.index(">")]
+
+        resp = client.post(f"{URL}{encerrada.pk}/causa/", {"confirmed_cause": "ROMPIMENTO"})
+        assert "fila=1" in resp["Location"]
+        assert resp["Location"].endswith("#causa")
+
+    def test_o_mapa_abre_no_trecho_quando_a_rota_afirma_um(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        import json
+
+        _planta(organization_a)
+        _conexao(organization_a, login="vizinho", status=Connection.Status.ONLINE, cto="CTO-3")
+        # Duas caixas fora: a rota só afirma trecho com 2+ caixas no desenho.
+        outage = _massiva(organization_a, [
+            _queda(organization_a, login="a1", cto="CTO-1", lat=-23.5036, lon=-47.45),
+            _queda(organization_a, login="a2", cto="CTO-2", lat=-23.5054, lon=-47.45),
+        ])
+        client.force_login(user_a)
+        resp = client.get(f"{URL}{outage.pk}/")
+        html = resp.content.decode()
+        assert 'data-enquadramento="trecho"' in html
+        figura = json.loads(resp.context["mapa_chart_json"])
+        assert figura["layout"]["meta"]["inicial"] == "trecho"
+        assert set(figura["layout"]["meta"]["enquadramentos"]) == {"trecho", "area"}
+
+    def test_o_detalhe_recolhe_clientes_e_deixa_o_pos_reparo_para_depois(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        outage = _massiva_na_planta(organization_a)
+        client.force_login(user_a)
+        html = client.get(f"{URL}{outage.pk}/").content.decode()
+        # Os clientes continuam na página, recolhidos, com a contagem no título.
+        assert '<details id="clientes"' in html
+        assert "1 ainda fora" in html
+        # Com a massiva aberta, "Depois do reparo" fica fechado.
+        depois = html[html.index('<details id="depois"'):]
+        assert "open" not in depois[: depois.index(">")]
+
+        outage.ended_at = timezone.now()
+        outage.save(update_fields=["ended_at"])
+        html = client.get(f"{URL}{outage.pk}/").content.decode()
+        depois = html[html.index('<details id="depois"'):]
+        assert "open" in depois[: depois.index(">")]
+        # E a causa se registra ali mesmo, voltando para o detalhe.
+        resp = client.post(
+            f"{URL}{outage.pk}/causa/",
+            {"confirmed_cause": "ROMPIMENTO", "next": f"{URL}{outage.pk}/"},
+        )
+        assert resp["Location"] == f"{URL}{outage.pk}/#rompimento"
+        outage.refresh_from_db()
+        assert outage.confirmed_cause == "ROMPIMENTO"

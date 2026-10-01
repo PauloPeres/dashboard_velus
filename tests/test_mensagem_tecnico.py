@@ -171,6 +171,9 @@ class TestBotaoNaTela:
         # Botão de verdade, não link de rodapé (T1 do plano de campo).
         assert "Copiar para o técnico" in html
         assert "data-mensagem=" in html
-        # E o caminho curto para ver a massiva sozinha no mapa (T2).
-        assert "Ver só esta no mapa" in html
-        assert "#mapa" in html
+        # O caminho curto para a massiva sozinha (T2). Até 01/10/2026 era "Ver
+        # só esta no mapa" (`#mapa`); com o detalhe refeito a pedido do NOC, o
+        # mapa vem logo abaixo do card, na primeira tela — "Abrir massiva" leva
+        # aos dois.
+        assert "Abrir massiva" in html
+        assert "/operations/massivas/" in html

@@ -2752,7 +2752,10 @@ _ICONE_POP = "\u2605"  # ★ POP
 # e por isso são os maiores.
 _ICONE_PARTIDA = "\u25b2"  # ▲ comece por aqui
 _ICONE_ANTERIOR = "\u25bc"  # ▼ última caixa no ar antes do trecho
-_ICONE_X = "\u2715"  # ✕ provável rompimento
+# O "×" do Latin-1 e não o "✕" (U+2715): o glifo U+2715 não vem na fonte do
+# basemap, e o X saía como uma bolinha preta sem nada dentro (visto no mapa da
+# massiva 359, 01/10/2026).
+_ICONE_X = "\u00d7"  # × provável rompimento
 
 # Camadas que começam desligadas. Não somem — viram caixa desmarcada acima do
 # mapa. O critério é o do pedido: reduzir ruído e deixar na tela o que responde
@@ -3088,6 +3091,28 @@ def outage_map(mapa: dict[str, Any]) -> str:
         centro = {"lat": -15.8, "lon": -47.9}
         zoom = 3
 
+    # Dois enquadramentos (pedido do NOC, 01/10/2026): a área toda e o trecho.
+    # Quando a rota afirma um trecho (há X), o mapa ABRE no trecho — na área
+    # toda de uma massiva de OLT são ~730 marcadores e o trecho some no meio
+    # deles. O botão "Área toda" volta ao enquadramento de antes.
+    enquadramentos = {"area": {"center": centro, "zoom": zoom}}
+    inicial = "area"
+    if mapa.get("rota_x"):
+        no_trecho = [
+            {"lat": lat, "lon": lon}
+            for h in mapa.get("hipoteses") or []
+            if h["ordem"] == 1
+            for lat, lon in h["pontos"]
+        ]
+        for chave in ("rota_partida", "rota_anterior", "rota_x"):
+            no_trecho += mapa.get(chave) or []
+        c_trecho, z_trecho = _map_enquadramento(no_trecho)
+        # Teto de zoom de rua: mais perto que isso o trecho vira o mapa inteiro
+        # e se perde a esquina de onde o técnico chega.
+        enquadramentos["trecho"] = {"center": c_trecho, "zoom": min(z_trecho, 16.0)}
+        inicial = "trecho"
+        centro, zoom = enquadramentos["trecho"]["center"], enquadramentos["trecho"]["zoom"]
+
     fig = go.Figure(
         data=traces,
         layout={
@@ -3095,6 +3120,9 @@ def outage_map(mapa: dict[str, Any]) -> str:
             # Plotly: todos os embutidos apontam pro tile server do OSM, que
             # bloqueia uso por aplicação.
             "map": {"style": _BASEMAP_STYLE, "center": centro, "zoom": zoom},
+            # Os enquadramentos viajam com a figura: são os botões "Trecho" e
+            # "Área toda" do template que os aplicam, via Plotly.relayout.
+            "meta": {"enquadramentos": enquadramentos, "inicial": inicial},
             "margin": {"l": 0, "r": 0, "t": 0, "b": 0},
             # A legenda do Plotly saiu: ela ficava deitada sobre o canto do
             # mapa, repetindo o que as caixas de filtro acima já dizem — e

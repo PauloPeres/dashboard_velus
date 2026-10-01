@@ -6,9 +6,13 @@ digita o que a massiva era de verdade, e a razão é declarada em voz alta na
 própria tela: sem isso, o veredito automático (energia vs. fibra) adivinha para
 sempre e nunca fica sabendo se acerta.
 
-Fica no TOPO da aba porque cobrança que não aparece não é cobrança — e fora do
-partial de auto-refresh, senão um formulário meio preenchido sumiria debaixo do
-dedo de quem está digitando.
+Ficava no TOPO da aba ("cobrança que não aparece não é cobrança"). Desceu para
+o fim, num bloco recolhido, a pedido do NOC (01/10/2026): durante a massiva 359
+ela ocupava 1.240 px antes da massiva aberta. O título do bloco carrega a
+contagem — a cobrança continua visível, só deixou de ficar na frente do evento.
+Reabre sozinho depois de cada registro (`?fila=1`) e quando há erro. Continua
+fora do partial de auto-refresh: um formulário meio preenchido não pode sumir
+debaixo do dedo de quem está digitando.
 
 A massiva encerra sozinha quando ≥90% volta, então ninguém "fecha" à mão: esta
 fila é o único momento em que a resposta é pedida.
@@ -17,13 +21,16 @@ Espera `sem_causa` (dict de compute_sem_causa).
 {% endcomment %}
 {% load humanize %}
 {% if sem_causa.total %}
-<div id="causa" class="bg-white rounded-xl shadow-sm border border-indigo-200 p-5 mb-6">
-  <div class="flex flex-wrap items-baseline gap-2 mb-1">
-    <h2 class="text-sm font-semibold text-gray-700">Massivas esperando causa</h2>
+<details id="causa" class="bg-white rounded-xl shadow-sm border border-indigo-200 scroll-mt-4"
+         {% if request.GET.fila or request.GET.erro %}open{% endif %}>
+  <summary class="cursor-pointer select-none px-5 py-3 text-sm text-gray-700">
+    <span class="font-semibold text-indigo-700">Massivas esperando causa</span>
     <span class="text-[10px] font-medium bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">
       {{ sem_causa.total|intcomma }} na fila
     </span>
-  </div>
+    <span class="text-gray-400">· registrar depois do evento</span>
+  </summary>
+  <div class="px-5 pb-5">
   <p class="text-xs text-gray-400 mb-4 leading-relaxed">
     O sistema chuta a causa (energia ou fibra) e nunca fica sabendo se acertou. Quem
     esteve no reparo sabe. Dois cliques aqui viram, com o tempo, a medida de quanto o
@@ -33,7 +40,7 @@ Espera `sem_causa` (dict de compute_sem_causa).
   {% if request.GET.erro == "local" %}
   <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3">
     Não achei latitude e longitude no local do rompimento. Cole o link completo do Google
-    Maps ou os dois números (-23.496056, -47.510700) — ou deixe o campo vazio. Nada foi gravado.
+    Maps ou os dois números (-23.500000, -47.450000) — ou deixe o campo vazio. Nada foi gravado.
   </p>
   {% elif request.GET.erro %}
   <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3">
@@ -116,5 +123,6 @@ Espera `sem_causa` (dict de compute_sem_causa).
     a fila mostra as mais recentes primeiro.
   </p>
   {% endif %}
-</div>
+  </div>
+</details>
 {% endif %}

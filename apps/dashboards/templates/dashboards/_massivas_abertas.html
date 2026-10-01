@@ -1,7 +1,7 @@
 {% load humanize %}
 {% comment %}
-Bloco de tempo real da aba Quedas & Massivas (#146): de quando é a foto, os
-KPIs de agora, a lista de massivas abertas e o painel de motivos.
+Bloco de tempo real da aba Quedas & Massivas (#146): de quando é a foto, a
+linha de status de agora e as massivas abertas, uma por card.
 
 Está num partial porque é ele — e só ele — que o HTMX recarrega sozinho. Mapa e
 linha do tempo ficam fora: redesenhar o Plotly a cada minuto tiraria o mapa
@@ -18,205 +18,44 @@ debaixo do dedo de quem está lendo durante o reparo.
      hx-swap="outerHTML">
 
   {% comment %}
-  Regra 4: a tela declara de quando é a foto. Silêncio aqui seria lido como
+  Uma linha de status no lugar dos quatro cartões (pedido do NOC, 01/10/2026):
+  quantas massivas, quantos fora, quanto de mensalidade — e de quando é a foto.
+
+  Regra 4 continua valendo: a tela declara de quando é a foto, e quando a
+  leitura falhou a linha inteira fica âmbar. Silêncio aqui seria lido como
   "ninguém caiu" — que é exatamente o erro que a ferramenta existe pra evitar.
   {% endcomment %}
-  <div class="rounded-lg border p-3 mb-6 flex items-start gap-2
-              {% if poll.ok %}bg-gray-50 border-gray-200{% else %}bg-amber-50 border-amber-300{% endif %}">
-    <span class="text-xs font-semibold uppercase tracking-wider mt-0.5
-                 {% if poll.ok %}text-gray-400{% else %}text-amber-700{% endif %}">
-      {% if poll.ok %}Foto{% else %}Atenção{% endif %}
-    </span>
-    <div class="text-xs leading-relaxed {% if poll.ok %}text-gray-500{% else %}text-amber-800{% endif %}">
-      {{ poll.mensagem }}
-      {% if poll.observando %}
-      <span class="text-gray-400">
-        · observando desde {{ poll.baseline_at|date:"d/m H:i" }} — quedas anteriores a isso
-        não são evento (a primeira leitura de um login é linha de base).
-      </span>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-    {% include "dashboards/_kpi_card.html" with label="Clientes fora agora" value=clientes_fora|intcomma agora=True value_color="text-red-600" tooltip="Quedas ainda abertas (sem retorno registrado). Inclui quem caiu sozinho, fora de qualquer massiva." %}
-
-    {% include "dashboards/_kpi_card.html" with label="Massivas abertas" value=massivas_abertas|intcomma agora=True tooltip="Agrupamentos de quedas simultâneas que o detector fechou por topologia ou proximidade. Zero é o estado normal." %}
-
+  <div class="rounded-xl border px-5 py-3 mb-4 flex flex-wrap items-baseline gap-x-8 gap-y-1
+              {% if poll.ok %}bg-white border-gray-200{% else %}bg-amber-50 border-amber-300{% endif %}">
+    <p class="text-sm text-gray-600">
+      <span class="text-2xl font-bold {% if massivas_abertas %}text-red-600{% else %}text-gray-900{% endif %} tabular-nums">{{ massivas_abertas|intcomma }}</span>
+      massiva{{ massivas_abertas|pluralize }} aberta{{ massivas_abertas|pluralize }}
+    </p>
+    <p class="text-sm text-gray-600">
+      <span class="text-2xl font-bold {% if clientes_fora %}text-red-600{% else %}text-gray-900{% endif %} tabular-nums">{{ clientes_fora|intcomma }}</span>
+      cliente{{ clientes_fora|pluralize }} fora
+      {% include "dashboards/_ajuda.html" with texto="Quedas ainda abertas (sem retorno registrado). Inclui quem caiu sozinho, fora de qualquer massiva." %}
+    </p>
     {% comment %}
     O rótulo evita "MRR" de propósito: a aba de Receita tem o MRR de verdade, e
     lado a lado este número seria lido como perda. É mensalidade de gente que
-    está fora há vinte minutos — tooltip não segura número em slide, rótulo sim.
+    está fora agora.
     {% endcomment %}
-    {% include "dashboards/_kpi_card.html" with label="Mensalidade dos afetados" value=mensalidade_afetada_str agora=True tooltip="Soma da mensalidade dos contratos com queda aberta dentro de massivas. Mede o tamanho do impacto agora — não é receita perdida nem baixa de MRR." %}
-
-    {% if maior_massiva %}
-    {% include "dashboards/_kpi_card.html" with label="Maior massiva" value=maior_massiva.affected_count|intcomma agora=True subtitle=maior_massiva.destaque tooltip="A massiva aberta com mais clientes. O rótulo traz a fração afetada do elemento em escopo: escopo alto com fração baixa é um trecho abaixo do elemento, não o elemento inteiro." %}
-    {% else %}
-    {% include "dashboards/_kpi_card.html" with label="Maior massiva" value="—" agora=True subtitle="nenhuma massiva aberta" %}
-    {% endif %}
-  </div>
-
-  <!-- ===================================================================
-       Massivas abertas. Regra do plano §8: o escopo nunca aparece sozinho —
-       ou o destaque é o trecho suspeito, ou é o elemento COM a fração.
-       =================================================================== -->
-  <div class="flex items-center gap-2 mb-3">
-    <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Massivas abertas</h2>
-    {% include "dashboards/_badge_agora.html" %}
+    <p class="text-sm text-gray-600">
+      <span class="text-2xl font-bold text-gray-900 tabular-nums">{{ mensalidade_afetada_str }}</span>
+      <span class="text-xs uppercase tracking-wider text-gray-400">Mensalidade dos afetados</span>
+      {% include "dashboards/_ajuda.html" with texto="Soma da mensalidade dos contratos com queda aberta dentro de massivas. Mede o tamanho do impacto agora — não é receita perdida nem baixa de MRR." %}
+    </p>
+    <p class="text-xs lg:ml-auto {% if poll.ok %}text-gray-400{% else %}text-amber-800 font-medium{% endif %}">
+      {% if not poll.ok %}Atenção: {% endif %}{{ poll.mensagem }}
+      {% if poll.observando %}
+      {% include "dashboards/_ajuda.html" with texto="Observando desde a linha de base: quedas anteriores a ela não são evento (a primeira leitura de um login é linha de base)." %}
+      {% endif %}
+    </p>
   </div>
 
   {% for l in linhas %}
-  <div class="bg-white rounded-xl shadow-sm border {% if l.confidence == "ALTA" %}border-red-300{% else %}border-gray-200{% endif %} p-5 mb-4">
-    <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
-      <div class="min-w-0">
-        {% if l.tem_trecho %}
-        <p class="text-[10px] uppercase tracking-wider text-amber-700 font-semibold mb-0.5">Trecho suspeito</p>
-        <p class="text-lg font-bold text-gray-900 leading-snug">{{ l.trecho_suspeito }}</p>
-        <p class="text-sm text-gray-500 mt-1">
-          Escopo {{ l.scope_label }} · {{ l.elemento_frase }}{% if l.referencia %} · {{ l.referencia }}{% endif %}
-        </p>
-        {% else %}
-        <p class="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-0.5">Escopo {{ l.scope_label }}</p>
-        <p class="text-lg font-bold text-gray-900 leading-snug">{{ l.elemento_frase }}</p>
-        {% comment %}
-        "OLT 1 — 2%" diz quanto, não diz pra onde ir. A referência vem do
-        cadastro (nome/endereço do POP pai) e só aparece quando o cadastro
-        fecha — sem derivação, nada de inventar lugar.
-        {% endcomment %}
-        {% if l.referencia %}<p class="text-sm text-gray-500 mt-1">{{ l.referencia }}</p>{% endif %}
-        {% endif %}
-
-        {% comment %}
-        Manutenção programada (R10): a massiva esperada sai do alarme, não da
-        tela. Ela continua sendo registro do que aconteceu com os clientes —
-        escondê-la faria a estatística de disponibilidade mentir para melhor.
-        {% endcomment %}
-        {% if l.is_expected %}
-        <p class="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded px-2 py-1 mt-2 leading-relaxed">
-          Esperada: dentro de manutenção programada{% if l.maintenance_label %} — {{ l.maintenance_label }}{% endif %}.
-          Os clientes estão fora de verdade; o alarme é que não é novidade.
-        </p>
-        {% endif %}
-
-        {% if l.ressalva_escopo %}
-        <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2 leading-relaxed">
-          {{ l.ressalva_escopo }}
-        </p>
-        {% endif %}
-
-        {% include "dashboards/_massivas_veredito.html" with v=l.veredito %}
-
-        {% include "dashboards/_massivas_padrao_pon.html" with p=l.padrao_pon %}
-
-        {% include "dashboards/_massivas_vizinhanca.html" with z=l.vizinhanca %}
-
-        {% include "dashboards/_massivas_reincidencia.html" with r=l.reincidencia %}
-
-        {% include "dashboards/_massivas_cabos.html" with c=l.cabos %}
-
-        <p class="text-xs text-gray-400 mt-2">
-          Começou às {{ l.started_at|date:"d/m H:i" }} ·
-          confiança <span class="font-medium text-gray-600">{{ l.confidence_label }}</span> ·
-          mensalidade dos afetados R$ {{ l.mrr_at_risk|floatformat:2|intcomma }}
-        </p>
-
-        {% comment %}
-        Reconhecimento (P8 do painel de TV). Aqui ele é uma linha; na TV, é o que
-        faz o evento parar de tomar a tela. Quem assume fica registrado — e o
-        primeiro a clicar é quem fica, porque sobrescrever apagaria quem
-        realmente pegou o evento.
-        {% endcomment %}
-        {% if l.is_acknowledged %}
-        <p class="text-xs text-indigo-700 mt-2">
-          Em tratamento com <strong>{{ l.acknowledged_by }}</strong> desde
-          {{ l.acknowledged_at|date:"H:i" }}.
-        </p>
-        {% else %}
-        <form method="post" action="{% url 'dashboards:massiva_ciente' l.id %}" class="mt-2">
-          {% csrf_token %}
-          <button type="submit"
-                  class="text-xs px-3 py-1 rounded-lg border border-indigo-300 text-indigo-700 hover:bg-indigo-50">
-            Ciente — estou tratando
-          </button>
-        </form>
-        {% endif %}
-      </div>
-
-      <div class="shrink-0 lg:text-right">
-        <p class="text-2xl font-bold text-red-600 tabular-nums">{{ l.ainda_fora|intcomma }}</p>
-        <p class="text-xs text-gray-500">ainda fora de {{ l.affected_count|intcomma }}</p>
-        <div class="w-40 h-1.5 bg-gray-100 rounded-full mt-2 overflow-hidden lg:ml-auto">
-          <div class="h-full bg-emerald-500" style="width: {{ l.restored_pct }}%"></div>
-        </div>
-        <p class="text-xs text-emerald-700 mt-1">{{ l.restored_pct }}% já voltou</p>
-        {% comment %}
-        As três ações da massiva, lado a lado e visíveis (T1/T2 do plano de
-        campo). A de copiar era um link cinza do tamanho de nota de rodapé —
-        quem está atendendo um rompimento não vai caçá-la.
-
-        A mensagem é montada no servidor porque repete afirmações que a tela
-        leva a sério: trecho suspeito é inferência, cabo é candidato. Montá-la
-        em JavaScript separaria o texto das regras que o justificam.
-        {% endcomment %}
-        {% comment %}
-        Empilhados, e não lado a lado: eles moram na coluna estreita da direita,
-        onde uma fileira horizontal esticava o card e sobrava espaço vazio.
-        Um embaixo do outro, cada um ocupa a largura da coluna e o alvo do
-        clique fica maior — inclusive no celular.
-        {% endcomment %}
-        <div class="flex flex-col items-stretch gap-2 mt-3 lg:w-48 lg:ml-auto">
-          <button type="button"
-                  class="btn-copiar inline-flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg
-                         bg-emerald-600 text-white font-medium hover:bg-emerald-700"
-                  data-mensagem="{{ l.mensagem_tecnico }}">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round"
-                    d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/>
-            </svg>
-            <span class="btn-copiar-texto">Copiar para o técnico</span>
-          </button>
-
-          <a href="{% url 'dashboards:massiva_detalhe' l.id %}#mapa"
-             class="inline-flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg
-                    border border-gray-300 text-gray-700 hover:bg-gray-50">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round"
-                    d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>
-            </svg>
-            Ver só esta no mapa
-          </a>
-
-          {% comment %}
-          Concluir a massiva (21/09/2026). A tela encerra sozinha quando 90%
-          volta, ou por inanição; isto é para quando a operação SABE que o
-          reparo acabou e o que sobra na lista é ONU queimada. Um alarme que
-          continua tocando depois de resolvido ensina a sala a ignorar alarme.
-
-          Pede confirmação porque tira o evento da tela de todo mundo, e diz
-          no próprio texto quantos ainda constam fora — para a decisão ser
-          tomada com o número na frente, não de memória.
-          {% endcomment %}
-          <form method="post" action="{% url 'dashboards:massiva_concluir' l.id %}"
-                onsubmit="return confirm('Concluir esta massiva? {{ l.ainda_fora }} cliente(s) ainda constam fora — eles seguem contados como fora, o que encerra é o evento.');">
-            {% csrf_token %}
-            <input type="hidden" name="next" value="{{ request.get_full_path }}">
-            <button type="submit"
-                    class="w-full inline-flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg
-                           border border-gray-300 text-gray-600 hover:bg-gray-50">
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
-              </svg>
-              Concluir massiva
-            </button>
-          </form>
-
-          <a href="{% url 'dashboards:massiva_detalhe' l.id %}"
-             class="text-xs text-center text-blue-600 hover:underline py-1">Clientes afetados →</a>
-        </div>
-      </div>
-    </div>
-  </div>
+  {% include "dashboards/_massiva_card.html" with l=l %}
   {% empty %}
   <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
     <p class="text-sm text-gray-700 font-medium">Nenhuma massiva aberta agora.</p>
@@ -232,8 +71,6 @@ debaixo do dedo de quem está lendo durante o reparo.
     </p>
   </div>
   {% endfor %}
-
-  {% include "dashboards/_massivas_causas.html" %}
 </div>
 
 {% include "dashboards/_massivas_copiar_js.html" %}
