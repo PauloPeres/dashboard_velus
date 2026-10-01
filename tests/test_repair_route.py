@@ -390,3 +390,49 @@ class TestHipotesesFracas:
         )
         assert ranking[0].no.external_id == "ceo2"
         assert hipoteses_distintas(ranking, 1) == [ranking[0]]
+
+
+class TestCadeiaSemEvidencia:
+    """Pedaços que nenhum dado separa um do outro (teste cego de 01/10/2026).
+
+    Com rompimentos sorteados na planta inteira, em 31% dos cortes limpos o
+    rompimento estava num pedaço de baixo de uma sequência sem caixa com
+    cliente no meio — e a regra apontava só o primeiro pedaço. O trecho tem de
+    ir da última caixa boa até a primeira caixa caída.
+    """
+
+    def test_o_trecho_atravessa_as_caixas_sem_cliente(self) -> None:
+        """No ramo leste, l1–l3 não têm cliente; l4–l9 caem.
+
+        Nada distingue ceo2→l1 de l1→l2, l2→l3 ou l3→l4: o trecho é de ceo2 até
+        l4, e o técnico começa por l4, a primeira caixa com cliente caído.
+        """
+        grafo, dist, anterior = _planta_ramos()
+        fora = [(CTO, f"l{i}") for i in range(4, 10)]
+        no_ar = [*OESTE, (CTO, "s1")]
+        rota = calcular(
+            grafo, dist, anterior, ctos_afetadas=fora, ctos_conhecidas=fora + no_ar
+        )
+        assert rota.partida is not None
+        assert rota.partida.external_id == "l4"
+        assert rota.trecho_rompido is not None
+        de, para = rota.trecho_rompido
+        assert (de.external_id, para.external_id) == ("ceo2", "l4")
+        assert [b.external_id for _, b, _ in rota.trecho_passos] == ["l1", "l2", "l3", "l4"]
+        primeira = rota.hipoteses[0]
+        assert primeira.fim.external_id == "l4"
+        assert primeira.metros == sum(a.metros for _, _, a in rota.trecho_passos)
+        # Os pedaços da cadeia não voltam como 2ª e 3ª hipóteses.
+        assert not any(h.no.external_id in {"l1", "l2", "l3", "l4"} for h in rota.hipoteses[1:])
+
+    def test_a_cadeia_para_onde_a_evidencia_se_divide(self) -> None:
+        """Na CEO2 o fora se divide em dois ramos: a cadeia termina nela."""
+        grafo, dist, anterior = _planta()
+        rota = calcular(
+            grafo, dist, anterior,
+            ctos_afetadas=[(CTO, "cto_a"), (CTO, "cto_b")],
+            ctos_conhecidas=TODAS,
+        )
+        assert rota.partida is not None
+        assert rota.partida.external_id == "ceo2"
+        assert len(rota.trecho_passos) == 1

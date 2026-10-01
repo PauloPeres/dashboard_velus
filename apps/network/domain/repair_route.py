@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .plant_graph import CEO, CTO, POP, Edge, Graph, Hop, NodeInput, NodeKey, route_to
 
@@ -123,6 +123,22 @@ class HipoteseDeRompimento:
     fora_total: int
     verossimilhanca: float
     metros_do_pop: float
+    # Os pedaços de cabo que nenhum dado separa um do outro, de `acima` até o
+    # primeiro elemento com evidência própria — ver `_estender_pela_cadeia`.
+    # Vazio até ser estendida; com um passo só quando `no` já tem evidência.
+    cadeia: tuple[tuple[NodeInput, NodeInput, Edge], ...] = ()
+
+    @property
+    def fim(self) -> NodeInput:
+        """Onde o trecho termina: o primeiro elemento com cliente abaixo da cadeia."""
+        return self.cadeia[-1][1] if self.cadeia else self.no
+
+    @property
+    def metros(self) -> float:
+        """Comprimento do trecho inteiro — a cadeia toda, não só o primeiro pedaço."""
+        if self.cadeia:
+            return sum(aresta.metros for _, _, aresta in self.cadeia)
+        return self.aresta.metros if self.aresta else 0.0
 
     @property
     def explica(self) -> float:
@@ -158,6 +174,9 @@ class RotaDoTecnico:
     caixa_anterior: NodeInput | None = None
     trecho_rompido: tuple[NodeInput, NodeInput] | None = None
     cabo_rompido: Edge | None = None
+    # O trecho pedaço a pedaço, de `caixa_anterior` até a `partida`. Mais de um
+    # pedaço quando há junção, emenda ou caixa vazia no meio do caminho.
+    trecho_passos: list[tuple[NodeInput, NodeInput, Edge]] = field(default_factory=list)
     caixas: list[CaixaStatus] = field(default_factory=list)
     rota: list[Hop] = field(default_factory=list)
     # As melhores hipóteses, uma por cabo. A primeira é a que virou partida
@@ -226,28 +245,28 @@ def _abaixo(filhos: dict[NodeKey, list[NodeKey]], raiz: NodeKey) -> set[NodeKey]
     return saida
 
 
-def ranquear_hipoteses(
-    grafo: Graph,
+@dataclass(frozen=True)
+class _Contagem:
+    """Quantas caixas fora e no ar pendem de cada elemento da árvore."""
+
+    filhos: dict[NodeKey, list[NodeKey]]
+    fora_abaixo: dict[NodeKey, int]
+    no_ar_abaixo: dict[NodeKey, int]
+    fora: frozenset[NodeKey]
+    no_ar: frozenset[NodeKey]
+
+
+def _contar(
     dist: dict[NodeKey, float],
     anterior: dict[NodeKey, tuple[NodeKey, Edge]],
-    *,
     fora: Collection[NodeKey],
     no_ar: Collection[NodeKey],
-) -> list[HipoteseDeRompimento]:
-    """Todos os elementos que explicam ao menos uma caixa fora, da maior nota à menor.
-
-    Empate vai para o mais perto do POP: numa sequência de elementos sem nada
-    pendurado no meio, a nota é a mesma do começo ao fim, e o técnico começa
-    por cima — logo abaixo da última caixa que continua no ar.
-    """
-    fora_set = {k for k in fora if k in dist}
-    no_ar_set = {k for k in no_ar if k in dist} - fora_set
-    if not fora_set:
-        return []
-
-    # Contagem de baixo para cima: cada nó soma a si e aos filhos. Ordenar por
-    # distância decrescente garante filho antes do pai — a aresta tem piso de
-    # 1 m, então o filho está sempre estritamente mais longe.
+) -> _Contagem:
+    fora_set = frozenset(k for k in fora if k in dist)
+    no_ar_set = frozenset(k for k in no_ar if k in dist) - fora_set
+    # De baixo para cima: cada nó soma a si e aos filhos. Ordenar por distância
+    # decrescente garante filho antes do pai — a aresta tem piso de 1 m, então o
+    # filho está sempre estritamente mais longe.
     filhos = _filhos(anterior)
     fora_abaixo: dict[NodeKey, int] = {}
     no_ar_abaixo: dict[NodeKey, int] = {}
@@ -259,13 +278,23 @@ def ranquear_hipoteses(
             u += no_ar_abaixo[filho]
         fora_abaixo[chave] = f
         no_ar_abaixo[chave] = u
+    return _Contagem(filhos, fora_abaixo, no_ar_abaixo, fora_set, no_ar_set)
 
-    total_fora, total_no_ar = len(fora_set), len(no_ar_set)
+
+def _ranquear(
+    grafo: Graph,
+    dist: dict[NodeKey, float],
+    anterior: dict[NodeKey, tuple[NodeKey, Edge]],
+    contagem: _Contagem,
+) -> list[HipoteseDeRompimento]:
+    total_fora, total_no_ar = len(contagem.fora), len(contagem.no_ar)
+    if not total_fora:
+        return []
     hipoteses: list[HipoteseDeRompimento] = []
-    for chave, f in fora_abaixo.items():
+    for chave, f in contagem.fora_abaixo.items():
         if not f or chave not in grafo.nodes:
             continue
-        u = no_ar_abaixo[chave]
+        u = contagem.no_ar_abaixo[chave]
         pai = anterior.get(chave)
         hipoteses.append(
             HipoteseDeRompimento(
@@ -283,6 +312,94 @@ def ranquear_hipoteses(
         key=lambda h: (-h.verossimilhanca, h.metros_do_pop, h.no.label, h.no.external_id)
     )
     return hipoteses
+
+
+def ranquear_hipoteses(
+    grafo: Graph,
+    dist: dict[NodeKey, float],
+    anterior: dict[NodeKey, tuple[NodeKey, Edge]],
+    *,
+    fora: Collection[NodeKey],
+    no_ar: Collection[NodeKey],
+) -> list[HipoteseDeRompimento]:
+    """Todos os elementos que explicam ao menos uma caixa fora, da maior nota à menor.
+
+    Empate vai para o mais perto do POP: numa sequência de elementos sem nada
+    pendurado no meio, a nota é a mesma do começo ao fim, e o técnico começa
+    por cima — logo abaixo da última caixa que continua no ar.
+    """
+    return _ranquear(grafo, dist, anterior, _contar(dist, anterior, fora, no_ar))
+
+
+def _estender_pela_cadeia(
+    h: HipoteseDeRompimento,
+    grafo: Graph,
+    anterior: dict[NodeKey, tuple[NodeKey, Edge]],
+    contagem: _Contagem,
+) -> HipoteseDeRompimento:
+    """Desce pela sequência de pedaços que nenhum dado separa um do outro.
+
+    Entre a última caixa com cliente no ar e a primeira com cliente fora pode
+    haver junção, emenda, caixa vazia — elementos sem evidência própria. Todos
+    os pedaços entre eles têm a mesma nota: o dado não diz em qual deles rompeu.
+    Apontar só o primeiro (o mais perto do POP) era o que a regra fazia — e no
+    teste cego de 01/10/2026, com rompimentos sorteados na planta inteira, em
+    31% dos cortes limpos o rompimento estava num pedaço de baixo da mesma
+    sequência. O trecho honesto é a sequência inteira: é como o técnico anda,
+    da última caixa boa até a primeira caixa caída.
+
+    Para onde a evidência se divide (dois ramos com cliente) ou onde o próprio
+    elemento tem cliente: ali o dado volta a falar, e a cadeia termina.
+    """
+    if h.acima is None or h.aresta is None:
+        return h
+    passos: list[tuple[NodeInput, NodeInput, Edge]] = [(h.acima, h.no, h.aresta)]
+    atual = h.no.key
+    alvo = (contagem.fora_abaixo[atual], contagem.no_ar_abaixo[atual])
+    evidencia = contagem.fora | contagem.no_ar
+    while atual not in evidencia:
+        seguintes = [
+            f for f in contagem.filhos.get(atual, ())
+            if (contagem.fora_abaixo.get(f, 0), contagem.no_ar_abaixo.get(f, 0)) == alvo
+        ]
+        if len(seguintes) != 1 or seguintes[0] not in grafo.nodes:
+            break
+        proximo = seguintes[0]
+        passos.append((grafo.nodes[atual], grafo.nodes[proximo], anterior[proximo][1]))
+        atual = proximo
+    return replace(h, cadeia=tuple(passos))
+
+
+def _escolher_hipoteses(
+    ranking: Sequence[HipoteseDeRompimento],
+    grafo: Graph,
+    anterior: dict[NodeKey, tuple[NodeKey, Edge]],
+    contagem: _Contagem,
+    limite: int = HIPOTESES_NA_TELA,
+) -> list[HipoteseDeRompimento]:
+    """As melhores, já com a cadeia — uma por cabo, e nenhuma dentro da cadeia de outra.
+
+    Os pedaços de uma mesma cadeia empatam na nota e vinham como 1ª, 2ª e 3ª
+    hipóteses: a mesma resposta dita três vezes. Com a cadeia, eles viram uma
+    hipótese só, e as outras duas passam a ser lugares diferentes de verdade.
+    """
+    vistas: set[str] = set()
+    dentro: set[NodeKey] = set()
+    saida: list[HipoteseDeRompimento] = []
+    for h in ranking:
+        if h.no.key in dentro:
+            continue
+        chave = h.cabo_id or f"origem:{h.no.kind}:{h.no.external_id}"
+        if chave in vistas:
+            continue
+        estendida = _estender_pela_cadeia(h, grafo, anterior, contagem)
+        vistas.add(chave)
+        dentro.update(no.key for _, no, _ in estendida.cadeia)
+        dentro.add(h.no.key)
+        saida.append(estendida)
+        if len(saida) == limite:
+            break
+    return saida
 
 
 def hipoteses_distintas(
@@ -362,11 +479,12 @@ def calcular(
         return saida
 
     no_ar = {c for c in ctos_conhecidas if c in dist} - afetadas
-    ranking = ranquear_hipoteses(grafo, dist, anterior, fora=afetadas, no_ar=no_ar)
-    saida.hipoteses = hipoteses_distintas(ranking)
-    filhos = _filhos(anterior)
+    contagem = _contar(dist, anterior, afetadas, no_ar)
+    ranking = _ranquear(grafo, dist, anterior, contagem)
+    saida.hipoteses = _escolher_hipoteses(ranking, grafo, anterior, contagem)
+    filhos = contagem.filhos
 
-    melhor = ranking[0] if ranking and ranking[0].forte else None
+    melhor = saida.hipoteses[0] if saida.hipoteses and saida.hipoteses[0].forte else None
     if melhor is not None:
         # A rota desce até onde as caixas que a hipótese explica ainda andam
         # juntas: passa pela partida e mostra as emendas logo abaixo dela.
@@ -392,15 +510,20 @@ def calcular(
     ]
 
     if melhor is not None:
-        saida.partida = melhor.no
+        # A partida é o fim da cadeia: o primeiro elemento com cliente caído
+        # abaixo da última caixa boa. Sem cadeia (o elemento já tem cliente),
+        # é o próprio elemento da hipótese.
+        saida.partida = melhor.fim
         saida.partida_confirmada = True
         # O trecho (e o X que sai dele) só existe quando há elemento acima — na
         # origem não existe "entre" — e o grafo tem massiva bastante para
         # sustentar a conclusão.
         if melhor.acima is not None and saida.cobertura_suficiente:
             saida.caixa_anterior = melhor.acima
-            saida.trecho_rompido = (melhor.acima, melhor.no)
-            # O cabo daquele pedaço: é o nome que o técnico procura no poste.
+            saida.trecho_rompido = (melhor.acima, melhor.fim)
+            saida.trecho_passos = list(melhor.cadeia)
+            # O cabo do primeiro pedaço: é o nome que o técnico procura no
+            # poste ao sair da última caixa boa.
             saida.cabo_rompido = melhor.aresta
     else:
         saida.partida = comum[-1].node
