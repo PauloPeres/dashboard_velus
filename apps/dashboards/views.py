@@ -3400,6 +3400,8 @@ def _massivas_contexto_agora(
         # secundário — ele não separa massiva de queda individual.
         "causas_onu": dados["causas_onu"],
         "motivos": dados["motivos"],
+        # Quedas que o detector não agrupou, por PON (01/10/2026).
+        "fora_de_massiva": dados["fora_de_massiva"],
         "_dados": dados,
     }
 

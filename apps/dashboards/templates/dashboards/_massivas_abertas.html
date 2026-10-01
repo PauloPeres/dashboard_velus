@@ -71,6 +71,64 @@ debaixo do dedo de quem está lendo durante o reparo.
     </p>
   </div>
   {% endfor %}
+
+  {% comment %}
+  Fora de massiva agora (pedido do NOC, 01/10/2026). A PON 397 ficou mais de
+  um dia inteira fora sem aparecer na tela: o detector não agrupou, e o que não
+  é massiva não tinha lugar aqui. Agora tem — agrupado pela PON, com há quanto
+  tempo, para o NOC ver o evento que o detector deixar passar.
+  {% endcomment %}
+  {% if fora_de_massiva.total %}
+  <div class="bg-white rounded-xl shadow-sm border border-amber-200 p-4 mb-4">
+    <div class="flex flex-wrap items-baseline gap-2">
+      <h2 class="text-sm font-semibold text-gray-700">Fora de massiva agora</h2>
+      <span class="text-xs text-gray-400">
+        {{ fora_de_massiva.total|intcomma }} cliente{{ fora_de_massiva.total|pluralize }} caído{{ fora_de_massiva.total|pluralize }} que o detector não agrupou
+        {% include "dashboards/_ajuda.html" with texto="Quedas abertas que não entraram em nenhuma massiva: caixa pequena demais, login sem caixa ou sem PON no IXC, coordenada errada. Duas ou mais na mesma PON costumam ser um evento." %}
+      </span>
+    </div>
+    {% if fora_de_massiva.grupos %}
+    <table class="min-w-full text-sm mt-2">
+      <thead>
+        <tr class="text-left text-[10px] uppercase tracking-wider text-gray-400 border-b border-gray-200">
+          <th class="py-1.5 pr-3">PON</th>
+          <th class="py-1.5 pr-3">OLT</th>
+          <th class="py-1.5 pr-3">Fora</th>
+          <th class="py-1.5 pr-3">Desde</th>
+          <th class="py-1.5">Caixas</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for g in fora_de_massiva.grupos %}
+        <tr class="{% if g.fracao_pct and g.fracao_pct >= 70 %}bg-amber-50{% endif %}">
+          <td class="py-1.5 pr-3 text-gray-800 font-medium">PON {{ g.pon }}</td>
+          <td class="py-1.5 pr-3 text-gray-600">{{ g.olt|default:"—" }}</td>
+          <td class="py-1.5 pr-3 tabular-nums">
+            <span class="text-red-600 font-semibold">{{ g.fora }}</span>{% if g.da_pon %}
+            <span class="text-gray-400">de {{ g.da_pon }} ({{ g.fracao_pct }}%)</span>{% endif %}
+          </td>
+          <td class="py-1.5 pr-3 text-gray-600 whitespace-nowrap">
+            {{ g.desde|date:"d/m H:i" }} <span class="text-gray-400">· há {{ g.desde|timesince }}</span>
+          </td>
+          <td class="py-1.5 text-gray-600">
+            {{ g.caixas|join:", "|default:"—" }}{% if g.sem_caixa %}
+            <span class="text-amber-700">· {{ g.sem_caixa }} sem caixa no IXC</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if fora_de_massiva.alem %}
+    <p class="text-xs text-gray-400 mt-1">e mais {{ fora_de_massiva.alem }} PON{{ fora_de_massiva.alem|pluralize:"s" }} com 2 ou mais quedas.</p>
+    {% endif %}
+    {% endif %}
+    {% if fora_de_massiva.isoladas %}
+    <p class="text-xs text-gray-400 mt-2">
+      + {{ fora_de_massiva.isoladas|intcomma }} queda{{ fora_de_massiva.isoladas|pluralize }} isolada{{ fora_de_massiva.isoladas|pluralize }} (uma só na PON, ou sem PON no cadastro).
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
 
 {% include "dashboards/_massivas_copiar_js.html" %}

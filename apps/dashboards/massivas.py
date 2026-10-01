@@ -501,6 +501,8 @@ def compute_massivas_agora(
             rota_tecnico=rota_principal,
         ),
         "mapa_quedas_avulsas": quedas_avulsas,
+        # O que o detector não agrupou, por PON (pedido do NOC, 01/10/2026).
+        "fora_de_massiva": compute_fora_de_massiva(org, quedas_abertas, ids_em_massiva),
         "mapa_voltaram": sum(1 for q in quedas_no_mapa if q.restored_at is not None),
         "timeline": compute_timeline(org, now=now),
         "janela_retorno_horas": TIMELINE_HOURS,
@@ -3243,3 +3245,74 @@ def registrar_rompimento(
         ]
     )
     return afericao
+
+
+# =============================================================================
+# Fora de massiva agora (01/10/2026) — o que o detector não agrupou
+# =============================================================================
+# O NOC mandou dois eventos do IXC que não apareciam: a PON 397 inteira fora
+# desde a véspera e 9 logins da PON 433 sem caixa no IXC. O detector ganhou as
+# regras de PON (`_pon_clusters`), mas sempre vai haver o que escapa — cadastro
+# sem porta, evento de 2 clientes. Este bloco é a rede de segurança: toda queda
+# aberta fora de massiva, agrupada pela PON, com há quanto tempo.
+
+# Quantos grupos a tela lista antes de resumir.
+_MAX_GRUPOS_FORA_DE_MASSIVA = 8
+
+
+def compute_fora_de_massiva(
+    org: Any, quedas_abertas: list[ConnectionDropEvent], ids_em_massiva: set[int]
+) -> dict[str, Any]:
+    """Quedas abertas que não estão em massiva aberta, agrupadas pela PON.
+
+    PON com 2 ou mais quedas vira linha da tabela — duas quedas na mesma porta
+    já merecem olhar. Quem está sozinho na PON (ou sem PON no cadastro) entra só
+    na contagem de isoladas: listar uma a uma seria a lista de quedas de novo.
+    """
+    from collections import Counter
+
+    from apps.network.application.outage_detection import active_logins_per_pon
+
+    avulsas = [q for q in quedas_abertas if q.pk not in ids_em_massiva]
+    if not avulsas:
+        return {"total": 0, "grupos": [], "alem": 0, "isoladas": 0}
+
+    por_pon: dict[str, list[ConnectionDropEvent]] = {}
+    for q in avulsas:
+        por_pon.setdefault(q.pon_external_id or "", []).append(q)
+
+    ids_cto = {q.cto_external_id for q in avulsas if q.cto_external_id}
+    nomes_cto = {
+        e.external_id: (e.name or e.external_id)
+        for e in NetworkElement.objects.filter(
+            organization=org, kind=NetworkElement.Kind.CTO, external_id__in=ids_cto
+        ).only("external_id", "name")
+    }
+    ativos = active_logins_per_pon() if any(len(v) > 1 for k, v in por_pon.items() if k) else {}
+
+    grupos: list[dict[str, Any]] = []
+    isoladas = 0
+    for pon, quedas in por_pon.items():
+        if not pon or len(quedas) < 2:
+            isoladas += len(quedas)
+            continue
+        da_pon = ativos.get(pon, 0)
+        olt = Counter(q.transmitter_external_id for q in quedas if q.transmitter_external_id)
+        caixas = Counter(q.cto_external_id for q in quedas if q.cto_external_id)
+        grupos.append({
+            "pon": pon,
+            "olt": olt.most_common(1)[0][0] if olt else "",
+            "fora": len(quedas),
+            "da_pon": da_pon,
+            "fracao_pct": round(100 * len(quedas) / da_pon) if da_pon else None,
+            "desde": min(q.dropped_at for q in quedas),
+            "caixas": [nomes_cto.get(c, c) for c, _ in caixas.most_common(3)],
+            "sem_caixa": sum(1 for q in quedas if not q.cto_external_id),
+        })
+    grupos.sort(key=lambda g: (-g["fora"], g["desde"]))
+    return {
+        "total": len(avulsas),
+        "grupos": grupos[:_MAX_GRUPOS_FORA_DE_MASSIVA],
+        "alem": max(len(grupos) - _MAX_GRUPOS_FORA_DE_MASSIVA, 0),
+        "isoladas": isoladas,
+    }

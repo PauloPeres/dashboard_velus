@@ -492,3 +492,40 @@ class TestTelaDoNoc:
         assert resp["Location"] == f"{URL}{outage.pk}/#rompimento"
         outage.refresh_from_db()
         assert outage.confirmed_cause == "ROMPIMENTO"
+
+
+@pytest.mark.django_db
+@pytest.mark.filterwarnings("ignore:No directory at:UserWarning")
+class TestForaDeMassiva:
+    """O que o detector não agrupou também aparece (pedido do NOC, 01/10/2026).
+
+    A PON 397 ficou mais de um dia inteira fora sem aparecer na tela: o que não
+    era massiva não tinha lugar na aba.
+    """
+
+    def test_quedas_avulsas_da_mesma_pon_aparecem_agrupadas(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        for i in range(2):
+            _queda(organization_a, login=f"av{i}", cto="", pon="88")
+        _queda(organization_a, login="sozinho", cto="", pon="99")
+        for i in range(8):
+            _conexao(organization_a, login=f"base{i}", status=Connection.Status.ONLINE, pon="88")
+        client.force_login(user_a)
+        resp = client.get(URL)
+        html = resp.content.decode()
+        assert "Fora de massiva agora" in html
+        fora = resp.context["fora_de_massiva"]
+        assert fora["total"] == 3
+        assert [g["pon"] for g in fora["grupos"]] == ["88"]
+        assert fora["grupos"][0]["sem_caixa"] == 2
+        assert fora["isoladas"] == 1
+
+    def test_queda_dentro_de_massiva_nao_entra_no_bloco(
+        self, client: Any, user_a: User, organization_a: Organization
+    ) -> None:
+        _massiva(organization_a, [_queda(organization_a, login="m1", cto="X", pon="77")])
+        client.force_login(user_a)
+        resp = client.get(URL)
+        assert resp.context["fora_de_massiva"]["total"] == 0
+        assert "Fora de massiva agora" not in resp.content.decode()
