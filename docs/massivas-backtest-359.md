@@ -115,3 +115,58 @@ Medido na 359 com o código novo, em produção e só lendo:
 - Sondar se o InMap expõe as **fusões** (qual fibra segue para qual splitter).
   Com elas, a árvore vira a planta de verdade.
 - Calibrar os limiares com as massivas que tiverem o rompimento registrado.
+
+## Teste cego na planta inteira (01/10/2026)
+
+O Paulo pediu uma revisão: o algoritmo não podia estar "forçando" o ponto da
+359. Três verificações.
+
+**1. Nada da 359 no código que calcula.** O ponto, o cabo 1469 e as caixas
+A16-SP01/CEA aparecem só em comentário de histórico, em teste e neste
+documento. O único lugar em que a coordenada aparecia literalmente era o texto
+de exemplo do campo "Onde rompeu", e ela foi trocada por uma neutra.
+
+**2. Rompimentos sorteados.** São 300 por cenário, num trecho sorteado da
+planta inteira (o trecho tem de ter entre 3 e 300 caixas com cliente abaixo).
+O "ponto real" também é sorteado, ao longo do trecho. O algoritmo recebe só a
+planta, quem caiu e quem está online; o ponto sorteado serve apenas para medir
+o erro depois. Há ruído realista: corte parcial (só parte das caixas abaixo
+cai) e caixas que caem por outro motivo em qualquer lugar da planta.
+
+O primeiro resultado mostrou que, em 31% dos cortes limpos, o rompimento estava
+num pedaço *de baixo* de uma sequência sem nenhuma caixa com cliente no meio
+(junção, emenda, caixa vazia). Ali nenhum dado separa um pedaço do outro, e a
+regra apontava só o primeiro. Em 100% desses casos o rompimento estava dentro
+da sequência. Desde então o trecho vai da última caixa boa até a primeira caixa
+caída (`_estender_pela_cadeia`), e o resultado foi este:
+
+| Cenário | Acerta o trecho (≤50 m) | Trecho a percorrer (mediana) | Regra antiga (prefixo 100%) |
+|---|---|---|---|
+| Corte limpo | 100% | 276 m | 15% |
+| Parcial (60–100% das caixas abaixo caem) | 96% | 268 m | 8% |
+| Parcial + até 5 caixas caídas por outro motivo | 89% | 225 m | 0,3% |
+| Duro: 40–100% + até 15 de ruído | 80% | 212 m | 0% |
+
+**3. Massivas reais.** Rodado só lendo, nas 25 massivas mais recentes com 8 ou
+mais clientes, o algoritmo dá respostas diferentes para cada evento, com
+cabos, caixas, distâncias e confiança diferentes. Uma ressalva: ali "online" é
+quem está online hoje, não no dia do evento.
+
+### Os limiares de "afirmar o X"
+
+`EXPLICA_MINIMA` e `PUREZA_MINIMA` (0,8 cada) decidem quando a tela crava o
+"comece por" e o X. No teste cego eles se mostraram conservadores: quando a
+tela não afirma, a 1ª hipótese ainda acerta em 81–97% dos casos.
+
+| Limiares (explica, pureza) | Parcial: afirma / acerta | Parcial + 5: afirma / acerta | Duro: afirma / acerta |
+|---|---|---|---|
+| 0,8 / 0,8 (atual) | 62% / 85% | 29% / 92% | 10% / 94% |
+| 0,7 / 0,7 | 75% / 87% | 46% / 91% | 17% / 92% |
+| 0,6 / 0,6 | 90% / 87% | 66% / 91% | 28% / 87% |
+| 0,5 / 0,5 | 97% / 88% | 84% / 91% | 41% / 85% |
+
+O teste cego é otimista em um ponto: o rompimento sorteado segue a mesma árvore
+de caminho mais curto que o algoritmo usa, e a fibra de verdade pode correr por
+outro caminho. Por isso a decisão de afrouxar os limiares ficou com o Paulo, e
+a calibração final é com os rompimentos registrados no campo "Onde rompeu"
+(`manage.py aferir_rompimentos`).
