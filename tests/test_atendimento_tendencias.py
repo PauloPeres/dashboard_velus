@@ -189,8 +189,9 @@ class TestAtendimentoTendencias:
     ) -> None:
         set_current_organization(organization_a)
         now = timezone.now()
-        _at(organization_a, external_id="a1", opened_at=now - timedelta(days=1),
-            tags=["X"])
+        # Agora, e não "ontem": no dia 1º, ontem é o mês passado e o atendimento
+        # cairia no penúltimo bucket (CI de 01/10/2026).
+        _at(organization_a, external_id="a1", opened_at=now, tags=["X"])
 
         data = compute_atendimento_tendencias(
             organization_a, months=6, granularity="month"

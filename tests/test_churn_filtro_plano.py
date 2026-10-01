@@ -80,17 +80,21 @@ def _base_ativa(org: Organization, contrato: Contract, *, quando: Any) -> None:
 
 @pytest.fixture
 def base(organization_a: Organization) -> dict[str, Any]:
-    """Dois planos, com churn deste mês em cada um."""
+    """Dois planos, com churn deste mês em cada um.
+
+    Os cancelamentos são de agora (`cancelado_dias=0`), e não de ontem: no dia 1º,
+    ontem é o mês passado e o "churn deste mês" dava zero (CI de 01/10/2026).
+    """
     hoje = timezone.now().date()
     mes_passado = (hoje.replace(day=1) - timedelta(days=1)).replace(day=1)
 
     premium_cancelado = _contrato(
         organization_a, plano="Premium", mrr="300",
-        status="CANCELED", cancelado_dias=1, motivo="6",  # inadimplência (controlável)
+        status="CANCELED", cancelado_dias=0, motivo="6",  # inadimplência (controlável)
     )
     basico_cancelado = _contrato(
         organization_a, plano="Básico", mrr="80",
-        status="CANCELED", cancelado_dias=1, motivo="9",  # desconexão por opção (neutro)
+        status="CANCELED", cancelado_dias=0, motivo="9",  # desconexão por opção (neutro)
     )
     # Base ativa no início do mês: 2 de cada plano (denominador da taxa).
     for plano in ("Premium", "Básico"):
@@ -253,15 +257,15 @@ class TestFiltroPorMotivo:
 
         _contrato(
             organization_a, plano="Premium", mrr="100",
-            status="CANCELED", cancelado_dias=1, motivo="6",
+            status="CANCELED", cancelado_dias=0, motivo="6",
         )
         _contrato(
             organization_a, plano="Premium", mrr="200",
-            status="CANCELED", cancelado_dias=1, motivo="31",
+            status="CANCELED", cancelado_dias=0, motivo="31",
         )
         _contrato(
             organization_a, plano="Premium", mrr="400",
-            status="CANCELED", cancelado_dias=1, motivo="9",
+            status="CANCELED", cancelado_dias=0, motivo="9",
         )
         assert compute_churn_summary(organization_a, controlavel=CONTROLAVEL_SIM)[
             "mrr_lost_this_month"

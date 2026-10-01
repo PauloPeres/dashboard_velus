@@ -5708,7 +5708,11 @@ def compute_atendimento_tendencias(
 
     now = timezone.now()
     window_end = end or now
-    window_start = start or (now - relativedelta(months=months)).replace(
+    # Meia-noite no fuso local, não em UTC: o eixo de buckets é montado em hora
+    # local, e 00:00 UTC do dia 1º é 21:00 do último dia do mês anterior em
+    # São Paulo — a janela ganhava um mês a mais, com três horas, todo dia 1º
+    # (achado quando o CI quebrou em 01/10/2026).
+    window_start = start or timezone.localtime(now - relativedelta(months=months)).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
 
