@@ -783,3 +783,73 @@ def test_geo_conta_so_quem_tem_caixa_nos_dois_lados_da_divisao():
     # ...mas a fração divide 6 caídos com caixa pelos 12 logins dessas caixas.
     # Antes eram os 8 sobre os mesmos 12.
     assert cluster.affected_fraction == pytest.approx(6 / 12)
+
+
+# =============================================================================
+# PON direto do login (01/10/2026) — o que a caixa não agrupava
+# =============================================================================
+
+
+class TestPonSemCaixa:
+    """Dois eventos reais que o detector deixou passar em 01/10/2026.
+
+    O degrau de PON só subia de CTOs qualificadas (≥3 logins, ≥70% fora). A PON
+    397 inteira (5 de 5) ficou mais de um dia fora em caixas de 1 e 2 logins, e
+    9 logins da PON 433 caíram juntos sem caixa no IXC e com coordenada
+    espalhada por 13 km — nenhum dos dois virou massiva.
+    """
+
+    def test_pon_inteira_em_caixas_pequenas_vira_massiva_de_pon(self) -> None:
+        drops = [
+            drop("a", cto="C1", pon="397"),
+            drop("b", minutes=0.5, cto="C1", pon="397"),
+            drop("c", minutes=1, cto="C2", pon="397"),
+            drop("d", minutes=1, cto="C3", pon="397"),
+        ]
+        topo = TopologyInput(
+            active_logins_per_cto={"C1": 2, "C2": 1, "C3": 2},
+            active_logins_per_pon={"397": 5},
+        )
+        clusters = detect_outages(drops, topo)
+        assert len(clusters) == 1
+        c = clusters[0]
+        assert (c.scope, c.element_id) == (SCOPE_PON, "397")
+        assert c.affected_count == 4
+        assert c.affected_fraction == pytest.approx(0.8)
+        # 4 de 5 é alto, mas não o bastante para ALTA (≥90%).
+        assert c.confidence == CONFIDENCE_MEDIUM
+
+    def test_rajada_na_pon_sem_caixa_vira_massiva_de_confianca_baixa(self) -> None:
+        drops = [drop(f"x{i}", minutes=i * 0.3, pon="433") for i in range(9)]
+        topo = TopologyInput(active_logins_per_pon={"433": 36})
+        clusters = detect_outages(drops, topo)
+        assert len(clusters) == 1
+        c = clusters[0]
+        assert (c.scope, c.element_id) == (SCOPE_PON, "433")
+        assert c.affected_count == 9
+        assert c.confidence == CONFIDENCE_LOW
+        assert c.affected_fraction == pytest.approx(9 / 36)
+
+    def test_poucas_quedas_numa_pon_grande_nao_viram_massiva(self) -> None:
+        """2 de 40 é o ruído de todo dia: cliente que desligou o roteador."""
+        drops = [drop("y1", pon="500"), drop("y2", minutes=1, pon="500")]
+        topo = TopologyInput(active_logins_per_pon={"500": 40})
+        assert detect_outages(drops, topo) == []
+
+    def test_quem_ja_esta_numa_massiva_de_caixa_nao_entra_de_novo(self) -> None:
+        """A caixa qualificada leva os logins dela; a PON pega só o que sobrou."""
+        caixa = cto_drops("C9", 5, pon="600")
+        soltas = [drop(f"s{i}", minutes=2, pon="600") for i in range(2)]
+        topo = TopologyInput(
+            active_logins_per_cto={"C9": 5},
+            active_logins_per_pon={"600": 40},
+        )
+        clusters = detect_outages(caixa + soltas, topo)
+        logins = [login for c in clusters for login in c.login_ids]
+        assert len(logins) == len(set(logins)), "um login em duas massivas"
+        assert any(c.scope == SCOPE_CTO and c.element_id == "C9" for c in clusters)
+
+    def test_pon_desconhecida_nao_vira_pon_inteira(self) -> None:
+        """Sem denominador da porta não há fração — só a rajada pode valer."""
+        drops = [drop(f"z{i}", pon="777") for i in range(3)]
+        assert detect_outages(drops, TopologyInput()) == []

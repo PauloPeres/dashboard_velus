@@ -61,6 +61,18 @@ _DEFAULT_MIN_CTO_DENOMINATOR = 3
 # "ALTA confiança" sobre 1 ou 2 logins nunca é honesto.
 _MIN_DENOMINATOR_FOR_HIGH_CONFIDENCE = 3
 
+# Massiva de PON sem passar pela caixa (01/10/2026). Dois eventos reais ficaram
+# de fora do detector porque o degrau de PON só subia de CTOs qualificadas:
+# a PON 397 inteira (5 de 5) fora por mais de um dia, em caixas pequenas demais
+# para qualificar, e 9 logins da PON 433 caídos juntos, sem caixa no IXC e com
+# coordenada espalhada por 13 km. A PON é propriedade do login (§2.5c) — dá para
+# decidir por ela sem a caixa.
+#
+# "PON inteira": a fração da porta, com o mesmo limiar da caixa, e um mínimo de
+# 3 quedas (uma porta de 3 a 5 clientes inteira fora é evento).
+_PON_FRACTION_THRESHOLD = 0.70
+_MIN_PON_CLIENTS = 3
+
 # Quantas caixas o rótulo do trecho nomeia antes de resumir o resto em contagem.
 _MAX_NAMED_SEGMENT_CTOS = 3
 
@@ -142,8 +154,14 @@ def detect_outages(
     cto_fraction_threshold: float = 0.70,
     min_cto_denominator: int = _DEFAULT_MIN_CTO_DENOMINATOR,
     geo_radius_meters: float = 300.0,
+    pon_fraction_threshold: float = _PON_FRACTION_THRESHOLD,
+    min_pon_clients: int = _MIN_PON_CLIENTS,
 ) -> list[OutageCluster]:
     """Agrupa quedas em massivas. Devolve lista estável e ordenada.
+
+    A ordem dos degraus: topologia pela caixa (CTO → PON → OLT → POP), depois a
+    PON direto do login para o que sobrou (`_pon_clusters`), e por último a
+    proximidade geográfica. Cada queda entra em no máximo um cluster (§5.6).
 
     Quedas que não entram em nenhum cluster simplesmente não aparecem na saída —
     quem chama continua tendo o evento individual registrado (§5.6).
@@ -164,6 +182,8 @@ def detect_outages(
                 cto_fraction_threshold=cto_fraction_threshold,
                 min_cto_denominator=min_cto_denominator,
                 geo_radius_meters=geo_radius_meters,
+                pon_fraction_threshold=pon_fraction_threshold,
+                min_pon_clients=min_pon_clients,
             )
         )
 
@@ -298,6 +318,8 @@ def _detect_in_window(
     cto_fraction_threshold: float,
     min_cto_denominator: int,
     geo_radius_meters: float,
+    pon_fraction_threshold: float = _PON_FRACTION_THRESHOLD,
+    min_pon_clients: int = _MIN_PON_CLIENTS,
 ) -> list[OutageCluster]:
     clusters = _topological_clusters(
         drops,
@@ -309,6 +331,17 @@ def _detect_in_window(
     claimed = {login for cluster in clusters for login in cluster.login_ids}
     leftovers = [d for d in drops if d.login_id not in claimed]
     clusters.extend(
+        _pon_clusters(
+            leftovers,
+            topology,
+            min_clients=min_clients,
+            pon_fraction_threshold=pon_fraction_threshold,
+            min_pon_clients=min_pon_clients,
+        )
+    )
+    claimed = {login for cluster in clusters for login in cluster.login_ids}
+    leftovers = [d for d in drops if d.login_id not in claimed]
+    clusters.extend(
         _geo_clusters(
             leftovers,
             topology,
@@ -316,6 +349,63 @@ def _detect_in_window(
             geo_radius_meters=geo_radius_meters,
         )
     )
+    return clusters
+
+
+def _pon_clusters(
+    drops: Sequence[DropInput],
+    topology: _ResolvedTopology,
+    *,
+    min_clients: int,
+    pon_fraction_threshold: float,
+    min_pon_clients: int,
+) -> list[OutageCluster]:
+    """Massiva de PON direto do login, para o que a caixa não agrupou.
+
+    Duas formas, nenhuma depende de caixa nem de coordenada:
+
+    - **PON inteira** — `min_pon_clients` ou mais quedas e fração da porta acima
+      do limiar. É a forma da PON 397 (5 de 5 fora, em caixas de 1 e 2 logins);
+    - **rajada na PON** — `min_clients` ou mais quedas da mesma porta na mesma
+      janela, mesmo com a fração baixa. É a forma da PON 433 (9 de 36, sem caixa
+      no IXC). Sai com confiança BAIXA e o rótulo diz "parte da PON": o evento é
+      real, o tamanho dele é que não se sabe.
+
+    Só recebe as quedas que nenhum cluster por caixa reclamou, então não
+    duplica cliente (§5.6), e roda antes da proximidade geográfica: a porta é
+    cadastro do login, mais firme que coordenada.
+    """
+    by_pon: dict[str, list[DropInput]] = defaultdict(list)
+    for drop in drops:
+        if drop.pon_id:
+            by_pon[drop.pon_id].append(drop)
+
+    clusters: list[OutageCluster] = []
+    for pon_id, members in sorted(by_pon.items()):
+        denominator = topology.active_logins_on_pon(pon_id)
+        fraction = _fraction(len(members), denominator)
+        inteira = (
+            denominator > 0
+            and len(members) >= min_pon_clients
+            and len(members) / denominator >= pon_fraction_threshold
+        )
+        rajada = len(members) >= min_clients
+        if not (inteira or rajada):
+            continue
+        by_cto = _by_cto(members)
+        clusters.append(
+            _cluster_from(
+                scope=SCOPE_PON,
+                element_id=pon_id,
+                element_label=_element_label(SCOPE_PON, pon_id, topology),
+                segment=_segment_label(sorted(by_cto), by_cto, topology) if by_cto else "",
+                confidence=(
+                    _confidence(len(members), denominator) if inteira else CONFIDENCE_LOW
+                ),
+                members=members,
+                fraction=fraction,
+            )
+        )
     return clusters
 
 
