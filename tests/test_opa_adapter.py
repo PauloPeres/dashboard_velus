@@ -536,6 +536,26 @@ class TestListagensMandamFiltroValido:
         assert bodies[0]["filter"] == {"_id": {"$exists": True}}
 
 
+    def test_bisseccao_de_mensagens_nao_manda_filtro_vazio(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        from datetime import UTC, datetime
+
+        bodies = self._captura(respx_mock, "atendimento/mensagem")
+        source = OpaAtendimentoSource(base_url=BASE_URL, token=TOKEN)
+        source.find_skip_for_date(datetime(2026, 9, 30, tzinfo=UTC), ceiling=4)
+        assert bodies
+        assert all(b["filter"] == {"_id": {"$exists": True}} for b in bodies)
+
+    def test_bootstrap_de_atendimentos_filtra_por_abertura(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        # atendimento/ recusa `_id`; o bootstrap usa a data de abertura.
+        bodies = self._captura(respx_mock, "atendimento")
+        list(OpaAtendimentoSource(base_url=BASE_URL, token=TOKEN).list_atendimentos())
+        assert bodies[0]["filter"] == {"dataInicialAbertura": "2000-01-01"}
+
+
 class TestFromCredentials:
     """`setup_opa_credentials` grava `token`; o form do admin grava `api_token`."""
 

@@ -68,6 +68,9 @@ _STATUS_MAP = {
 #   `run_opa_sync`) e segue com o catalogo ja gravado.
 _FILTRO_TODOS = {"_id": {"$exists": True}}
 _FILTRO_USUARIOS = {"status": "A"}
+# atendimento/ recusa `_id` ("Invalid filter value for field _id"); o bootstrap
+# pede tudo que abriu desde uma data anterior a qualquer conta do Opa.
+_FILTRO_ATENDIMENTOS_TODOS = {"dataInicialAbertura": "2000-01-01"}
 
 
 class OpaAtendimentoSource:
@@ -245,7 +248,7 @@ class OpaAtendimentoSource:
         gravar duas vezes quem abriu e fechou dentro do mesmo período.
         """
         if since is None:
-            yield from self._paginar(None)
+            yield from self._paginar(_FILTRO_ATENDIMENTOS_TODOS)
             return
 
         vistos: set[str] = set()
@@ -392,7 +395,7 @@ class OpaAtendimentoSource:
         with self._client_factory() as client:
             while lo < hi:
                 mid = (lo + hi) // 2
-                body = {"filter": {}, "options": {"limit": 1, "skip": mid}}
+                body = {"filter": _FILTRO_TODOS, "options": {"limit": 1, "skip": mid}}
                 response = client.get("atendimento/mensagem", json=body)
                 items = response.get("data") if isinstance(response, dict) else None
                 if not items:
