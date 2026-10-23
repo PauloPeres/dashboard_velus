@@ -1776,3 +1776,48 @@ class TestFiltroIncrementalDeFaturas:
             datetime(2026, 8, 11, 9, 0, tzinfo=UTC)
         )
         assert filtro["query"] == "2026-08-11 06:00:00"
+
+
+class TestIxcBandwidthOrdemECursor:
+    """Sem sort o IXC manda do mais novo pro mais velho e a paginação escorrega
+    com linhas entrando a cada segundo — o pull tem que ser crescente por id."""
+
+    def _corpo(self, respx_mock: respx.MockRouter, **kwargs: Any) -> dict[str, Any]:
+        bodies: list[dict[str, Any]] = []
+
+        def handler(request: Any) -> Response:
+            bodies.append(json.loads(request.content))
+            return Response(200, json={"total": "0", "registros": []})
+
+        respx_mock.get(f"{API_URL}/radusuarios_consumo").mock(side_effect=handler)
+        source = IxcBandwidthUsageSource(base_url=BASE_URL, user_id="1", api_token="t")
+        list(source.list_bandwidth_usage(**kwargs))
+        return bodies[0]
+
+    def test_cursor_pede_id_maior_em_ordem_crescente(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        body = self._corpo(respx_mock, after_id="235360575")
+        assert body["qtype"] == "radusuarios_consumo.id"
+        assert body["oper"] == ">"
+        assert body["query"] == "235360575"
+        assert body["sortname"] == "radusuarios_consumo.id"
+        assert body["sortorder"] == "asc"
+
+    def test_since_tambem_vem_ordenado(self, respx_mock: respx.MockRouter) -> None:
+        from datetime import UTC, datetime
+
+        body = self._corpo(respx_mock, since=datetime(2026, 10, 22, 12, tzinfo=UTC))
+        assert body["qtype"] == "radusuarios_consumo.data"
+        assert body["oper"] == ">="
+        assert body["sortorder"] == "asc"
+
+    def test_cursor_tem_precedencia_sobre_since(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        from datetime import UTC, datetime
+
+        body = self._corpo(
+            respx_mock, since=datetime(2026, 10, 1, tzinfo=UTC), after_id="42"
+        )
+        assert body["qtype"] == "radusuarios_consumo.id"

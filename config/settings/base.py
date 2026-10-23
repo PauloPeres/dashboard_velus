@@ -140,6 +140,9 @@ DATABASES = {
         "HOST": _db_url.hostname or "localhost",
         "PORT": str(_db_url.port or 5432),
         "CONN_MAX_AGE": 60,
+        # Testa a conexão reaproveitada antes de usar: um Postgres reiniciado
+        # (reboot do nó) não deixa o worker preso a um socket morto.
+        "CONN_HEALTH_CHECKS": True,
         "OPTIONS": {
             "connect_timeout": 5,
         },

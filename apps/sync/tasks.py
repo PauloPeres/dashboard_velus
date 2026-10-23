@@ -9,7 +9,9 @@ adapter novo aparece. Adição de nova capability é dispatch case no `_PORT_TO_
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterator
+from contextlib import closing
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -54,6 +56,7 @@ from apps.shared.context import (
     reset_current_organization,
     set_current_organization,
 )
+from apps.shared.db import descarta_conexoes_quebradas
 from apps.shared.decorators import allow_cross_tenant
 from apps.tenancy.models import Organization
 
@@ -88,8 +91,14 @@ def dispatch_incremental_for_all_orgs(
 def _dispatch_incremental(capabilities: list[str] | None = None) -> dict[str, int]:
     from apps.tenancy.models import OrganizationDataSource
 
+    # Só capabilities com dispatch genérico: ATENDIMENTO/MENSAGENS (Opa!) têm
+    # recorrência própria em `apps.atendimento.tasks`. Sem este recorte, um
+    # disparo sem filtro enfileirava `sync_capability(ATENDIMENTO)`, que falha
+    # com ValueError e gasta os retries à toa.
     configs = OrganizationDataSource.objects.filter(
-        is_active=True, organization__is_active=True
+        is_active=True,
+        organization__is_active=True,
+        capability__in=[cap.value for cap in _DISPATCH],
     )
     if capabilities:
         configs = configs.filter(capability__in=capabilities)
@@ -251,6 +260,36 @@ _DEFAULT_INCREMENTAL_WINDOW: dict[Capability, timedelta] = {
 }
 
 
+def _bandwidth_cursor_call(
+    source: Any, since: datetime | None, after_id: str | None
+) -> Iterator[BandwidthUsageDTO]:
+    return source.list_bandwidth_usage(since=since, after_id=after_id)
+
+
+# Capabilities que sincronizam por CURSOR DE ID em vez de "desde a data X".
+#
+# A janela acima só tirava BANDWIDTH do pull total; não bastava. Com ~200 mil
+# linhas/dia, 2 dias de `radusuarios_consumo` levam mais que os 25 min do soft
+# time limit, e como o checkpoint só avançava no FIM, cada rodada morria e
+# recomeçava do mesmo lugar — o sync de banda não completou de 15/10 em diante.
+# Pior: a interrupção caía no meio de uma query e envenenava a conexão do worker
+# (ver `apps.shared.db`).
+#
+# Com cursor, o adapter devolve em ordem crescente de id (o IXC, sem sort, manda
+# do mais novo pro mais velho — e com linhas entrando a cada segundo a paginação
+# por página escorrega), o `last_external_id` é gravado a cada lote e a rodada
+# para sozinha antes do prazo. A próxima continua de onde esta parou.
+_CURSOR_POR_ID: dict[
+    Capability, Callable[[Any, datetime | None, str | None], Iterator[Any]]
+] = {
+    Capability.BANDWIDTH: _bandwidth_cursor_call,
+}
+_CURSOR_LOTE = 1000
+# Folga até o soft time limit (25 min): para por conta própria, nunca no meio
+# de uma query.
+_CURSOR_PRAZO = timedelta(minutes=20)
+
+
 # =============================================================================
 # Task principal
 # =============================================================================
@@ -408,22 +447,35 @@ def _run_sync(
                 count = 0
                 skipped = 0
 
-                for dto in port_call(source, since):
-                    try:
-                        repo_upsert(repository, dto, source_type)
-                        count += 1
-                    except Exception as record_exc:
-                        skipped += 1
-                        slog.warning(
-                            "sync_record_skipped",
-                            error=f"{type(record_exc).__name__}: {record_exc}"[:200],
-                            skipped_total=skipped,
-                        )
-                        if skipped > 100:
-                            slog.error("sync_too_many_skips", skipped=skipped)
-                            raise
+                cursor_call = _CURSOR_POR_ID.get(capability)
+                if cursor_call is not None and mode == SyncMode.INCREMENTAL:
+                    count = _sync_por_cursor(
+                        cursor_call=cursor_call,
+                        source=source,
+                        repository=repository,
+                        repo_upsert=repo_upsert,
+                        source_type=source_type,
+                        checkpoint=checkpoint,
+                        since=since,
+                        slog=slog,
+                    )
+                else:
+                    for dto in port_call(source, since):
+                        try:
+                            repo_upsert(repository, dto, source_type)
+                            count += 1
+                        except Exception as record_exc:
+                            skipped += 1
+                            slog.warning(
+                                "sync_record_skipped",
+                                error=f"{type(record_exc).__name__}: {record_exc}"[:200],
+                                skipped_total=skipped,
+                            )
+                            if skipped > 100:
+                                slog.error("sync_too_many_skips", skipped=skipped)
+                                raise
 
-                _atualiza_checkpoint(checkpoint, count, mode, slog)
+                    _atualiza_checkpoint(checkpoint, count, mode, slog)
 
                 job.status = SyncStatus.COMPLETED
                 job.records_processed = count
@@ -437,6 +489,9 @@ def _run_sync(
                 )
 
             except Exception as exc:
+                # Se a falha interrompeu uma query no meio (ex.: SoftTimeLimit),
+                # a conexão está inutilizável e o save abaixo falharia também.
+                descarta_conexoes_quebradas()
                 job.status = SyncStatus.FAILED
                 job.error_message = f"{type(exc).__name__}: {exc}"[:1000]
                 job.finished_at = timezone.now()
@@ -462,6 +517,76 @@ def _run_sync(
         "records_processed": total_processed,
         "sources": per_source_summary,
     }
+
+
+def _sync_por_cursor(
+    *,
+    cursor_call: Callable[[Any, datetime | None, str | None], Iterator[Any]],
+    source: Any,
+    repository: Any,
+    repo_upsert: Callable[[Any, Any, SourceType], None],
+    source_type: SourceType,
+    checkpoint: SyncCheckpoint,
+    since: datetime | None,
+    slog: Any,
+) -> int:
+    """Sync incremental por cursor de id, gravando o progresso a cada lote.
+
+    Sem cursor ainda (1ª rodada), parte da janela `since`; daí em diante pede só
+    `id > last_external_id`. Para por conta própria ao estourar `_CURSOR_PRAZO`
+    — a rodada sai COMPLETED com o que deu, e a próxima continua do cursor.
+    """
+    prazo = time.monotonic() + _CURSOR_PRAZO.total_seconds()
+    after_id = checkpoint.last_external_id or None
+    ultimo_id = after_id
+    count = 0
+    skipped = 0
+
+    def grava_cursor() -> None:
+        checkpoint.last_external_id = ultimo_id or ""
+        checkpoint.last_processed_at = timezone.now()
+        checkpoint.consecutive_empty_runs = 0
+        checkpoint.save(
+            update_fields=[
+                "last_external_id",
+                "last_processed_at",
+                "consecutive_empty_runs",
+                "updated_at",
+            ]
+        )
+
+    registros = cursor_call(source, None if after_id else since, after_id)
+    with closing(registros):
+        for dto in registros:
+            try:
+                repo_upsert(repository, dto, source_type)
+                count += 1
+            except Exception as record_exc:
+                skipped += 1
+                slog.warning(
+                    "sync_record_skipped",
+                    error=f"{type(record_exc).__name__}: {record_exc}"[:200],
+                    skipped_total=skipped,
+                )
+                if skipped > 100:
+                    slog.error("sync_too_many_skips", skipped=skipped)
+                    raise
+            ultimo_id = dto.external_id
+
+            if (count + skipped) % _CURSOR_LOTE == 0:
+                grava_cursor()
+            if time.monotonic() > prazo:
+                grava_cursor()
+                slog.warning(
+                    "sync_cursor_pausado_no_prazo", count=count, cursor=ultimo_id
+                )
+                return count
+
+    if ultimo_id != after_id:
+        grava_cursor()
+    else:
+        _atualiza_checkpoint(checkpoint, 0, SyncMode.INCREMENTAL, slog)
+    return count
 
 
 # =============================================================================

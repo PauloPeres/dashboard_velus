@@ -58,8 +58,13 @@ class BandwidthUsageSourcePort(Protocol):
         self,
         *,
         since: datetime | None = None,
+        after_id: str | None = None,
     ) -> Iterator[BandwidthUsageDTO]:
-        """Itera registros de consumo. since=None -> bootstrap; senão incremental."""
+        """Itera registros de consumo em ordem crescente de id.
+
+        since=None e after_id=None -> bootstrap; `after_id` (cursor do sync
+        incremental) tem precedência sobre `since`.
+        """
         ...
 
     def get_bandwidth_usage(self, external_id: str) -> BandwidthUsageDTO | None:
