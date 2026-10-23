@@ -84,6 +84,16 @@ class EtiquetaRepository:
             defaults=defaults,
         )
 
+    def nomes_por_external_id(self, *, source_type: SourceType) -> dict[str, str]:
+        """Mapa id -> nome do catalogo ja gravado (fallback quando a API nao lista)."""
+        return dict(
+            Etiqueta.objects.filter(
+                organization=self.organization, source_type=source_type.value
+            )
+            .exclude(nome="")
+            .values_list("external_id", "nome")
+        )
+
 
 class MotivoRepository:
     """Persistencia idempotente de Motivo (catalogo de motivos) a partir de DTOs."""
@@ -107,6 +117,16 @@ class MotivoRepository:
             source_type=source_type.value,
             external_id=dto.external_id,
             defaults=defaults,
+        )
+
+    def nomes_por_external_id(self, *, source_type: SourceType) -> dict[str, str]:
+        """Mapa id -> nome do catalogo ja gravado (fallback quando a API nao lista)."""
+        return dict(
+            Motivo.objects.filter(
+                organization=self.organization, source_type=source_type.value
+            )
+            .exclude(nome="")
+            .values_list("external_id", "nome")
         )
 
 

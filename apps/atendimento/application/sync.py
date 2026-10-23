@@ -16,6 +16,7 @@ Fluxo:
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -35,6 +36,27 @@ from apps.shared.context import set_current_organization
 from apps.tenancy.models import Organization
 
 _logger = structlog.get_logger(__name__)
+
+
+def _catalogo_opcional[T](nome: str, listar: Callable[[], Iterable[T]]) -> list[T] | None:
+    """Lista um catalogo do Opa sem deixar a falha dele derrubar o sync.
+
+    Desde 01/10/2026 a API nao lista mais departamento/, etiqueta/ nem
+    atendimento/motivo inteiros (ver `_FILTRO_TODOS` no adapter). Eles so dao
+    nome a ids — o dado que as telas leem sao os atendimentos. Antes, a falha
+    no primeiro catalogo abortava tudo, e as abas de atendimento ficaram em zero
+    de 30/09 em diante. `None` = indisponivel; o chamador usa o que ja esta
+    gravado.
+    """
+    try:
+        return list(listar())
+    except Exception as exc:
+        _logger.warning(
+            "opa_catalogo_indisponivel",
+            catalogo=nome,
+            error=f"{type(exc).__name__}: {exc}"[:300],
+        )
+        return None
 
 
 @dataclass(frozen=True)
@@ -70,7 +92,7 @@ def run_opa_sync(
     # --- 1. Departamentos ---------------------------------------------------
     dep_repo = DepartamentoRepository(organization)
     dep_count = 0
-    for dep in source.list_departamentos():
+    for dep in _catalogo_opcional("departamento", source.list_departamentos) or []:
         dep_repo.upsert_from_dto(dep, source_type=source_type)
         dep_count += 1
 
@@ -90,7 +112,10 @@ def run_opa_sync(
     et_repo = EtiquetaRepository(organization)
     etiqueta_map: dict[str, str] = {}
     et_count = 0
-    for et in source.list_etiquetas():
+    etiquetas = _catalogo_opcional("etiqueta", source.list_etiquetas)
+    if etiquetas is None:
+        etiqueta_map = et_repo.nomes_por_external_id(source_type=source_type)
+    for et in etiquetas or []:
         et_repo.upsert_from_dto(et, source_type=source_type)
         et_count += 1
         if et.nome:
@@ -100,7 +125,10 @@ def run_opa_sync(
     mot_repo = MotivoRepository(organization)
     motivo_map: dict[str, str] = {}
     mot_count = 0
-    for mot in source.list_motivos():
+    motivos = _catalogo_opcional("motivo", source.list_motivos)
+    if motivos is None:
+        motivo_map = mot_repo.nomes_por_external_id(source_type=source_type)
+    for mot in motivos or []:
         mot_repo.upsert_from_dto(mot, source_type=source_type)
         mot_count += 1
         if mot.nome:

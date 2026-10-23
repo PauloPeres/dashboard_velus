@@ -111,10 +111,7 @@ class Command(BaseCommand):
             + (" (com mensagens)" if with_messages else "")
         )
 
-        source = OpaAtendimentoSource(
-            base_url=creds["base_url"],
-            token=creds["token"],
-        )
+        source = OpaAtendimentoSource.from_credentials(creds)
 
         started_at = timezone.now()
         result = run_opa_sync(

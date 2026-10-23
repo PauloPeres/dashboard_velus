@@ -46,9 +46,7 @@ def get_or_fetch_messages(
     )
     try:
         creds = ds.get_credentials()
-        source = OpaAtendimentoSource(
-            base_url=creds["base_url"], token=creds["token"]
-        )
+        source = OpaAtendimentoSource.from_credentials(creds)
         repo = MensagemRepository(organization)
         for dto in source.list_mensagens(atendimento.external_id):
             repo.upsert_from_dto(dto, source_type=SourceType.OPA)

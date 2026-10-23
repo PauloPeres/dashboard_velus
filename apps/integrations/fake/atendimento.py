@@ -46,6 +46,11 @@ class FakeAtendimentoSource:
         self._canais = list(_seed_canais)
         self._mensagens_global = list(_seed_mensagens_global)
 
+    @classmethod
+    def from_credentials(cls, creds: dict[str, Any]) -> FakeAtendimentoSource:
+        """Paridade com `OpaAtendimentoSource.from_credentials` (os testes trocam um pelo outro)."""
+        return cls(**creds)
+
     # -- Seed control ---------------------------------------------------------
     @classmethod
     def set_seed(
