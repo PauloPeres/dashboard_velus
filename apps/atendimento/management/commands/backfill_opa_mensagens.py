@@ -124,7 +124,7 @@ class Command(BaseCommand):
                 f"Org '{org.slug}' não tem datasource OPA/ATENDIMENTO ativo."
             )
         creds = ds.get_credentials()
-        return OpaAtendimentoSource(base_url=creds["base_url"], token=creds["token"])
+        return OpaAtendimentoSource.from_credentials(creds)
 
     def _resolve_cursor(
         self, org: Organization, options: dict[str, Any]

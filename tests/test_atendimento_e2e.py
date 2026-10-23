@@ -37,6 +37,7 @@ from apps.atendimento.tasks import sync_opa_for_all_orgs
 from apps.customers.infrastructure.models import Customer
 from apps.integrations.fake.atendimento import FakeAtendimentoSource
 from apps.integrations.shared.enums import Capability, SourceType
+from apps.integrations.shared.exceptions import AdapterClientError
 from apps.shared.context import set_current_organization
 from apps.sync.models import SyncCheckpoint, SyncJob, SyncMode, SyncStatus
 from apps.tenancy.models import Organization, OrganizationDataSource
@@ -315,6 +316,42 @@ class TestOpaSyncE2E:
             "Suporte",
             "m-removido",
         ]
+
+    def test_catalogos_indisponiveis_nao_derrubam_o_sync(
+        self, organization_a: Organization, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Desde 01/10/2026 a API do Opa nao lista departamento/etiqueta/motivo
+        # inteiros (400). Antes isso abortava o sync no 1o catalogo e as telas de
+        # atendimento ficaram em zero. Agora os atendimentos entram e os nomes
+        # saem do catalogo ja gravado.
+        FakeAtendimentoSource.set_seed(
+            etiquetas=[EtiquetaDTO(external_id="t-vip", nome="VIP")],
+            motivos=[MotivoDTO(external_id="m-sup", nome="Suporte")],
+            atendimentos=[_atendimento_dto(external_id="a0")],
+        )
+        run_opa_sync(organization_a, FakeAtendimentoSource())
+
+        def _api_recusa(self: FakeAtendimentoSource) -> list[object]:
+            raise AdapterClientError("HTTP 400: At least one valid filter is required")
+
+        for metodo in ("list_departamentos", "list_etiquetas", "list_motivos"):
+            monkeypatch.setattr(FakeAtendimentoSource, metodo, _api_recusa)
+        FakeAtendimentoSource.set_seed(
+            atendimentos=[
+                _atendimento_dto(
+                    external_id="a1", motivo_ids=["m-sup"], tag_ids=["t-vip"]
+                ),
+            ],
+        )
+
+        result = run_opa_sync(organization_a, FakeAtendimentoSource())
+
+        assert result.atendimentos == 1
+        assert result.departamentos == result.etiquetas == result.motivos == 0
+        set_current_organization(organization_a)
+        a1 = Atendimento.objects.get(external_id="a1")
+        assert a1.motivos == ["Suporte"]
+        assert a1.tags == ["VIP"]
 
 
 # =============================================================================

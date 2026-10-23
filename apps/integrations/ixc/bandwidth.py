@@ -35,9 +35,27 @@ class IxcBandwidthUsageSource:
         )
 
     def list_bandwidth_usage(
-        self, *, since: datetime | None = None
+        self, *, since: datetime | None = None, after_id: str | None = None
     ) -> Iterator[BandwidthUsageDTO]:
-        body_filter = self._build_since_filter(since) if since else None
+        """Sempre em ordem crescente de id.
+
+        Sem `sortname` o IXC devolve do mais novo pro mais velho; como entra
+        linha nova a cada segundo, a página 2 já não é a continuação da 1 e a
+        paginação perde/repete registros. Crescente, o que entra vai pro fim.
+        `after_id` (cursor) tem precedência sobre `since`.
+        """
+        if after_id:
+            body_filter = {
+                "qtype": "radusuarios_consumo.id",
+                "query": str(after_id),
+                "oper": ">",
+            }
+        elif since:
+            body_filter = self._build_since_filter(since)
+        else:
+            body_filter = {"qtype": "radusuarios_consumo.id", "query": "0", "oper": ">"}
+        body_filter["sortname"] = "radusuarios_consumo.id"
+        body_filter["sortorder"] = "asc"
 
         with self._client_factory() as client:
             skipped = 0

@@ -106,7 +106,7 @@ class Command(BaseCommand):
                     "`setup_opa_credentials` ou use --skip-catalog-sync."
                 )
             creds = ds.get_credentials()
-            source = OpaAtendimentoSource(base_url=creds["base_url"], token=creds["token"])
+            source = OpaAtendimentoSource.from_credentials(creds)
             et_repo = EtiquetaRepository(org)
             n_et = 0
             for et in source.list_etiquetas():

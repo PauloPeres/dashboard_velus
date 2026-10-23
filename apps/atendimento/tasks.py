@@ -102,9 +102,7 @@ def _sync_opa_for_all_orgs() -> dict[str, int]:
                 started_at=started_at,
             )
             try:
-                source = OpaAtendimentoSource(
-                    base_url=creds["base_url"], token=creds["token"]
-                )
+                source = OpaAtendimentoSource.from_credentials(creds)
                 result = run_opa_sync(org, source, since=since)
 
                 checkpoint.last_processed_at = started_at

@@ -224,3 +224,84 @@ class TestBandwidthSyncE2E:
 
         set_current_organization(organization_a)
         assert BandwidthUsage.objects.count() == 2
+
+
+# =============================================================================
+# Incremental por cursor de id — progresso gravado e parada antes do prazo
+# =============================================================================
+def _uso(n: int) -> BandwidthUsageDTO:
+    return BandwidthUsageDTO(
+        external_id=str(n),
+        customer_external_id="ext-1",
+        download_bytes=n,
+        upload_bytes=n,
+        session_time=60,
+        reference_date=date(2026, 10, 22),
+    )
+
+
+@pytest.mark.django_db
+class TestBandwidthCursor:
+    """~200 mil linhas/dia não cabem em uma rodada: o sync precisa avançar aos
+    poucos sem perder o que já fez (de 15/10 a 22/10/2026 ele recomeçou do zero
+    a cada rodada e nunca terminou)."""
+
+    def _incremental(self, org: Organization) -> dict:
+        return sync_capability(
+            organization_id=org.pk, capability="BANDWIDTH", mode="INCREMENTAL"
+        )
+
+    def _checkpoint(self, org: Organization) -> SyncCheckpoint:
+        return SyncCheckpoint.objects.get(
+            organization=org, source_type="FAKE", capability="BANDWIDTH"
+        )
+
+    def test_grava_cursor_e_continua_dele(
+        self,
+        organization_a: Organization,
+        datasource_fake_bandwidth_a: OrganizationDataSource,
+    ) -> None:
+        FakeBandwidthUsageSource.set_seed([_uso(n) for n in (9, 10, 11)])
+        assert self._incremental(organization_a)["records_processed"] == 3
+        # "11" > "9" numericamente — ordem de id, não de string
+        assert self._checkpoint(organization_a).last_external_id == "11"
+
+        FakeBandwidthUsageSource.set_seed([_uso(n) for n in (9, 10, 11, 12, 13)])
+        assert self._incremental(organization_a)["records_processed"] == 2
+        assert self._checkpoint(organization_a).last_external_id == "13"
+
+    def test_rodada_vazia_nao_mexe_no_cursor(
+        self,
+        organization_a: Organization,
+        datasource_fake_bandwidth_a: OrganizationDataSource,
+    ) -> None:
+        FakeBandwidthUsageSource.set_seed([_uso(1)])
+        self._incremental(organization_a)
+        assert self._incremental(organization_a)["records_processed"] == 0
+
+        cp = self._checkpoint(organization_a)
+        assert cp.last_external_id == "1"
+        assert cp.consecutive_empty_runs == 1
+
+    def test_para_no_prazo_e_retoma_na_proxima(
+        self,
+        organization_a: Organization,
+        datasource_fake_bandwidth_a: OrganizationDataSource,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from datetime import timedelta
+
+        monkeypatch.setattr("apps.sync.tasks._CURSOR_PRAZO", timedelta(seconds=-1))
+        FakeBandwidthUsageSource.set_seed([_uso(n) for n in (1, 2, 3)])
+
+        primeira = self._incremental(organization_a)
+        assert primeira["records_processed"] == 1
+        assert primeira["sources"][0]["status"] == "OK"
+        assert self._checkpoint(organization_a).last_external_id == "1"
+
+        monkeypatch.setattr("apps.sync.tasks._CURSOR_PRAZO", timedelta(minutes=20))
+        assert self._incremental(organization_a)["records_processed"] == 2
+        set_current_organization(organization_a)
+        assert BandwidthUsage.objects.count() == 3
+        job = SyncJob.objects.filter(capability="BANDWIDTH").order_by("-pk").first()
+        assert job.status == SyncStatus.COMPLETED

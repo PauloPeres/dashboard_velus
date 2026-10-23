@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
 import respx
 from httpx import Response
 
@@ -490,3 +491,76 @@ class TestIncrementalPegaEncerramentos:
         respx_mock.get(f"{API_URL}/atendimento").mock(side_effect=handler)
         list(OpaAtendimentoSource(base_url=BASE_URL, token="t").list_atendimentos())
         assert len(chamadas) == 1
+
+
+# =============================================================================
+# API exige filtro nas listagens (mudança do Opa em 01/10/2026)
+# =============================================================================
+class TestListagensMandamFiltroValido:
+    """Desde 01/10/2026 `filter: {}` volta HTTP 400 "At least one valid filter is
+    required". Cada catalogo precisa mandar um filtro que a API aceite — e que
+    nao recorte a colecao."""
+
+    def _captura(self, respx_mock: respx.MockRouter, path: str) -> list[dict[str, Any]]:
+        bodies: list[dict[str, Any]] = []
+
+        def handler(request: Any) -> Response:
+            bodies.append(json.loads(request.content))
+            return Response(200, json={"data": []})
+
+        respx_mock.get(f"{API_URL}/{path}").mock(side_effect=handler)
+        return bodies
+
+    def test_clientes_filtra_por_id_existente(self, respx_mock: respx.MockRouter) -> None:
+        bodies = self._captura(respx_mock, "cliente/")
+        list(OpaAtendimentoSource(base_url=BASE_URL, token=TOKEN).list_clientes())
+        assert bodies[0]["filter"] == {"_id": {"$exists": True}}
+
+    def test_canais_filtra_por_id_existente(self, respx_mock: respx.MockRouter) -> None:
+        bodies = self._captura(respx_mock, "canal-comunicacao")
+        list(OpaAtendimentoSource(base_url=BASE_URL, token=TOKEN).list_canais())
+        assert bodies[0]["filter"] == {"_id": {"$exists": True}}
+
+    def test_atendentes_filtra_por_status(self, respx_mock: respx.MockRouter) -> None:
+        # usuario/ recusa `_id` ("Field '_id' is not allowed"), aceita `status`.
+        bodies = self._captura(respx_mock, "usuario/")
+        list(OpaAtendimentoSource(base_url=BASE_URL, token=TOKEN).list_atendentes())
+        assert bodies[0]["filter"] == {"status": "A"}
+
+    def test_mensagens_global_nao_manda_filtro_vazio(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        bodies = self._captura(respx_mock, "atendimento/mensagem")
+        source = OpaAtendimentoSource(base_url=BASE_URL, token=TOKEN)
+        list(source.list_mensagens_global(page_size=2, max_pages=1))
+        assert bodies[0]["filter"] == {"_id": {"$exists": True}}
+
+
+class TestFromCredentials:
+    """`setup_opa_credentials` grava `token`; o form do admin grava `api_token`."""
+
+    def test_aceita_token(self, respx_mock: respx.MockRouter) -> None:
+        route = respx_mock.get(f"{API_URL}/usuario/").mock(
+            return_value=Response(200, json={"data": []})
+        )
+        source = OpaAtendimentoSource.from_credentials(
+            {"base_url": BASE_URL, "token": "tok-cli"}
+        )
+        list(source.list_atendentes())
+        assert route.calls[0].request.headers["Authorization"] == "Bearer tok-cli"
+
+    def test_aceita_api_token_gravado_pelo_admin(
+        self, respx_mock: respx.MockRouter
+    ) -> None:
+        route = respx_mock.get(f"{API_URL}/usuario/").mock(
+            return_value=Response(200, json={"data": []})
+        )
+        source = OpaAtendimentoSource.from_credentials(
+            {"base_url": BASE_URL, "api_token": "tok-admin"}
+        )
+        list(source.list_atendentes())
+        assert route.calls[0].request.headers["Authorization"] == "Bearer tok-admin"
+
+    def test_sem_token_falha_com_mensagem_clara(self) -> None:
+        with pytest.raises(KeyError, match="token"):
+            OpaAtendimentoSource.from_credentials({"base_url": BASE_URL})

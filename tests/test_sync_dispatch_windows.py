@@ -64,3 +64,14 @@ class TestDispatchIncrementalWindows:
             result = _dispatch_incremental(["INVOICES"])
         assert result["tasks_dispatched"] == 0
         assert mock.call_count == 0
+
+    def test_ignora_capability_com_recorrencia_propria(
+        self, organization_a: Organization
+    ) -> None:
+        # Opa! (ATENDIMENTO) roda por `sync_opa_for_all_orgs`, fora do _DISPATCH.
+        _datasource(organization_a, Capability.CUSTOMERS)
+        _datasource(organization_a, Capability.ATENDIMENTO)
+        with patch("apps.sync.tasks.sync_capability.apply_async") as mock:
+            result = _dispatch_incremental()
+        assert result["tasks_dispatched"] == 1
+        assert mock.call_args.kwargs["kwargs"]["capability"] == "CUSTOMERS"

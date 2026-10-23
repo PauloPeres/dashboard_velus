@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -53,6 +53,23 @@ _STATUS_MAP = {
 }
 
 
+# Filtros de listagem. Desde 01/10/2026 a API do Opa
+# recusa `filter: {}` com HTTP 400 "At least one valid filter is required" — e
+# cada endpoint aceita um conjunto diferente de campos (o resto vira "Field 'x'
+# is not allowed"). Os filtros abaixo foram testados contra a API real e
+# devolvem a colecao inteira:
+#
+# - cliente/, canal-comunicacao e atendimento/mensagem aceitam `_id: $exists`.
+# - usuario/ recusa `_id`; aceita `status`, e devolve os mesmos 16 usuarios com
+#   "A" ou "I" — o campo e validado mas nao recorta.
+# - departamento/ e etiqueta/ so aceitam `nome` (string exata) e
+#   atendimento/motivo responde "Invalid ID." — nao ha mais como listar esses
+#   catalogos inteiros. O sync trata os tres como opcionais (ver
+#   `run_opa_sync`) e segue com o catalogo ja gravado.
+_FILTRO_TODOS = {"_id": {"$exists": True}}
+_FILTRO_USUARIOS = {"status": "A"}
+
+
 class OpaAtendimentoSource:
     """Adapter Opa! Suite para a capability ATENDIMENTO (read-only)."""
 
@@ -61,6 +78,19 @@ class OpaAtendimentoSource:
 
     def __init__(self, *, base_url: str, token: str) -> None:
         self._client_factory = lambda: OpaHttpClient(base_url=base_url, token=token)
+
+    @classmethod
+    def from_credentials(cls, creds: dict[str, Any]) -> OpaAtendimentoSource:
+        """Constroi a partir do dict de `OrganizationDataSource.get_credentials()`.
+
+        O comando `setup_opa_credentials` grava a chave `token`; o formulario do
+        admin (pensado pro IXC) grava `api_token`. Os dois caminhos existem em
+        producao, entao aceita os dois em vez de quebrar com KeyError.
+        """
+        token = creds.get("token") or creds.get("api_token")
+        if not token:
+            raise KeyError("credenciais Opa sem 'token' (nem 'api_token')")
+        return cls(base_url=creds["base_url"], token=token)
 
     # -------------------------------------------------------------------------
     # Departamentos
@@ -89,7 +119,7 @@ class OpaAtendimentoSource:
     # -------------------------------------------------------------------------
     def list_clientes(self) -> Iterator[ClienteRefDTO]:
         with self._client_factory() as client:
-            for raw in client.paginate_opa("cliente/"):
+            for raw in client.paginate_opa("cliente/", filter=_FILTRO_TODOS):
                 try:
                     schema = OpaClienteSchema.model_validate(raw)
                 except ValidationError as exc:
@@ -110,7 +140,7 @@ class OpaAtendimentoSource:
     # -------------------------------------------------------------------------
     def list_atendentes(self) -> Iterator[AtendenteRefDTO]:
         with self._client_factory() as client:
-            for raw in client.paginate_opa("usuario/"):
+            for raw in client.paginate_opa("usuario/", filter=_FILTRO_USUARIOS):
                 try:
                     schema = OpaUsuarioSchema.model_validate(raw)
                 except ValidationError as exc:
@@ -171,7 +201,7 @@ class OpaAtendimentoSource:
     def list_canais(self) -> Iterator[CanalComunicacaoDTO]:
         """Itera o catalogo de canais/numeros configurados (barato, ~dezenas)."""
         with self._client_factory() as client:
-            for raw in client.paginate_opa("canal-comunicacao"):
+            for raw in client.paginate_opa("canal-comunicacao", filter=_FILTRO_TODOS):
                 try:
                     schema = OpaCanalSchema.model_validate(raw)
                 except ValidationError as exc:
@@ -303,8 +333,8 @@ class OpaAtendimentoSource:
     ) -> Iterator[tuple[int, MensagemDTO]]:
         """Itera TODAS as mensagens da conta, da mais antiga pra mais nova.
 
-        `atendimento/mensagem` aceita listagem sem `id_rota` — a API ignora
-        qualquer outro filtro (testado: data, canal, tipo e `sort` nao surtem
+        `atendimento/mensagem` aceita listagem sem `id_rota` (com `_FILTRO_TODOS`,
+        ja que filtro vazio virou 400) — a API ignora qualquer outro filtro (testado: data, canal, tipo e `sort` nao surtem
         efeito), mas a ordem e a de insercao e a colecao e append-only, entao
         paginar por `skip` e estavel: um registro novo nunca se insere no meio e
         desloca o cursor. Por isso o backfill de volume nao precisa das ~34 mil
@@ -318,7 +348,7 @@ class OpaAtendimentoSource:
         pages = 0
         with self._client_factory() as client:
             while max_pages is None or pages < max_pages:
-                body = {"filter": {}, "options": {"limit": page_size, "skip": skip}}
+                body = {"filter": _FILTRO_TODOS, "options": {"limit": page_size, "skip": skip}}
                 response = client.get("atendimento/mensagem", json=body)
                 items = response.get("data") if isinstance(response, dict) else None
                 if not items:

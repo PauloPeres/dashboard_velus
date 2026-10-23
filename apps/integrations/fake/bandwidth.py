@@ -30,11 +30,14 @@ class FakeBandwidthUsageSource:
         _seed_usage = []
 
     def list_bandwidth_usage(
-        self, *, since: datetime | None = None
+        self, *, since: datetime | None = None, after_id: str | None = None
     ) -> Iterator[BandwidthUsageDTO]:
         since_date = since.date() if since is not None else None
-        for dto in self._usage:
-            if (
+        for dto in sorted(self._usage, key=lambda d: _id_ordenavel(d.external_id)):
+            if after_id is not None:
+                if _id_ordenavel(dto.external_id) <= _id_ordenavel(after_id):
+                    continue
+            elif (
                 since_date is not None
                 and dto.reference_date is not None
                 and dto.reference_date < since_date
@@ -47,3 +50,8 @@ class FakeBandwidthUsageSource:
             if dto.external_id == external_id:
                 return dto
         return None
+
+
+def _id_ordenavel(external_id: str) -> tuple[int, str]:
+    """Ids do IXC são inteiros em string: "10" vem depois de "9"."""
+    return (int(external_id), "") if external_id.isdigit() else (0, external_id)
